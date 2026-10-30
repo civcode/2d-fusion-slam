@@ -37,7 +37,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-011 | Coherent immutable snapshots, tiled active EDT and frozen-cache reuse | P1 | Map/matcher memory | **Accepted** (baseline first; optimization pending) |
 | OD-012 | Versioned JSON manifest, zstd binary submaps/graph and atomic generations | P1 | Reuse across modes | **Accepted** (schema/tests pending) |
 | OD-013 | Keyframe+submap Pose2 graph; fused odom and correlation-safe factors | P1 | Backend accuracy | **Accepted** (implementation/tests pending) |
-| OD-014 | Offline re-deskew and remapping iteration | P1 | Mapping quality | Open |
+| OD-014 | Bounded offline refinement, selective re-deskew/remap and rollback | P1 | Mapping quality | **Accepted** (tests/tuning pending) |
 | OD-015 | Keyframe, submap and gyro-bias knot policy | P1 | Graph size/accuracy | Open |
 | OD-016 | Process/thread layout | P1 | Pi resource isolation | Open |
 | OD-017 | Native CMake target/API decomposition | P0 | Implementation scaffold | Open |
@@ -827,7 +827,7 @@ Native C++20 `OccupancyGrid` / `SubmapBuilder` / `FrozenSubmap` / `MapSnapshot` 
 7. Freeze immutability across concurrent Ceres/OD-007 EDT and OD-009 correlative matcher readers; pose-graph moves only global `T_map_submap`, local hashes and versioned derived fields remain unchanged; global index may be updated.
 8. Deterministic replay of active-to-frozen transitions, map revisions, forced scan acceptance/rejection, per-submap scan ID provenance and no map self-matching. Verify offline map artifact round trip, ROS-free Catch2/CTest Docker tests and eventual hardware recordings.
 
-**Consequences:** OD-010 settles **authoritative log-odds occupancy, initial 5 cm/90/180 defaults, two overlapping active maps, per-scan hit precedence, safe unknown handling, bounded local grids and immutable freezing**. The exact motion filter thresholds, memory/spatial caps, hit/miss calibration and alternative resolutions remain benchmark-tuned. **Accepted OD-011** fixes coherent cache updates/eviction/publishing architecture (with tuning pending); **Accepted OD-013** fixes graph topology and factor admission; **OD-012** fixes map serialization and **OD-014** offline remapping remains open.
+**Consequences:** OD-010 settles **authoritative log-odds occupancy, initial 5 cm/90/180 defaults, two overlapping active maps, per-scan hit precedence, safe unknown handling, bounded local grids and immutable freezing**. The exact motion filter thresholds, memory/spatial caps, hit/miss calibration and alternative resolutions remain benchmark-tuned. **Accepted OD-011** fixes coherent cache updates/eviction/publishing architecture (with tuning pending); **Accepted OD-013** fixes graph topology and factor admission; **OD-012** fixes map serialization and **Accepted OD-014** specifies bounded selective offline remapping; implementation and calibration are pending.
 
 **References:** [Cartographer 2D example configuration](https://github.com/cartographer-project/cartographer/blob/master/configuration_files/trajectory_builder_2d.lua), [Cartographer 2D submap lifecycle](https://google-cartographer.readthedocs.io/en/latest/configuration.html), [Cartographer 2D grid inserter hit precedence](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/2d/probability_grid_range_data_inserter_2d.cc).
 
@@ -1149,13 +1149,82 @@ OD-010 overlapping submaps -> immutable OD-011 snapshots + membership ledger
 
 **References:** [GTSAM BetweenFactor Pose2](https://borglab.github.io/gtsam/betweenfactor/); [Cartographer PoseGraph2D](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/internal/2d/pose_graph_2d.h); [Cartographer graph constraint tags](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/proto/pose_graph.proto).
 
-### OD-014 — Offline optimization and re-deskew iterations
+### OD-014 — Bounded offline refinement with selective re-deskew and submap rebuild
 
-**Question:** One pass vs repeated pose/bias/time updates, re-deskew, submap rebuild and re-optimization?
+**State:** **Accepted** (design chosen; baseline and iterative implementation/tests pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection of selective, quality-gated outer refinement  
+**Priority:** P1
 
-**Provisional preference:** one-pass pipeline first, then bounded re-deskew/re-map when bias/trajectory changes exceed meaningful thresholds. Keep original raw scans and every derived map version.
+**Decision:** Implement **one complete deterministic offline replay, map construction and OD-013 batch pose-graph optimization first**. Add an optional **bounded outer refinement loop with at most three ADDITIONAL candidate iterations after the initial pass** (initial baseline result `R_0`, candidates `R_1` through `R_3`; maximum four full graph-solve passes if each candidate reaches a solve). Re-estimate **local OD-006 trajectories and, only when independently observable, gyro bias and OD-002/003 clock offsets/drift**. Selectively **re-deskew** OD-004 scan beams if their within-scan geometry changes materially and **rebuild only submaps whose local scan geometry or relative scan placements change**. Purely rigid global or local submap-frame pose corrections change **OD-013 graph pose variables only**, with **no unnecessary re-deskew or occupancy rebuild**. Publish only complete, validated **immutable iteration generations**; reject/regress/rollback candidate results without mutating accepted raw or map state. Orchestration and domain APIs are ROS-independent; Ceres and GTSAM remain in private implementations.
 
-**Decision gate:** moving-scan synthetic error reduction, final loop closure quality, convergence and diminishing improvement per pass, repeatability and workstation runtime. Do not rebuild forever or hide self-feedback.
+**Alternatives:** (A) single-pass pipeline — required deterministic **baseline**, not the only final refinement option; (B) **bounded selective iterative refinement — accepted**; (C) unconditional full remap after every graph solve — rejected as wasteful/self-reinforcing; (D) full real-time coupled bias/clock/submap estimator — deferred pending controlled evidence.
+
+#### What triggers processing?
+
+| Change between accepted iteration and proposed candidate | Re-deskew? | Rebuild occupancy? | Required operation |
+| --- | --- | --- | --- |
+| Pure global OD-013 pose-graph rigid transform `T_map_submap` | **No** | **No** | Publish new graph/global index revision only |
+| Uniform rigid transform of all poses within one local submap | **No** | **No**, if every scan-to-submap relative transform and local ray geometry is unchanged | Update reference/global transforms |
+| Relative keyframe/scan midpoint poses inside one submap change | Only if intra-scan trajectory also changes | **Yes if material**, since local insertion rays move | Recompute affected local scan-to-submap transforms, rebuild those submaps |
+| Beam-relative trajectory changes (translation/yaw/twist, gyro bias) | **Yes if material** | **Yes for affected member submaps if ray geometry changes** | Recompute beam endpoints from raw time-stamped measurements |
+| OD-002/003 clock offset/drift or beam-time model changes | **Yes if observable and material** | **Yes if local ray geometry changes** | New time-calibration version; retimestamp, reconstruct OD-004 motion/deskew |
+| Corrections below geometric threshold, with no validity/quality change | Usually **No** | Usually **No** | Retain prior geometry; still evaluate graph convergence/quality |
+| Invalid time coverage, changed scan eligibility, OD-005 return classification | Reprocess affected scans as needed | Rebuild affected submaps if source/geometry/membership changes | Preserve previous accepted generation until candidate is validated |
+
+**Initial trigger:** Measure the **maximum Euclidean displacement of any valid hit endpoint in the *same submap-local reference frame*** when using candidate versus accepted scan-relative geometry, including laser extrinsics and time correction. Start with **0.5 × 0.05 m = 0.025 m (2.5 cm)**, **unvalidated and configurable**. A correction of global pose alone does **not** count if all beam/scan points are unchanged in the local grid. Angle alone is not sufficient: yaw change produces endpoint displacement proportional to range. Evaluate all valid beam geometries or a **conservative provable upper bound**, not an unrepresentative average or sparse sample. For a scan reused in two OD-010 submaps, mark **each affected membership**; effects must be measured in its own local frame.
+
+Do **not** use the 2.5 cm threshold to silently ignore **clock epoch changes, incomplete trajectory coverage, invalid gyro calibration, OD-008 severe quality regressions, or changes in scan eligibility**. These are correctness gates that can force invalidation/rejection even if a geometric displacement estimate is small. Distinguish **changed scan midpoint pose** from **changed intra-scan relative motion**: re-deskew is needed for the latter, while a change to the relative midpoint-to-submap insertion transform may require only remapping.
+
+#### Outer iteration, provenance and convergence
+
+~~~text
+Raw immutable LD19 packets/beam times, IMU, encoders, calibration & epochs
+          |
+   R_0: deterministic full replay -> OD-003/004/006 motion/deskew
+      -> OD-005/007/008 scan selection and OD-010 overlapping submaps
+      -> OD-011 derived caches -> OD-013 factor admission & batch graph
+      -> validation -> ACCEPTED baseline generation R_0
+          |
+ R_(i-1) accepted graph/trajectory + candidate observable updates
+          |
+   Candidate R_i (i=1..3):
+      recalibrate bias/time ONLY with independent observability evidence
+      recompute local trajectory/beam times and per-beam displacement
+      re-deskew affected scans; recompute local insertion rays/scan transforms
+      rebuild affected OD-010 submaps as NEW local immutable revisions
+      rebuild dependent OD-011 EDT and OD-009 score pyramids
+      invalidate/recompute OD-007/008 matches and OD-013 factors affected
+      enforce OD-013 scan membership, correlation and dedup from raw sources
+      batch optimize; validate convergence and held-out/independent checks
+            |
+         improved? ---- yes --> publish immutable R_i and continue
+             |
+            no --> discard candidate, keep R_(i-1), stop or retry
+~~~
+
+- **State preservation:** `R_0` and every accepted `R_i` include exact raw data/source checksum references, OD-001 clock-domain/session identity, OD-002/003 time-fit versions, OD-004 trajectory/beam-time convention, OD-006 bias/calibration revision, OD-005 scan eligibility and stable scan IDs, OD-010 submap membership/insertion order and freeze reasons, OD-011 occupancy/cache revisions, OD-013 graph factor/source groups, software/config hashes and benchmark metrics. **OD-012** publishes complete new map generations transactionally; **the map bundle alone is insufficient** for re-deskew: raw recording/MCAP sensor streams and original acquisition/synchronization metadata must remain addressable and immutable.
+- **Determinism:** Hold selected scan IDs, replay order, seeds and configuration fixed **where validity permits**, with changes to eligibility/membership explicitly recorded and justified. Use stable source IDs and versioned dependency/invalidations. A rebuilt submap must be re-created from **raw scan insertion evidence**, never by transforming/copying its old occupancy probabilities, because repeated log-odds additions would double-count observations and lossy raster warping would alter occupancy/unknown semantics. Do not mutate frozen submaps already referenced by an accepted map bundle.
+- **Selective invalidation:** Pose-graph-only changes update graph poses/indexes, **not** immutable OD-010 local grids or OD-011 local EDT/pyramids. Geometry changes rebuild affected submaps **from scratch** with original ray hit/miss/unknown update semantics and stable insert IDs, then rebuild matching caches and **all** dependent local and loop-closure candidate factors that referenced old geometry. Invalidated factor IDs are **replaced, not appended**; no stale EDT/score pyramid, old membership, original factor or rejected loop survives as a supposedly independent new factor. Frozen-source references and source-scan intersections must be revalidated (OD-013).
+- **Calibration observability:** OD-006 gyro bias correction only if stationary/independent evidence and uncertainty justify it; **wheel/gyro disagreement alone cannot identify bias vs slip**. OD-002/003 clock offset/drift changes require constrained multi-sensor timing evidence and accepted physical timestamp-delay model; the **LD19 30-second counter's beam-acquisition event remains experimentally uncertain** until bounded. Never optimize time using only the same LiDAR map fit and then claim independent calibration certainty. Refit only valid **same-epoch** mappings, preserve timing covariance, cap parameter changes and reject unobservable/time-inconsistent candidates.
+- **Convergence and acceptance:** Stop on first non-improving/invalid candidate, when no local geometric update exceeds the trigger and graph metrics have converged, or after three additional outer iterations. Define configurable **relative graph objective improvement and maximum local pose-change tolerances**, but **do not compare raw total graph objectives from different maps/factor sets as if directly comparable**. Evaluate matched common measurements, held-out scans/routes and independent truth where available, loop residual/inlier/false-closure quality, OD-008 observability/covariance consistency, acquisition uncertainty and map quality/coverage. Require positive or non-regressing independent quality evidence **and** no safety/uncertainty regressions before accepting; a lower same-data residual on a rebuilt map is not sufficient proof.
+- **Transactional iteration:** Build and test each `R_i` in a separate staging workspace, pin source revisions, validate cache/source consistency and graph factor provenance, and publish **only via OD-012 atomic immutable generation** when successful. Rejected, failed, non-finite, timing-invalid or budget-exceeded candidates leave `R_(i-1)` authoritative. Log stop/rejection reason and dependency graph for replay and Web Lab. The outer iteration runs offline under explicit work/memory budgets; it does **not** make real-time acquisition wait.
+- **Isolation:** Orchestration interfaces such as `OfflineRefinementCoordinator`, `RefinementPlan`, `IterationSnapshot` and `RefinementDecision` are native C++20 with typed revisions/SE(2) and no ROS/Ceres/GTSAM/vendor objects. Ceres matching and GTSAM batch solve remain behind OD-007/013 adapter interfaces; offline work may use Docker on a workstation, while Pi5 background CPU/thermal impact is measured before any optional onboard execution.
+
+#### Required tests / benchmark B22 (not yet executed)
+
+1. One-pass `R_0` baseline and at most **3 additional** iterations, exact source/config seed/replay order, deterministic accepted hashes and no unbounded remap loop.
+2. Pure loop-closure/global rigid submap shift, and uniform local rigid transform: **zero re-deskew and zero local-grid/caches rebuild**; only poses/global indexes revise.
+3. Changed relative scan-to-submap midpoint poses but unchanged per-beam relative trajectory: remap affected submap **without unnecessary re-deskew**.
+4. Inject true within-scan translational/yaw/gyro-bias/time offset/drift changes: calculate **worst-case submap-frame endpoint displacement** and trigger when `>0.025 m` initial threshold, including distant beams, laser lever arm, scan midpoint and two overlapping submap memberships.
+5. Raw/OD-005 packet and invalid-return evidence restored exactly; no map insertion from missing rays or double-strengthening occupancy; rebuilt log odds/known masks reproduce full replay and fresh OD-011 caches.
+6. Unknown/unobservable gyro-bias or LD19 clock-delay parameters held fixed, rejected erroneous updates, bounded epoch/time uncertainty and deliberately bad calibration candidate rollback.
+7. OD-013 factor IDs/provenance replaced, not duplicated; rebuilt scan is never matched to itself or admitted as independent overlapping/loop evidence. Check candidate factor/graph revision coherence.
+8. Wrong loop, lower posterior cost but worse independent held-out truth/coverage, covariance overconfidence or nonfinite graph: reject candidate and retain previous accepted OD-012 generation intact.
+9. Compare selective vs unconditional full rebuild and one-pass baseline on exact synthetic apartment/warehouse; report ATE/RPE, beam alignment, map-cell disagreement, cache rebuild count, false closures, objective on common observations, CPU/RAM and outer-loop convergence/stop reasons.
+10. Verify no ROS dependency in coordinator, frozen-map hashes unchanged under rigid changes, deterministic resume/replay source references, staging failure/abort recovery and no GitHub Actions run.
+
+**Consequences:** The one-pass first milestone, **three additional-iteration cap**, 2.5 cm geometric candidate trigger, selective re-deskew/remap, observability-gated bias/time corrections and transactional validation/rollback are accepted. Thresholds, graph convergence parameters, calibration identifiability, workload limits and measured gains remain benchmarking tasks. **OD-024** still controls replay checkpoints/seeks, **OD-015** keyframes and **OD-018** loop candidate retrieval.
 
 ### OD-015 — Keyframes, submap poses and bias knot spacing
 
@@ -1281,6 +1350,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-013 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-014 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
