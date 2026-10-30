@@ -18,13 +18,13 @@
 
 ### Settled constraints (not open for routine implementation)
 
-C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/tests/runtime; ROS-independent native core with REP-103/105 coordinate conventions; Ceres geometric frontend and GTSAM backend; raw-data preservation; offline mapping -> fixed-map localization -> online SLAM priority; no automatic GitHub Actions or Actions execution without explicit permission; no silent Boost adoption.
+C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/tests/runtime; ROS-independent native core with REP-103/105 coordinate conventions; Ceres geometric frontend and GTSAM backend; raw-data preservation; **OD-001 signed 64-bit nanosecond time with explicit clock domains and ROS 2 /clock integration**; offline mapping -> fixed-map localization -> online SLAM priority; no automatic GitHub Actions or Actions execution without explicit permission; no silent Boost adoption.
 
 ## 2. Priority and dependency overview
 
 | ID | Subject | Priority | Affects | State |
 | --- | --- | --- | --- | --- |
-| OD-001 | Canonical timestamp API and units | P0 | All streams, serialization | Open |
+| OD-001 | Canonical timestamp API and units, ROS /clock support | P0 | All streams, serialization, simulation | **Accepted** (implementation/tests pending) |
 | OD-002 | Clock synchronization/acquisition architecture | P1 | Live acquisition, replay | Open |
 | OD-003 | LD19 packet timestamp-to-beam model | P1 | Deskew fidelity | Open |
 | OD-004 | Trajectory interpolation and scan reference time | P1 | Deskew, optimization | Open |
@@ -54,15 +54,58 @@ Recommended **review order**: OD-017 + OD-001 (buildable core), then OD-002/003/
 
 ## 3. Sensor, timestamp and odometry decisions
 
-### OD-001 — Canonical time representation
+### OD-001 — Canonical time representation and ROS 2 simulated clock
 
-**Question:** Which typed timestamp and clock-domain model shall the portable core expose?
+**State:** **Accepted** (architectural decision; implementation and validation pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection of option A  
+**Priority:** P0
 
-**Options:** (A) signed 64-bit nanoseconds in one canonical monotonic time domain with explicit source clock IDs and uncertainty; (B) signed 64-bit microseconds; (C) `std::chrono` point types parametrized by clock domain.
+**Decision:** Use **signed 64-bit integer nanoseconds** for every canonical native timestamp and duration. Convert device ticks, host steady-clock readings, imported bag stamps, Unix/system time and ROS time **explicitly at system boundaries**, carrying the source clock domain and conversion provenance. No ROS 2 types or runtime dependencies may appear in the C++20 core.
 
-**Provisional preference:** A, wrapped in a strong native type. Device ticks and ROS/Unix timestamps remain distinct types until calibrated. Do not assume acquisition time equals receive time.
+**Alternatives evaluated:** (A) signed 64-bit nanoseconds — **chosen**, precise per-beam timing and compatible with ROS nanosecond resolution; (B) signed microseconds — simpler range but discards sub-microsecond precision unnecessarily; (C) generic chrono time points for every source — useful in implementation internals but does not by itself describe hardware clocks, simulated time jumps or serialized epoch identity.
 
-**Decision gate:** unit tests for overflow, ROS bag times, backward seeks, per-beam interpolation, clock-domain mismatch rejection and round-trip serialization. Benchmark conversions on Pi 5; record the exact canonical clock epoch semantics.
+**Required native contract:**
+
+- `TimeNs = std::int64_t` for the **representation**, wrapped in typed `Timestamp` / `DurationNs` APIs with overflow-checked arithmetic. Do not encode missing timestamps as zero.
+- Explicit `ClockDomainId` and `TimeEpochId` (or equivalent run/epoch identity). Time comparisons, subtraction and interpolation require a **common mapped domain and epoch**; cross-domain/epoch operations without conversion are invalid. An integer timestamp alone is insufficient to establish temporal comparability.
+- Production sensor-time estimation uses a **monotonic local estimation timeline**; source device time, ROS timestamps and host receive time remain separately stored for auditing. Source-to-canonical mappings carry offset/drift, validity window and uncertainty when estimated; acquisition time must not be silently replaced by arrival time.
+- Wall/system clocks and `steady_clock` remain available at boundary adapters for diagnostics, deadlines and sensor timeout scheduling. **Use steady/wall monotonic time for CPU performance and real-time budgets**, never a pausable simulator clock.
+- The chosen integer type does **not** imply that *every* source clock is monotonic: a ROS 2 simulated timeline may stop, repeat, jump forward/backward or be uninitialized. The core MUST represent **time discontinuity events**, invalidate cross-epoch interpolation, and reset/restore time-dependent estimator state and buffers appropriately.
+- The core exposes a **ROS-neutral clock interface** or `ClockEvent`/injected time source, accepting native nanosecond ticks and source/epoch changes. It supports live steady time, deterministic dataset replay, and an **external controllable simulated clock**. A pause does not advance integration; stepping uses authoritative simulated acquisition timestamps.
+- The optional **ROS 2 adapter** honors `use_sim_time` and receives `rosgraph_msgs/msg/Clock` on `/clock` through ROS mechanisms. It converts ROS stamps to native int64 ns with range checks; supplies clock readiness, pauses/updates, backward and significant forward jumps, and clock-source switching to the native clock interface. It also converts native timestamps to `builtin_interfaces/msg/Time` for ROS publishers without changing their acquisition-time meaning. Never double-apply simulation time or fabricate a monotonic ROS clock.
+- `/clock` is the authority for simulation/replay **event time** when `use_sim_time=true`; there is no assumption that raw hardware clocks are numerically identical. If the ROS clock has not initialized, withhold timed estimation/global pose outputs rather than interpret zero time as a valid measurement. Switching simulation/system-time modes starts a new epoch and resets/remaps dependent state.
+- On a backward jump, replay seek, clock-source switch or other detected discontinuity: emit a typed clock-change event, clear/reinitialize timestamp ordering, trajectory interpolation, scan assembly, filter integration, and ROS TF caches (adapter-owned), or restore an explicitly compatible replay checkpoint. On large forward jumps apply a documented gap/reset policy; exact thresholds are left to **OD-002/OD-024**.
+- ROS wire timestamp conversion must handle ROS's seconds/nanoseconds fields **without floating-point precision loss**, enforce field range and normalization, and handle negative/native out-of-range values explicitly. The internal nanosecond count has no implicit Unix epoch.
+- Store clock mode/domain/epoch, source-to-canonical mapping, uncertainty and detected jumps in MCAP/replay/run metadata so that simulation and live diagnostics remain reproducible.
+
+**Required interface behaviors (illustrative, not implemented):**
+
+~~~cpp
+using TimeNs = std::int64_t;
+struct CanonicalTime { TimeNs ns; ClockDomainId domain; TimeEpochId epoch; };
+struct ClockEvent { ClockEventKind kind; CanonicalTime current; };
+struct ClockSource {
+  virtual ~ClockSource() = default;
+  virtual ClockReading now() const = 0; // includes readiness, domain, epoch
+};
+// ROS adapter maps /clock updates + ROS message stamps to native readings/events.
+~~~
+
+**Implementation acceptance tests (still outstanding):**
+
+1. Nanosecond exactness, signed overflow/underflow, ROS `sec/nanosec` range normalization and nanosecond-perfect round-trip (including negative cases when representable).
+2. Reject direct comparisons/differences for mismatched clock domains or epochs; validate explicit offset/drift conversion and uncertainty records.
+3. No `/clock` yet / `use_sim_time` activated: clearly uninitialized, no valid global pose; first valid clock tick transitions to ready.
+4. Pause/resume: no integration progress on a stopped simulation clock, no spurious CPU deadlines; step-by-scan updates exactly once.
+5. Backward seek, large forward jump, source-mode switch, clock reset: emit event and flush/restore motion, deskew, queue and TF state; no negative integration intervals.
+6. Mixed sensor stamps and imported ROS bag replay stay aligned to the authoritative acquisition timeline; hardware-only mode still operates without ROS.
+7. Verify in a **dedicated ROS 2 Docker test image** with `/clock` publisher and `use_sim_time` consumer, plus **ROS-free Catch2 core tests** and deterministic synthetic replay. Document any supported distribution-specific jump API behavior.
+
+**Consequences:** This settles the native time **representation and simulation integration requirement**, **not** the sensor clock-sync algorithm (OD-002), LD19 beam timestamp model (OD-003), interpolation/extrapolation thresholds (OD-004), or replay checkpoint strategy (OD-024). No implementation, measured timing results or passing tests are claimed.
+
+**ROS 2 design reference:** [ROS 2 Clock and Time design](https://design.ros2.org/articles/clock_and_time.html).
+
 
 ### OD-002 — Sensor timestamping / clock synchronization
 
@@ -302,6 +345,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-Before the first implementation, decide **OD-001** and **OD-017** so C++20 native types and Docker targets are stable. Next agree the acquisition/recording contract (**OD-002, OD-003, OD-005, OD-023**), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
+**OD-001 is Accepted.** Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement OD-001 with ROS-neutral clock interfaces and verify its listed tests; unresolved clock alignment remains in OD-002. Next agree the acquisition/recording contract (**OD-002, OD-003, OD-005, OD-023**), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
 
 **Suggested first concrete experiment:** Simulate a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact SE(2) beam times, 200 Hz yaw rate, wheel ticks, and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite informs **OD-004, OD-006, OD-007, OD-008 and OD-009** without relying on a large public dataset.
