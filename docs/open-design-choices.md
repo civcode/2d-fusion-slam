@@ -25,7 +25,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | ID | Subject | Priority | Affects | State |
 | --- | --- | --- | --- | --- |
 | OD-001 | Canonical timestamp API and units, ROS /clock support | P0 | All streams, serialization, simulation | **Accepted** (implementation/tests pending) |
-| OD-002 | Clock synchronization/acquisition architecture | P1 | Live acquisition, replay | Open |
+| OD-002 | Pi host timestamps now; Pico custom firmware + sync later | P1 | Live acquisition, replay | **Accepted** (implementation/tests pending) |
 | OD-003 | LD19 packet timestamp-to-beam model | P1 | Deskew fidelity | Open |
 | OD-004 | Trajectory interpolation and scan reference time | P1 | Deskew, optimization | Open |
 | OD-005 | Partial scans, filtering and assembly policy | P1 | Frontend acceptance | Open |
@@ -109,13 +109,68 @@ struct ClockSource {
 
 ### OD-002 — Sensor timestamping / clock synchronization
 
-**Question:** How are MPU6050, encoders and LD19 placed on a common acquisition timeline?
+**State:** **Accepted** (architectural choice; implementation, calibration and measured results pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection of initial approach A and future Pico approach B  
+**Priority:** P1
 
-**Options:** (A) Raspberry Pi acquisition timestamps near each device read/interrupt plus latency model; (B) microcontroller acquisition timestamps with measured host offset/drift; (C) hardware synchronized capture if available.
+**Decision:** Implement **A first**: timestamp LiDAR packet reception, MPU6050 sampling and wheel-encoder acquisition as close to the event as reasonably possible on the **Raspberry Pi host**, with an explicit host-monotonic clock domain, measured latency estimates, uncertainty and diagnostics. Architect **B as an optional future acquisition backend**: a **Raspberry Pi Pico (RP2040 initially; Pico model remains configurable)** running **custom Pico SDK firmware**, capturing IMU/encoder events locally and sending framed timestamped measurements to the Pi with a calibrated MCU-to-host clock mapping. **No micro-ROS or ROS client/middleware stack on the Pico, and no micro-ROS dependency in the host or core.**
 
-**Provisional preference:** Start with A to unblock recording, architect B as an upgrade when a suitable MCU is available. Neither approach implies precise LD19 per-beam hardware timestamps.
+**Alternatives:** (A) Raspberry Pi-only acquisition timestamping — **adopted first**, simplest working recorder and least firmware complexity; (B) Pico hardware-near capture with cross-device synchronization — **approved planned extension**, useful if measured host I/O jitter compromises quality; (C) hardware-triggered shared clock / PPS — not selected, possible later if hardware and accuracy requirements justify it.
 
-**Decision gate:** stationary and moving recordings quantifying jitter, UART buffering, device clock rollover, clock offset/drift, missed readings and timestamp uncertainty. Choose calibration and reset policy before claiming reproducible deskew.
+**Stage A — Raspberry Pi-only initial implementation:**
+
+- Capture host **monotonic** nanoseconds near an actual sampling boundary: GPIO encoder edge interrupt/counter read, IMU data-ready/FIFO or I²C read, and LD19 UART packet reception. Prefer an acquisition event timestamp when the driver provides a trustworthy source; otherwise bracket the read and identify which event was timestamped.
+- Keep the distinction between **device event, sensor conversion, host read, serial arrival, packet completion and derived beam time**. A host timestamp at the end of a UART read is **not** automatically the instant a LiDAR beam was acquired.
+- Preserve raw LD19 47-byte frames/device tick, raw IMU values, wheel ticks, host timestamps, sequence/drop/error counts and the timing-estimation method. Do not synthesize exact per-beam times from a coarse receive timestamp.
+- Measure I²C scheduling jitter, encoder interrupt latency, serial buffering, receive timestamp dispersion and gaps on Raspberry Pi 5 before setting fixed offsets or claiming deskew accuracy.
+- Record clock quality, uncertainty and provenance even if Stage A can only supply a conservative arrival-time proxy. Raw data recording MUST work without a Pico connected.
+
+**Stage B — optional custom Pico acquisition backend:**
+
+- Use the **Raspberry Pi Pico SDK** in a standalone, version-pinned firmware project (C/C++ with a compatible embedded toolchain). No ROS code, DDS, `micro-ROS`, `rclc`, ROS message headers, ROS transport, or `rclcpp` on the Pico. Firmware should remain usable independently of ROS and of a C++20-capable embedded standard library.
+- Capture **encoder transitions/counts** and **MPU6050 sample/data-ready events** near their actual occurrence; retain both hardware/sample timestamps and value-read/completion timestamps where meaningful. Consider Pico sampling/reading the IMU over I²C and encoders via GPIO/interrupts; use the LiDAR through either Pi UART or Pico UART only if the wiring/throughput/timing benefit is measured.
+- The RP2040 SDK exposes a **64-bit microsecond-since-boot hardware timer** (e.g., `time_us_64()`), not a native globally synchronized nanosecond clock. Preserve a **Pico boot-relative 64-bit microsecond tick**, convert to signed nanoseconds on the host with checked multiplication and source-domain metadata. **Nanosecond representation does not imply nanosecond measurement precision.**
+- **PIO is conditional.** Evaluate programmable I/O for deterministic encoder edge counting/decoding or UART/event timing if better than a conventional IRQ/timer approach. A PIO state machine alone does **not** automatically stamp a GPIO edge with the RP2040's 64-bit hardware timer; a timestamped-edge design must explicitly specify how PIO cycle counts, FIFO/DMA or CPU IRQ timing are correlated with a clock, and measure actual accuracy, PIO state machine/FIFO overflow, CPU load and pin usage. Keep a simpler IRQ/timer fallback. PIO capture is **not** a mandatory initial feature or a claim of hardware-grade nanosecond precision.
+- Pico messages MUST use a **small documented versioned binary/framed protocol** over a simple transport (initial candidate **USB CDC**, optionally UART after testing). Include protocol version, message type, payload length, sequence number, Pico boot/session ID, source timestamp/tick units, measurement fields, validity/status and an integrity check (CRC or equivalent). Reject corruption, unknown versions, invalid lengths and duplicated/out-of-order messages. **No ROS serialization or micro-ROS transport**. Final transport/framing/CRC selection requires bench validation.
+- Design a **bidirectional time-sync exchange** initiated by the Pi: retain host send `t1`, Pico receipt `t2`, Pico transmit `t3` and Pi receive `t4` in their original domains; estimate affine clock mapping `t_host_ns ≈ a * t_pico_us + b`, drift, link delay/asymmetry and mapping uncertainty using repeated samples. Select low-RTT exchanges and reject outliers; do not assume USB/UART latency symmetry. Store mapping version and validity window. No external NTP/PTP/micro-ROS dependency is required.
+- Detect **Pico reset/boot ID change**, host reboot, USB disconnect/reconnect, sequence gaps, timer anomalies, clock-map staleness and rollover. Such events require a **new source epoch** and recalibration/uncertainty propagation; never silently continue interpreting old Pico ticks on a new boot.
+- Under **ROS `use_sim_time` / `/clock`**, the host remains responsible for converting Pico hardware timestamps to the active estimation timeline when appropriate. **Never slave the Pico's physical timer directly to a pausable/jumping ROS clock.** The native ROS-independent OD-001 clock interface handles simulated time jumps; the Pico sync model describes physical capture timing only.
+
+**Dataflow and representation:**
+
+~~~text
+Stage A (initial):
+  LD19 UART / MPU6050 I2C / encoder GPIO
+           -> Pi driver near-event timestamps + raw values
+           -> source-domain/time-quality tags -> native int64 ns -> recorder/estimator
+
+Stage B (optional):
+  encoder edge + MPU6050 sample -> Pico firmware hardware/PIO/IRQ capture
+                                   -> Pico boot-relative microsecond ticks
+                                   -> framed USB CDC or UART transport
+  Pi host time-sync t1,t4 <----> Pico sync reply t2,t3
+           -> offset + drift + uncertainty model
+           -> clock-domain/epoch conversion to canonical int64 ns
+           -> same recorder/estimator API as Stage A
+
+  LD19 may stay on Pi UART; its own device-clock / per-beam model remains OD-003.
+~~~
+
+**Acceptance criteria (not yet validated):**
+
+1. **Stage A:** Dockerized ROS-free recording works from Pi-only sensors; synthetic/controlled tests quantify and log read/receive jitter, event/arrival differences, packet loss and timestamp quality.
+2. **Common contract:** Switch between Pi and simulated Pico timestamp sources without changing motion/deskew APIs; cross-domain/epoch comparisons are rejected without explicit clock mapping (OD-001).
+3. **Firmware/protocol:** Bench-test raw tick fidelity, CRC, version rejection, packet loss/out-of-order handling, safe reconnect/reboot, fixed-memory operation and timestamp provenance; preserve undecoded frames when diagnosing transport errors.
+4. **Synchronization:** Inject known offsets/drift/jitter/asymmetry; verify mapping parameter recovery and realistic uncertainty. Test dropped sync replies, stale models, NTP-like round-trip outliers and host/Pico reboot.
+5. **PIO feasibility:** Compare IRQ/timer vs PIO-assisted encoder capture under load, using an independent timing reference when possible; adopt PIO **only when accuracy, load and complexity justify it**.
+6. **Hardware:** Validate MPU6050 sample timing and LD19 packet timing separately; **Pico synchronization is not a substitute for characterizing the LD19 device clock/beam model**.
+7. **Dependency isolation:** Native core builds without Pico SDK/ROS; Pico firmware builds with its pinned SDK in a dedicated Docker toolchain; ROS `/clock` tests use the optional ROS adapter only; verify **no micro-ROS dependency**.
+8. Report end-to-end acquisition-to-recording and acquisition-to-pose latency, clock offset/drift/uncertainty, encoder loss, gyro sample loss and link jitter on the actual Pi + Pico hardware before claiming Stage B superiority.
+
+**Consequences:** Pi-only acquisition is the first deliverable. A future Pico firmware image and host driver must be modular and optional; firmware can evolve independently from the SLAM core. **Still open:** precise per-beam LD19 timing **OD-003**, buffering and queue policy **OD-021**, MCAP schema **OD-023**, and exact Stage B transport/sync algorithm parameters as implementation-level choices requiring evidence (not permission to add micro-ROS).
+
+**Hardware references:** [Raspberry Pi Pico SDK timer APIs](https://www.raspberrypi.com/documentation/pico-sdk/high_level.html), [hardware timer](https://github.com/raspberrypi/pico-sdk/blob/master/src/rp2_common/hardware_timer/include/hardware/timer.h), and [PIO API](https://www.raspberrypi.com/documentation/pico-sdk/hardware.html). These establish available primitives, **not** verified measurement accuracy for the proposed application.
 
 ### OD-003 — LD19 per-beam time reconstruction
 
@@ -345,6 +400,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 is Accepted.** Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement OD-001 with ROS-neutral clock interfaces and verify its listed tests; unresolved clock alignment remains in OD-002. Next agree the acquisition/recording contract (**OD-002, OD-003, OD-005, OD-023**), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
+**OD-001 and OD-002 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next agree the acquisition/recording contract (**OD-002, OD-003, OD-005, OD-023**), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
 
 **Suggested first concrete experiment:** Simulate a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact SE(2) beam times, 200 Hz yaw rate, wheel ticks, and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite informs **OD-004, OD-006, OD-007, OD-008 and OD-009** without relying on a large public dataset.
