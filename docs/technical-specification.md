@@ -264,6 +264,8 @@ The deskewer depends only on the portable timestamp-addressable trajectory provi
 
 **Exact lifecycle:** After scan IDs 1–90 have been accepted and inserted into A, create B. Insert 91–180 into **both** A and B; then freeze A at 180 and create C. B receives IDs 91–270 and freezes at 180 insertions; C starts at 181. Only **accepted, quality-valid, motion-filter-passing scan insertions** advance a submap's own counter. A single scan may count once in **each** of two active maps, not twice in one map; rejected/filtered scans continue to be recorded and contribute **zero** insertions. Store stable scan-to-submap IDs, true insertion counts and transition order so scan 90/180 cannot be duplicated. Always match against a **pre-insertion map snapshot**, not the scan's own freshly added cells.
 
+**Map bootstrap:** The first scan of an empty occupancy map cannot match against its own non-existent EDT. Initialize an explicit submap-local gauge pose and require valid, initialized OD-006 odometry/trajectory, OD-003 beam time and OD-004/005 scan geometry (or an external documented initial pose). Mark initial insertions **BOOTSTRAP_UNVERIFIED_MAP_MATCH** and do not claim LiDAR-observed global localization. Once sufficient mapped occupied support exists, use ordinary OD-007/008 pre-insertion matching. This is a narrowly scoped empty-map startup policy, never a fallback for an actively LOST robot. A newly overlapping map starts in the already established tracked frame.
+
 **Inverse-sensor update:**
 
 ~~~text
