@@ -292,6 +292,23 @@ The **native LD19 acquisition adapter** MUST own all protocol-specific beam-time
 
 References: [accepted OD-003](open-design-choices.md), [architecture §4.1](architecture-specification.md), and the [LD19 development manual](https://botland.de/img/art/inne/21991_Instrukcja%20rozbudowy.pdf).
 
+### 6.7 Accepted OD-005 — Scan assembly and invalid returns
+
+The implementation MUST separate **LD19-specific acquisition/packet handling** (device decoder + accepted OD-003 timing) from a **portable, ROS-free ScanAssembler** that groups generic timestamped beam slots into fixed-angular-seam revolutions and emits `AssembledScan` with explicit coverage and validity.
+
+- Segment revolutions at a configurable fixed angular seam using unwrapped beam angles and verified rotation direction, **not** packet boundaries, elapsed time, or expected points per revolution. Partition a packet straddling the seam without losing or duplicating observations.
+- Support **partial scans** with actual time bounds, angular intervals, **360° circular coverage**, uncovered-sector intervals, maximum angular gap, quality counters, seam confidence, packet-loss markers, intensity, raw source/provenance and completeness/termination reason.
+- An observed beam may have a **valid acquisition timestamp but invalid range**. It contributes to OD-004 scan start/end/midpoint timing, but never to geometric matching or clearing. Missing sectors have **no synthetic beams or timestamps**.
+- Use typed `VALID_HIT`, `VALID_NO_RETURN`, `INVALID_RETURN` and `MISSING` states. **INVALID_RETURN and MISSING MUST NOT generate free-space updates or occupied endpoints.** A documented valid no-return MAY produce only a bounded free ray under explicitly enabled calibration/config. An undocumented zero or out-of-range return MUST NOT be silently reclassified as clear space.
+- Use **separate configurable and versioned matching/insertion gates** for actual angular support, largest uncovered sector, count/distribution of valid hits, sensor/time reliability and pose/interpolation status. A well-supported partial scan may be accepted; report failures with structured reasons.
+- Normal map insertion requires both the OD-005 insertion gate and **OD-004 complete interpolation over the observed scan interval**; scans requiring any extrapolated motion are not inserted.
+- **Use timeouts only for stalled/disrupted acquisition recovery**: an explicit timeout/abort reason on the partial record is mandatory. Ordinary scan segmentation MUST remain seam-based, not periodic wall-time-driven.
+- Implement the scan assembler against native timed-beam and gap-event inputs and unit-test it with **mock beams**, without an LD19 device, Ceres/GTSAM, Pico SDK or ROS. Web Lab diagnostics SHOULD display observed/missing angular wedges, partial flags, invalid returns and eligibility outcomes. ROS adapters must not fabricate uniform `LaserScan` geometry for arbitrary partial sweeps.
+
+**Docker Catch2/CTest acceptance tests** MUST cover seam-crossing packets, nonzero seam, either rotation direction, repeated revolutions and first/last partial scan, dropped packets/ambiguous multiple turns, known angular coverage vs min/max span, zero valid ranges, invalid-return/no-hit occupancy behavior, confidence/threshold gates, watchdog-only recovery, and OD-004 full interpolated midpoint coverage. These tests should use the deterministic apartment/warehouse fixtures, not external dataset downloads.
+
+See [accepted OD-005](open-design-choices.md) and [architecture `4.1.1](architecture-specification.md). This is a specification, not a claim that the scan assembler already exists.
+
 ## 7. Testing contract
 
 Tests MUST use **Catch2** and be registered with **CTest**. All test execution, including sanitizer runs and offline replay regression suites, MUST happen within Docker.
@@ -300,7 +317,7 @@ Tests MUST use **Catch2** and be registered with **CTest**. All test execution, 
 
 | Category | Must cover | Dependencies |
 | --- | --- | --- |
-| Unit | SE(2) exponential and provider coverage, midpoint scan/deskew, 10 ms extrapolation gating, timestamps, LD19 CRC/beam timing, gyro integration, kinematics, CLI validation | Synthetic/no hardware |
+| Unit | SE(2) exponential/midpoint/coverage, 10 ms extrapolation, LD19 CRC/timing, OD-005 seam-based partial scans, missing angular wedges, safe invalid/no-return rays, gyro/kinematics and CLI validation | Synthetic/no hardware |
 | Integration | Ceres scan matching, GTSAM factor Jacobians, map serialization, sensor-stream synchronization | Docker image libs |
 | Optional ROS 2 integration | ROS ↔ native message conversions, TF authority and frame conventions, map-file interoperability, ROS time and QoS, Nav2/RViz smoke tests | Dedicated ROS 2 Docker test image |
 | Regression | Deterministic offline replay, stable outputs, previously fixed bugs | Versioned datasets |
@@ -418,7 +435,7 @@ A **documentation-only change** need not create fake code or run unavailable app
 | Checkpoint | Deliverables | Acceptance |
 | --- | --- | --- |
 | C0 — Toolchain scaffold | CMake C++20, FetchContent Catch2/cxxopts, Docker stages and Compose, minimal executable + tests | Fresh-container build/test and runtime smoke check work without host C++ dependencies. |
-| C1 — Recorder/replay | LD19 parser, timestamp schema, MCAP writer/reader, cxxopts CLIs; **Pi-only timestamp capture** | Synthetic packet suite and deterministic replay pass in test container; no Pico required. |
+| C1 — Recorder/replay | LD19 parser, OD-003 beam timing, **OD-005 fixed-seam partial scan assembler**, timestamp schema, MCAP writer/reader, cxxopts CLIs; Pi-only capture | Docker synthetic packets/replay verify circular coverage and zero free-space from invalid/missing beams; no Pico required. |
 | C1-P — Optional Pico hardware-near acquisition | Custom Pico SDK firmware, native framed Pi driver, time sync, measured IRQ/PIO alternatives | Firmware cross-built in Docker, protocol/clock tests pass in Docker, hardware measurements justify deployment, no micro-ROS. |
 | C1-W — Web Lab foundation | Browser Canvas view, local C++ HTTP/JSON API, map/scan view, dataset timeline, status/metrics, Compose service | Real backend data is rendered; headless/API and geometry tests pass in containers; no JavaScript SLAM implementation. |
 | C1-R — ROS-compatible native geometry | REP-103/105 framing, OccupancyGrid-style indexing/origin, rotated map import/export fixtures | No ROS install required for core geometry/PGM-YAML round-trip Catch2 tests. |
@@ -481,7 +498,7 @@ The Web Lab MUST support the following workflows incrementally:
 | Workflow | Visible data and controls | Intended phase |
 | --- | --- | --- |
 | **Offline replay** | Dataset/session selection, play/pause, step by scan, seek by timestamp, playback rate, scan index, deterministic rerun | First Web Lab release |
-| **Scan debugging** | Raw vs midpoint-deskewed LiDAR beams, midpoint/scan acquisition interval, per-beam acquisition spread, INTERPOLATED/EXTRAPOLATED/UNAVAILABLE status, invalid points and timing gaps | First release |
+| **Scan debugging** | Raw vs midpoint-deskewed LiDAR beams, **partial/complete flag, angular coverage and missing-sector overlay**, valid/invalid/no-return counts, eligibility reasons, midpoint/scan acquisition interval and trajectory status | First release |
 | **Pose and geometry** | Wheel/gyro prediction, scan-match pose, optimized trajectory, map-to-odom correction, optional uncertainty ellipses | First release / C3 |
 | **Mapping inspection** | Occupancy/unknown/free cells, active/frozen submaps, scan-to-submap associations, loop-closure links | C3–C4 |
 | **Localization inspection** | TRACKING/UNCERTAIN/LOST, match score, covariance/degeneracy, recovery candidates, age of last good fix | C5 |
