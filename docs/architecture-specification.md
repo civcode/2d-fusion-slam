@@ -79,7 +79,7 @@ Component ownership and forbidden dependencies:
 | `frontend_ceres` | OD-007 EDT/Ceres solve and **LiDAR-only** residual/Jacobian extraction with separate prior/boundary diagnostics | No ROS/device I/O; Ceres private behind native ScanMatcher |
 | `match_quality` | OD-008 robust PSD information, normalized rank/eigenvectors, calibrated full covariance or observable subspaces and acceptance | Native C++20/Eigen; no Ceres, ROS or sensor SDKs |
 | `coarse_search` | OD-009 covariance-aware local correlation, immutable multires score pyramids, async BnB and versioned candidate sets | No Ceres/ROS; bounded worker and native interface |
-| `backend_gtsam` | Factor graph, loop factors, bias states, optimized graph revisions | No acquisition/UI ownership |
+| `backend_gtsam` | OD-013 keyframe/submap Pose2 graph, one fused wheel/gyro interval factor, quality-gated LiDAR/loop factors, graph pose revisions | GTSAM-private backend; high-rate bias/deskew remain OD-006 core |
 | `localization` | Frozen-map tracking state, confidence and recovery | Read-only map |
 | `io` | Raw MCAP plus OD-012 JSON/zstd map bundles, graph/submap schemas, atomic generations and safe lazy loading | Native ROS-/Ceres-free persistence; adapters own interchange |
 | `apps` | cxxopts CLI, lifecycle, deployment orchestration | Do not duplicate math |
@@ -433,7 +433,7 @@ E(T) = 0.5 * sum_i Huber_delta( r_i(T)^2 )
 
 ### 5.3 Evidence separation and acceptance
 
-**Crucial OD-006/OD-013 compatibility:** The regularized optimized pose combines **LiDAR + a wheel/gyro odometry prior**. It is a **posterior pose**, not a statistically independent LiDAR observation. If GTSAM separately receives wheel and gyro factors from those same measurements, it MUST NOT receive that posterior pose as an independent LiDAR-only factor. Instead preserve separate **LiDAR-only geometric measurement/diagnostics**, prior provenance/covariance and the final regularized pose; **accepted OD-008** specifies LiDAR-only rank/uncertainty assessment; correlated graph factor extraction remains **OD-013**. Do not assert an exact independent LiDAR covariance merely by subtracting prior information from a posterior Hessian; deskew/map conditioning is correlated.
+**Crucial OD-006/accepted OD-013 compatibility:** The regularized optimized pose combines **LiDAR + a wheel/gyro odometry prior**. It is a **posterior pose**, not a statistically independent LiDAR observation. If GTSAM separately receives wheel and gyro factors from those same measurements, it MUST NOT receive that posterior pose as an independent LiDAR-only factor. Instead preserve separate **LiDAR-only geometric measurement/diagnostics**, prior provenance/covariance and the final regularized pose; **accepted OD-008** specifies LiDAR-only rank/uncertainty assessment; **accepted OD-013** requires separate geometry-based factor extraction, source-overlap/correlation admission and calibrated conservatism. Do not assert an exact independent LiDAR covariance merely by subtracting prior information from a posterior Hessian; deskew/map conditioning is correlated.
 
 The native **`ScanMatcher`** returns pose, convergence and failure reason; **LiDAR-only score and geometric-only information/eigenvalues**; inliers/overlap and informative/nontruncated counts; raw/robust residual quantiles; prior pose/covariance and cost; boundary/unknown/outside counts and costs; solver iterations/runtime; source scan/calibration and pinned occupancy/EDT revision; and conservative pose uncertainty (or an explicitly unavailable status).
 
@@ -687,32 +687,84 @@ ROS-independent C++20 `OccupancyGrid`, `SubmapBuilder`, `FrozenSubmap` and `MapS
 
 PGM/YAML export may aid ROS consumers but alone does not preserve all probabilities, known-neutral status, graph topology or provenance. Offline remapping creates a **new versioned artifact**, not mutations of frozen submaps; live known-map localization only reads published snapshots.
 
-## 7. GTSAM graph and loop closure
+## 7. Accepted OD-013: GTSAM keyframe + submap Pose2 graph and evidence accounting
 
-Proposed variables: keyframe poses `X_k ∈ SE(2)`, yaw bias `B_k ∈ R` (possibly coarser nodes), optionally global frozen-submap poses `S_j ∈ SE(2)`.
+### 7.1 Variables, gauge, and factor topology
 
-| Factor | Data | Quality constraint |
+The **native portable graph model** has global keyframe `X_k = T_map_base(t_k) ∈ SE(2)` and global submap `S_j = T_map_submap_j ∈ SE(2)` variables. Each submap refers to one immutable OD-010 local log-odds grid with stable coordinate frame/ID. A keyframe timestamp is OD-004's **scan midpoint**; exact spacing/keyframe selection remains OD-015. This is a **pose-only graph initially**: OD-006 maintains wheel/gyro integration, gyro bias, covariance and continuous deskew trajectories **outside GTSAM**. Do **not** introduce duplicate GTSAM `B_k` bias states, raw wheel+yaw factors or a fixed-lag joint smoother before benchmarks justify them.
+
+| Native constraint | Initial admission rule | GTSAM backend shape |
 | --- | --- | --- |
-| Gauge prior | Initial pose and optional bias prior | No unjustified strong absolute certainty |
-| Wheel | Encoder-derived relative motion | Check provenance: processed fused odom may be correlated |
-| Gyro | Yaw preintegration conditional on bias | Drift/random-walk and proper time covariance |
-| LiDAR | Geometric `T_submap_base` observation from Ceres | Pinned submap, conservative measurement covariance |
-| Loop closure | Verified relative submap/pose transform | Overlap, ambiguity, robust loss and consistency gate |
-| Bias evolution | Temporal bias random walk | Calibrated noise; no hard constant-bias assumption |
+| **Gauge/reference** | One documented map-frame gauge, **not** a spurious absolute sensor observation | Anchored frame or one appropriate prior |
+| **Fused interval odometry** | **Exactly one** wheel/gyro-derived relative motion per keyframe interval, preserving raw sample provenance and uncertainty | `BetweenFactor<Pose2>` between `X_k` and `X_{k+1}` or a rank-aware equivalent if incomplete |
+| **Primary local LiDAR** | At most **one per keyframe/source encounter**, independently evaluated geometry, OD-008 rank/uncertainty | Keyframe-to-submap relative `Pose2` factor (`X_k,S_j`) |
+| **Inter-submap/keyframe loop** | Frozen target excludes query scan; geometry validated with OD-007/008 and duplicate/correlation guard | Robust relative pose factor between relevant keyframe/submap variables |
+| **Submap anchor/membership** | Local frame definition, first accepted scan/anchor, both overlapping memberships | **Bookkeeping/initialization, not additional independent likelihood** |
 
-For a scan-to-submap measurement `Z_jk` of body pose in submap j, the predicted pose is `inverse(S_j) * X_k`. A proposed error is `Log(inverse(Z_jk) * inverse(S_j) * X_k)`, with tested tangent-space and noise conventions. Do not create another pose prior from the same match.
-
-For gyro bias reference `b_ref`:
+For admitted LiDAR relative pose `Z_jk=T_submap_j_base(t_k)`:
 
 ~~~text
-delta_yaw_ij = sum((omega_z - b_ref) * dt)
-r_gyro = wrap(yaw_j - yaw_i - delta_yaw_ij
-              + (b_i - b_ref) * (t_j - t_i))
+predicted Z_jk = inverse(S_j) * X_k
+e_jk = Log( inverse(Z_jk) * inverse(S_j) * X_k )
+e_odom = Log( inverse(Z_odom(k,k+1)) * inverse(X_k) * X_(k+1) )
 ~~~
 
-**Offline:** create graph, verify closures, batch optimize, re-deskew/rebuild when corrections justify it, and export new map revision. **Online:** iSAM2 updates asynchronously with bounded work and revisioned snapshots. **Known-map localization:** global graph is not required; evaluate a simpler filter before adding fixed-lag smoothing.
+Apply an explicitly tested SE(2) tangent convention, covariance frame transformation, source timestamp and Jacobian. **Fix the gauge exactly once.** Initialize each new `S_j` from its OD-010 anchor-frame relationship; do **not** add a high-confidence "anchor measurement" derived solely from the same odometry/local scan as an extra factor. An exact frame-definition relationship, if represented, must not redundantly constrain independent variables or prevent valid graph deformation. Test gauge rank/optimization freedom. Optimize `X_k` and `S_j` jointly; preserve immutable local occupancy while global `S_j` changes.
 
-Loop pipeline: descriptor/candidate retrieval -> coarse match -> Ceres refine -> overlap and degeneracy gates -> robust loop factor -> consistency monitoring and rejection. Graph parameterization/evidence **OD-013**, offline iteration policy **OD-014**, keyframe/bias spacing **OD-015**, loop search **OD-018**, online budget/fixed lag **OD-019**.
+### 7.2 Correlated evidence and admitted factors
+
+**Single interval motion factor:** OD-006 fused encoder translation with bias-corrected gyro yaw becomes **one** relative SE(2) motion likelihood for each keyframe interval, with source encoder/gyro sample/time ranges, covariance/bias calibration and slip/timing quality. Do not simultaneously add independent wheel-only, gyro-only **and** already-fused odometry factors from those same samples. If a modality is absent, admit only constraints supported by that evidence; do not invent fully observed 3-DoF motion or small covariance.
+
+**LiDAR conditioned on odometry:** OD-004 deskews each beam using OD-006 motion. That makes geometric residual errors share motion noise with the odometry factor. The joint uncertainty has off-diagonal cross-covariance:
+
+~~~text
+Sigma_joint = [ Sigma_odom    Sigma_cross   ]
+              [ Sigma_cross^T Sigma_lidar   ]
+~~~
+
+Independent GTSAM noise models on two factors **do not encode `Sigma_cross`**. Preserve the exact motion sample intervals/bias revisions used to deskew each scan, and apply conservatively inflated **held-out-calibrated OD-008** LiDAR geometry uncertainty to reduce overconfidence. **Inflation is an approximation, not a proof of statistical independence**; if calibration cannot support it, reject/degrade and defer explicit joint correlated factors to a separately validated future implementation.
+
+**Ceres posterior is not LiDAR measurement:** OD-007 optimizes a geometric EDT cost **plus OD-006 odometry prior and boundary penalty**. The resulting pose and full Hessian therefore contain motion evidence and nonmeasurement constraints. Do **not** add the posterior as independent LiDAR `Z_jk` or assume subtracting prior Hessian yields independent measurement covariance. For graph admission, perform a separate **LiDAR-only geometric refinement in OD-008 observable directions around a defensible candidate**, or use a separately justified explicitly conditioned geometry measurement. Carry geometry-only source Jacobians, rank, covariance calibration, map version and prior provenance; if reliable extraction fails **skip the LiDAR factor** rather than double-counting.
+
+**OD-010 overlap and self-evidence:** Preserve the full scan-to-submap **insertion membership ledger**; scan IDs **91–180** belong to both A and B in a nominal lifecycle. Select **one primary local** keyframe-to-submap geometry factor for a given encounter, not two independent copies from overlapping A/B. OD-011 **pre-insertion** snapshots permit local tracking against geometry that does not yet include the current scan. A **loop** MUST NOT target any submap containing the query scan. A repeated match of the same scan to the same target map/source geometry is not new information. Multiple loops involving heavily overlapping maps or scan sets require source-intersection analysis, correlation group IDs, configurable per-encounter caps and conservative uncertainty/rejection. A shared submap-pose variable models *submap pose* dependence; it does **not** account for correlated occupancy raster errors from shared historical scans.
+
+**Rank-aware factors:** OD-008's rank 0–2 result has **unbounded unknown nullspace**, not a complete 3×3 covariance. Reject such measurements by default until a properly tested **observable-subspace factor** is implemented, then constrain only supported directions; never set nullspace variance to zero, invert a pseudo-covariance as full rank, or let a strong motion prior manufacture LiDAR rank. Full-rank geometry uses OD-008 calibrated finite SPD noise with provenance. Loop robustification (e.g. GTSAM robust M-estimation) follows **geometric and correlation validation**, never substitutes for verification.
+
+| Evidence source | Graph treatment | Audit proof |
+| --- | --- | --- |
+| OD-006 wheel/gyro | One fused interval constraint | Unique source interval, raw encoder/gyro IDs and bias revision |
+| OD-007 Ceres prior | **No second graph observation** | Prior/source IDs retained, posterior identified as conditioned |
+| OD-008 LiDAR geometry | Separately extracted, rank-checked and conservatively calibrated | Geometry-only score/information, rank, map revision |
+| Shared A/B scan insertion | Membership but **one primary local LiDAR factor** | Membership + encounter dedup IDs |
+| Loop candidate/target | Nonself, OD-007/008 verified; redundant overlaps capped | Query ID absent from target, source overlap/correlation group |
+| Repeated frozen-map matching | Shared pose key and conservative geometry uncertainty | Snapshot/source hash, graph pose revision and factor provenance |
+
+### 7.3 Native factor admission and optimization pipeline
+
+~~~text
+OD-006 fused wheel+gyro interval motion ───────┐
+OD-004/005 LiDAR -> OD-007 Ceres -> OD-008 ──┐ |
+OD-010 overlap membership -> OD-011 snapshots ├─> native GraphFactorAdmission
+OD-018 loop candidates -> OD-009 search ------┘ |      |
+                                                v      v
+                                    native X_k, S_j, factors
+                                    (IDs, sources, correlation groups)
+                                                |
+                                         private GTSAM batch solver
+                                                |
+                                versioned graph poses (X_k,S_j)
+                             /                              \
+                map->odom global correction       OD-012 graph bundle
+                odom->base continuous             frozen local grid unchanged
+~~~
+
+The **native `PoseGraphModel` / `GraphFactorSpec` / `EvidenceProvenance` / `GraphFactorAdmission` / `GraphOptimizationResult`** types (illustrative) must use native SE(2), stable typed IDs, calibrated uncertainties or observable subspaces, scan membership, OD-011 map snapshot/source hash, raw motion sample interval, uncertainty calibration revision, correlation/dedup groups and accept/reject diagnostics. **No `gtsam::`/`ceres::`/ROS/vendor types in domain headers**. A private backend translates portable records to GTSAM `Pose2`/factor graph, and OD-012 serializes portable constraints—not native GTSAM objects. Keep backend construction out of acquisition and sensor adapters.
+
+**Batch GTSAM first:** Validate graph error/linearizations, gauge, analytic versus numerical factor Jacobians, synthetic exact truth, robust loop rejection, and covariance consistency on independent held-out trajectories. Batch offline optimization runs on bounded asynchronous work outside capture/recording and local OD-006 prediction. Add iSAM2 incrementality only when OD-019 budgets and a measurable benefit justify it; retain the same domain topology/provenance. OD-014 offline re-deskew/remapping produces a **new versioned authoritative map**, not silent edits of frozen raster cells.
+
+**Publication:** Publish immutable graph-pose revisions after numerical sanity/loop validation. Changing `S_j` changes global map/submap placement and `T_map_odom`, **not** a frozen OD-010 occupancy grid or its OD-011 local EDT/correlation cache. `T_odom_base(t)` remains continuous; global map correction may move and must carry time/freshness/quality (OD-022). Never let optimization block sensor ingestion or raw MCAP recording.
+
+**Mandatory tests / B21:** Pose2 graph gauge and Jacobians, fused one-per-interval factor uniqueness, different submap anchors/gauge choices, overlap A/B 90 scan IDs and one primary local constraint, self-match and duplicate loop rejection, Ceres strong-prior posterior not reused as graph LiDAR, OD-008 rank-deficient admission, aggressive rotational deskew error correlation and held-out covariance inflation, wrong/repeated loops, graph pose revisions not touching local frozen hashes, Ceres/GTSAM/ROS-free domain compilation, and Pi CPU/RAM/backlog measurements. See [accepted OD-013](open-design-choices.md) and [B21](benchmarks-and-datasets.md).
 
 ## 8. Known-map localization and recovery
 
