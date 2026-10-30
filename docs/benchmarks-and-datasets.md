@@ -103,10 +103,10 @@ Proposed defaults to be pinned in fixture configuration:
 | IMU gyro rate | 200 Hz | Gyro yaw + configured bias/noise; no fabricated absolute yaw. |
 | Wheel measurement rate | 100–200 Hz | Wheel ticks/increments or clearly identified wheel-derived odometry. |
 | Frames | `map`, `odom`, `base_link`, `laser`, `imu_link` | REP-103/105-compatible axes and explicit extrinsics. |
-| Reference | Exact `T_map_base(t)` | Can interpolate at each beam's acquisition time. |
+| Reference | Exact `T_map_base(t)` | Can be evaluated at each beam's true acquisition timestamp and at the temporal scan midpoint, independently of the estimated trajectory. |
 | Time origin | Explicit integer/monotonic | Deterministic timestamp ordering; no dependence on host wall clock. |
 
-**Generator algorithm:** ray cast against a known planar wall/obstacle model at each simulated beam time `t_i` using `T_map_base(t_i) * T_base_laser`. Sample angle, range, optional intensity/validity, and scan reference time. Generate gyro output as true body yaw rate plus bias/noise and wheel output using the selected differential-drive or Ackermann model and its error settings. Include defined missing packets and nonuniform scan angular speed only in separate robustness presets.
+**Generator algorithm:** ray cast against a known planar wall/obstacle model at each simulated beam time `t_i` using `T_map_base(t_i) * T_base_laser`. Compute the scan reference as **`t_mid = t_start + floor((t_end - t_start)/2)`**, where bounds come from time-valid acquired beam slots even when their range measurements are invalid. Sample angle, range, optional intensity/validity, and scan reference time. Generate gyro output as true body yaw rate plus bias/noise and wheel output using the selected differential-drive or Ackermann model and its error settings. Include defined missing packets and nonuniform scan angular speed only in separate robustness presets.
 
 Required test presets:
 
@@ -121,6 +121,21 @@ LD19 **raw 47-byte packet parsing** MUST have its own deterministic protocol fix
 The real LD19 physical packet-reference event remains unverified: test an actual sensor across controlled rotations/translations, host buffering and device restarts to **determine or bound** the acquisition-to-reported-timestamp delay before treating absolute timestamps as calibrated. Preserve original source bytes/ticks, Pi receive times, timing quality, model parameters and calibration revision in each prepared dataset.
 
 Small canonical fixture files MAY be committed when redistribution is allowed and their total size remains practical; keep full generated data out of Git.
+
+### 4.1 Accepted OD-004 trajectory and deskew fixture requirements
+
+The generator MUST produce continuous **SE(2) ground-truth** constant-body-twist segments with controlled wheel/gyro measurements; the first estimator implementation reconstructs pose from these streams using the **SE(2) exponential**, not independent linear x/y/yaw interpolation. Preserve the exact truth at every beam time and the scan's **temporal midpoint**.
+
+The synthetic apartment and warehouse fixtures MUST include at least:
+
+1. Pure translation, in-place yaw, constant-curvature turning, and nonzero LiDAR-to-base translation, with SE(2) exponential/small-angle numerical tests.
+2. Asynchronous encoder and gyro timestamps, nonuniform LD19 beam times, odd nanosecond scan durations, invalid range values that retain valid acquisition timing, and source-clock/epoch changes.
+3. A **complete, quality-valid interpolation interval** covering the scan bounds and midpoint. Only this case qualifies for **ordinary map insertion**; assert correct midpoint world geometry and that raw timestamps remain unchanged.
+4. Missing/reordered encoder/gyro data, ambiguous acquisition interval and incomplete trajectory coverage. A bounded delayed-processing run must either obtain valid coverage or mark the scan deferred/rejected, **never fill missing motion with silent extrapolation**.
+5. Optional live prediction at **9.9 ms**, **10 ms** and **10.1 ms** beyond a valid trajectory boundary. The first two are allowed **only when quality gates pass**, while the last is always rejected under the initial 10 ms ceiling. Confirm `EXTRAPOLATED` status, covariance growth, domain/epoch checks and **no extrapolated ordinary map insertion**.
+6. A mock or alternative trajectory provider feeding the same deskew tests without LD19, MPU6050, wheel encoder, Pico or ROS libraries. Future spline benchmarking uses the identical public trajectory interface.
+
+For all B03/B12 results, publish endpoint error against exact synthetic truth, trajectory coverage fraction, deferred/rejected scans, uncertainty/error calibration, interpolation/extrapolation counts, and p50/p95/p99 scan processing/processing-delay latency. **Do not confuse frame time \`t_mid\` with the time at which computation finished.** Run tests and benchmarks in Docker; Pi 5 timing must be measured on actual target hardware.
 
 ## 5. Benchmark categories and experiments
 
@@ -137,6 +152,7 @@ Small canonical fixture files MAY be committed when redistribution is allowed an
 | B09 | Fault tolerance | Dropped points/IMU, timing jumps, wheel slip, dynamics | State transitions, reported uncertainty, graceful recovery and invalid-data rejection. |
 | B10 | Benchmark comparison | Multiple deterministic configs | Reproducible side-by-side Web Lab views and machine-readable reports. |
 | B11 | LD19 timing reconstruction and alignment (OD-003) | Synthetic device packets + host receive jitter/clock drift; real LD19 capture | Relative per-beam error, clock slope/combined offset, jitter/uncertainty coverage, unknown physical-delay bound, wrap/reset recovery and deskew impact. |
+| B12 | Midpoint SE(2) trajectory and coverage (OD-004) | Exact arc trajectory, asynchronous wheel/gyro streams, nonuniform timed beams, missing samples and extrapolation cases | Midpoint pose/endpoint error; full-coverage map insertion acceptance; quality-gated 9.9/10/10.1 ms extrapolation; interpolation vs delay latency and covariance growth. |
 
 Compare **LiDAR-only**, **LiDAR + wheel odometry**, and **LiDAR + wheel + gyro** wherever the dataset supports them. A `no-wheel` dataset must not be included in wheel-fusion averages. If a dataset provides only processed odometry and not raw ticks, label the experiment accordingly; don't imply independent source availability.
 
@@ -282,7 +298,7 @@ The evaluator MUST state whether an SE(2) reference alignment was applied (initi
 | --- | --- | --- |
 | ATE translational RMSE, median, 95th percentile | Time-aligned estimate vs reference in metres, with stated SE(2) alignment | Synthetic or independently measured truth; derived reference must be labeled as such. |
 | Relative pose error (RPE) | Translation (m) and yaw (rad/deg) over fixed time/distance horizons | Synthetic/independent truth; reference-only with caveats. |
-| Deskew endpoint error | Difference to ideal ray-cast geometry at reference time | Synthetic truth; controlled real fixture where external geometry is surveyed. |
+| Deskew endpoint error | Difference to ideal ray-cast geometry at **temporal midpoint**, plus coverage and insertion eligibility | Synthetic truth; controlled real fixture where external geometry is surveyed. |
 | Scan-matcher quality | Inlier fraction, mean/robust residual, iterations, convergence and rejection status | All datasets; **not** a substitute for absolute accuracy. |
 | Loop consistency | Closure transform residual and verified closure acceptance/rejection | Real/synthetic loops; not independent global position error. |
 | Map quality | Occupancy agreement / geometric overlap where a real truth map exists; otherwise qualitative/consistency proxy | Synthetic; real if independent surveyed map exists. |
@@ -383,7 +399,7 @@ The example deliberately uses `null` for **unmeasured** fields: it is a reportin
 
 ### 11.1 Acceptance and delivery phases
 
-**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
+**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, midpoint-referenced SE(2) exponential interpolation and 10 ms gated extrapolation fixtures, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
 
 **D1 — Compact public baseline:** Verify and pin the 38 MB Cartographer bag; implement horizontal-LiDAR/IMU import and standalone LiDAR–IMU smoke replay. Do not call it a full 3-sensor benchmark.
 
