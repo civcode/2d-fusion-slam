@@ -34,8 +34,10 @@
 | Tests and validation | **Executed inside Docker containers**. |
 | Application and replay runtime | **Executed inside Docker containers**. |
 | Dataset / map artifacts | Versioned, reproducible, separately mounted from code and images. |
-| ROS | Optional adapter; no ROS dependency in the core algorithms. |
+| ROS conventions | **REP-103 and REP-105** plus ROS-compatible map/scan semantics; adopted by the native core. |
+| ROS 2 integration | Optional separately built adapter; **no ROS 2 headers, types or linked dependencies in the core**. |
 | Debugging / visualization | **Web Lab**: framework-free HTML/CSS/JavaScript and Canvas; small local C++ HTTP/JSON adapter; no algorithms duplicated in JavaScript. |
+| Boost libraries | **No implicit adoption**; every proposed Boost component and use case requires prior discussion, comparison against alternatives, and explicit approval. |
 | GitHub Actions | No workflows required by default; **never run Actions** without explicit authorization. |
 
 All new production code and test code MUST use C++20. A 3rd-party dependency MAY use an older language standard internally, provided it does not force a lower standard or extensions on project targets.
@@ -65,6 +67,8 @@ The implementation SHOULD evolve toward:
     backend_gtsam/
     localization/
     io/
+  ros2/
+    fusion_slam_ros/  # optional ROS 2 adapter package
   apps/
     web_lab/
       web/          # static HTML/CSS/JavaScript
@@ -88,7 +92,7 @@ This is a target layout, not a requirement to create empty placeholder directori
 
 1. `core` owns geometry, timestamps, frame conventions, data types, and math helpers.
 2. Hardware drivers MUST expose timestamped measurements and diagnostics through small interfaces; they MUST NOT depend on Ceres or GTSAM.
-3. Estimation logic MUST NOT depend directly on ROS messages, device files, CLI parsing, or Docker.
+3. Estimation logic MUST NOT depend directly on ROS messages, device files, CLI parsing, or Docker. In particular, `rclcpp`, `tf2`, `sensor_msgs`, `nav_msgs`, `geometry_msgs`, and `rosidl` types and includes are prohibited from the core public API and core link interface; ROS packages belong in the optional adapter.
 4. Ceres-specific types MUST remain inside scan-matching/optimization adapters; GTSAM-specific types MUST remain inside graph adapters.
 5. Frontend inputs and outputs MUST carry explicit timestamps, coordinate frames, and meaningful validity/quality information.
 6. Applications MUST be thin orchestration layers; their CLI parsing uses cxxopts.
@@ -170,6 +174,9 @@ Application arguments SHOULD include named input/output paths, configuration pat
 - **Eigen, Ceres, and GTSAM** MUST be pinned to compatible known versions in the **Docker image/toolchain**, with the selected versions documented in the image build definition. Use target-based `find_package` / imported targets where practicable.
 - It is **not** mandatory to fetch heavy Ceres/GTSAM dependency trees with FetchContent; provisioning them in a reproducible Docker image is the default.
 - Any other newly introduced C++ dependency requires a stated purpose, license check, supported platform matrix, and pinned version.
+- **Boost is exception-gated, not an implicit foundation:** before adding a direct Boost include, target, `find_package(Boost ...)`, source use, or new Boost-dependent convenience wrapper, the specific Boost component and its use case MUST be discussed and **explicitly approved case by case**. A decision for one component or module does not approve other Boost components or usages. Proposals MUST assess C++20 standard-library and existing-dependency alternatives, necessity, licensing, version, portability, image/compile-size impact, transitive linkage, and long-term maintenance.
+- An otherwise approved dependency or ROS 2 adapter that brings in Boost **transitively** MUST have that dependency and its impact disclosed and evaluated; do not quietly introduce Boost through FetchContent, packages, Docker images, or adapter headers. Incidental upstream transitive Boost dependencies are not automatically banned, but they MUST be visible and reviewed before adoption. If Boost is not essential, prefer a Boost-free solution.
+- For Web Lab networking, **Boost.Asio or Boost.Beast MUST NOT be added by default**. Their use requires the same explicit per-case evaluation. Do not add Boost speculatively for future networking needs.
 - Prefer an independently reusable library over adding a new external dependency for trivial utility code.
 - Third-party licenses and notices MUST be preserved.
 
@@ -204,6 +211,7 @@ The initial container implementation MUST provide:
 | `localizer` | Load a read-only map and run live scan matching/fusion. |
 | `online-slam` | Full mapping mode, created when the corresponding application exists. |
 | `web-lab` | Opt-in local visualization and replay/diagnostic API served by a C++ adapter, with explicitly mapped loopback-only host port. |
+| `ros2-adapter` / `ros2-test` | Opt-in ROS 2 integration and tests with a dedicated Docker image; the default core images MUST stay ROS-free. |
 
 A multi-stage `docker/Dockerfile` with `dev` / `test` / `runtime` stages, and a `docker/compose.yaml` or root-level `compose.yaml`, SHOULD be the standard. Services may share an image when it avoids redundant dependencies. A top-level Makefile or helper script MAY wrap Docker commands, but MUST NOT bypass Docker.
 
@@ -259,6 +267,7 @@ Tests MUST use **Catch2** and be registered with **CTest**. All test execution, 
 | --- | --- | --- |
 | Unit | SE(2), math, timestamps, LD19 CRC/frames, gyro integration, kinematics, CLI validation | Synthetic/no hardware |
 | Integration | Ceres scan matching, GTSAM factor Jacobians, map serialization, sensor-stream synchronization | Docker image libs |
+| Optional ROS 2 integration | ROS ↔ native message conversions, TF authority and frame conventions, map-file interoperability, ROS time and QoS, Nav2/RViz smoke tests | Dedicated ROS 2 Docker test image |
 | Regression | Deterministic offline replay, stable outputs, previously fixed bugs | Versioned datasets |
 | Performance | Per-scan latency, CPU, memory, cache allocations, Pi thermal behavior | Measured on target hardware |
 | Hardware-in-loop | UART acquisition, timing offsets, loss/reconnection, wheel/IMU integration | Opt-in device-access container |
@@ -283,10 +292,11 @@ A change is not complete until the relevant gates pass **inside containers**:
 1. CMake configure and build with warnings enabled; no new warnings in modified targets.
 2. Catch2 / CTest unit and integration tests.
 3. `clang-format` check for changed C++ files.
-4. Static analysis (`clang-tidy` when configured) and AddressSanitizer/UndefinedBehaviorSanitizer for supported test configurations.
-5. Deterministic replay/integration checks when the change touches timestamps, sensor models, optimization, or serialization.
-6. ARM64 smoke build/test for release-affecting changes, with a clearly stated exception if hardware is unavailable.
-7. Updated docs, configuration examples, and test expectations for externally visible behavior changes.
+4. Dependency review: flag any added direct or transitive Boost usage; verify the per-case discussion and explicit approval before acceptance.
+5. Static analysis (`clang-tidy` when configured) and AddressSanitizer/UndefinedBehaviorSanitizer for supported test configurations.
+6. Deterministic replay/integration checks when the change touches timestamps, sensor models, optimization, or serialization.
+7. ARM64 smoke build/test for release-affecting changes, with a clearly stated exception if hardware is unavailable.
+8. Updated docs, configuration examples, and test expectations for externally visible behavior changes.
 
 Tests that cannot run in the current environment MUST be identified explicitly as **not run**, including the reason. They MUST NOT be reported as passing.
 
@@ -357,10 +367,12 @@ A **documentation-only change** need not create fake code or run unavailable app
 | C0 — Toolchain scaffold | CMake C++20, FetchContent Catch2/cxxopts, Docker stages and Compose, minimal executable + tests | Fresh-container build/test and runtime smoke check work without host C++ dependencies. |
 | C1 — Recorder/replay | LD19 parser, timestamp schema, MCAP writer/reader, cxxopts CLIs | Synthetic packet suite and deterministic replay pass in test container. |
 | C1-W — Web Lab foundation | Browser Canvas view, local C++ HTTP/JSON API, map/scan view, dataset timeline, status/metrics, Compose service | Real backend data is rendered; headless/API and geometry tests pass in containers; no JavaScript SLAM implementation. |
+| C1-R — ROS-compatible native geometry | REP-103/105 framing, OccupancyGrid-style indexing/origin, rotated map import/export fixtures | No ROS install required for core geometry/PGM-YAML round-trip Catch2 tests. |
 | C2 — Motion/deskew | Wheel/gyro estimator, yaw bias, continuous SE(2) interpolation, full scan deskew | Numerical and synthetic moving-scan tests pass. |
 | C3 — Ceres frontend | Grid/submap representation, distance field, scan matcher | Synthetic alignment and degeneracy tests pass; time budget benchmarked on Pi 5. |
 | C4 — GTSAM offline mapper | Bias/wheel/LiDAR graph constraints, loops, batch optimization, map bundle | Offline replay produces evaluated, versioned map. |
 | C5 — Live localizer | Read-only map loader, Ceres tracking, localization state machine/recovery | Containerized onboard tracking and loss recovery demonstrated. |
+| C5-R — ROS 2 integration | Optional `fusion_slam_ros` adapter, standard topics/TF, Nav2/RViz launch, ROS bag and time support | Dedicated ROS 2 Docker tests prove interoperability; no ROS dependency added to core. |
 | C6 — Online SLAM | Asynchronous incremental backend, submap lifecycle, loop closure | Real-time latency and resource limits profiled on Pi 5. |
 
 Do not create all scaffolding in advance merely to satisfy the directory diagram; implement each checkpoint end-to-end.
@@ -430,7 +442,7 @@ The UI SHOULD have a clear left-side experiment/control panel, a prominent map/s
 ### 14.4 Map and coordinate visualization
 
 - Render a 2D Canvas, using device-pixel-ratio-aware scaling and resize handling.
-- Explicitly convert **world ↔ map-local ↔ grid cell ↔ canvas pixel** coordinates. Map origin translation, yaw, resolution, row orientation, and unknown occupancy MUST be honored. Reuse tested geometry conventions consistent with `docs/technical-specification.md`.
+- Explicitly convert **world ↔ map-local ↔ grid cell ↔ canvas pixel** coordinates. Map origin translation, yaw, resolution, row orientation, and unknown occupancy MUST be honored. Preserve the native ROS-compatible `OccupancyGrid` indexing and origin convention specified in Section 15; reuse tested geometry functions shared with the core.
 - Provide zoom, pan, fit-to-map, grid/scale legend, pointer readout in metres, and optional heading arrows. Inputs to the estimator use documented SI units and radians; if UI controls display degrees, convert at the adapter boundary and label visibly.
 - Provide separately color-coded/toggleable views for raw beams, deskewed beams, scan matching, sensor prediction, global optimized path, live pose, submaps, loop constraints, and candidate relocalization hypotheses.
 - Large maps MUST NOT be returned as full dense JSON on every pose update. Send immutable map metadata and occupancy representation (tiles, run-length encoding, or compact binary payload) once per map revision, then small timestamped dynamic overlays.
@@ -506,7 +518,106 @@ Initial Web Lab acceptance requires a **real C++-backed** scan/map viewer, **det
 
 The Web Lab MUST remain optional at compile-time and run-time; a headless SLAM build MUST NOT require a browser, JS/Node runtime, or the local HTTP debug server.
 
-## 15. Reference documentation
+
+## 15. ROS-compatible conventions and optional ROS 2 integration
+
+### 15.1 Contract and architectural boundary
+
+**ROS 2 conventions are normative for the portable core, but ROS 2 libraries are not.** Follow [REP-103](https://reps.openrobotics.org/rep-0103/) (SI units and axes), [REP-105](https://reps.openrobotics.org/rep-0105/) (mobile robot frame semantics), and ROS-compatible occupancy-map representations wherever applicable. A deliberate deviation MUST be recorded and documented with its mapping to ROS 2.
+
+Native types (e.g., `Pose2`, `Transform2`, `TimedScan`, `ImuSample`, `WheelDelta`, `OccupancyGrid`, `PoseEstimate`) MUST belong to the standalone C++20 libraries and use Eigen/standard C++ representations. They MUST NOT expose or inherit from ROS message types, include ROS headers, or require `ament`, `rclcpp`, `tf2`, `rosidl`, DDS, or ROS environment variables.
+
+Provide an **optional `fusion_slam_ros` adapter package**, built and tested independently using `ament_cmake` / `colcon` against an exported/installable CMake core. The adapter owns publishers, subscriptions, ROS messages, TF, clock conversion, parameters, QoS, and launch descriptions; it MUST call the real native estimator and MUST NOT reimplement scan matching or sensor fusion.
+
+~~~text
+ Native sensors / MCAP replay                 ROS 2 topics / rosbag2
+            |                                         |
+            v                                         v
+   ROS-independent C++20 core  <--- converters ---  fusion_slam_ros
+  time sync, motion, deskew,                          |
+  Ceres, GTSAM, mapping                               +--> /tf, /tf_static
+            |                                         +--> /odom, /map, /scan
+  MapBundle, pose + diagnostics                       +--> RViz / Nav2
+            |
+    Headless CLI / Web Lab (no ROS required)
+~~~
+
+A ROS adapter MUST NOT inject fused odometry back as an **independent measurement** alongside the same source encoder/IMU data. Explicitly select which node owns each sensor source, published odometry, and TF link. A native/headless installation MUST continue to work with **zero ROS dependencies**.
+
+### 15.2 Coordinate frame and transform ownership
+
+- **REP-103:** Right-handed coordinates; robot **+X forward, +Y left, +Z up**, yaw positive CCW about +Z. Length in metres, angles in radians, angular rates in rad/s, linear velocity in m/s, and acceleration in m/s². Device-native LD19 clockwise angle conventions must be corrected in its driver/adapter. If the Web Lab displays degrees, conversion and labels MUST be explicit.
+- **REP-105:** The standard chain is **`map -> odom -> base_link -> {laser, imu_link}`**. Frame names MAY be remapped/namespaced, but their meanings MUST remain consistent. Use calibrated `base_link` to sensor frames.
+- **`odom -> base_link`** must be continuously updated by **one** local odometry authority. It should not jump after a scan-map correction or global graph optimization.
+- **`map -> odom`** must be updated by **one** mapping/localization authority when enabled. If an external AMCL/other localizer owns that transform, this project's publication of `map -> odom` MUST be disabled. Do not publish a competing direct `map -> base_link` TF.
+- Static sensor extrinsics come from URDF/`robot_state_publisher` or a single `static_transform_publisher` authority, not both simultaneously.
+- To compute global correction use `T_map_odom = T_map_base * inverse(T_odom_base)` at consistent timestamps. The adapter must handle TF timeout, stale data, frame lookup errors, and extrapolation limits; it must not present invalid TF as a good localization fix.
+- Coordinate transforms MUST document source/target frame multiplication order; covariance MUST be expressed in a stated frame and converted consistently. Preserve the same spatial result in native geometry, Web Lab and ROS TF.
+
+### 15.3 Occupancy grid, map origin, and Nav2 map files
+
+The native occupancy grid MUST convert to [`nav_msgs/msg/OccupancyGrid`](https://github.com/ros2/common_interfaces/blob/rolling/nav_msgs/msg/OccupancyGrid.msg) without axis flips or changing its world geometry.
+
+| Field / convention | Requirement |
+| --- | --- |
+| Indexing | **Row-major starting at (x=0,y=0)**, `index = y * width + x`. |
+| Axis meaning | Grid columns grow in +X; rows grow in +Y in the **grid's local frame**. |
+| Cell value | ROS export: signed `int8`, **-1 unknown**, 0 free, 100 occupied; probabilities 1–99 allowed where supported. |
+| Resolution | Positive finite metres/cell. |
+| Origin | `MapMetaData.origin` is the world pose of the **lower-left corner of cell (0,0)**, not its centre. Include yaw as a normalized ROS quaternion. |
+| World coordinates | Centre of cell (i,j) is `T_map_grid * [(i+0.5)*resolution, (j+0.5)*resolution]`. |
+| Image rows | PGM / PNG top-down raster rows MUST be converted explicitly; do not interpret image row 0 as native grid y=0. |
+| Metadata | Width, height, resolution, origin, frame ID, map revision, and map threshold/unknown policy. |
+
+- Support **Nav2 map-server-style PGM/YAML** alongside the richer native map bundle. Standard fields: `image`, `resolution`, `origin: [x,y,yaw]` (yaw in radians), `negate`, `occupied_thresh`, `free_thresh`, `mode` (initially `trinary`). Unsupported formats or modes MUST fail explicitly.
+- Map loading and saving MUST preserve the origin including nonzero yaw, correct occupancy polarity, unknown cells, dimensions, and metric scale. Trinary export loses intermediate occupancy probability by design; document thresholds and loss of precision.
+- The map-adapter and Web Lab MUST use the **same native world/grid/canvas transformations** and pass round-trip tests for shifted and rotated origins.
+- The map message's `header.frame_id` defaults to `map`. Its timestamp and `map_load_time` policies must be explicit and tested. Localization maps remain read-only.
+
+### 15.4 Conventional ROS 2 messages and topics
+
+Prefer standard message definitions and **remappable** names; implement custom messages only for information the standard messages cannot faithfully represent.
+
+| Native quantity | ROS 2 message and suggested topic | Adapter requirements |
+| --- | --- | --- |
+| Planar scan | `sensor_msgs/msg/LaserScan` on `/scan` | Only when samples support uniform angular and time steps. Header stamp is **first beam acquisition time**, +Z CCW, zero angle along +X; radians, metres, `time_increment` and `scan_time` in seconds. |
+| Raw LD19 or nonuniform beam timing | `sensor_msgs/msg/PointCloud2` with documented per-point time, or explicit raw packet interface | Retain original timing/order; do not fabricate uniform timing when not valid. Raw packet storage is still required for deterministic offline replay. |
+| IMU | `sensor_msgs/msg/Imu` on `/imu/data_raw` | Angular velocity rad/s, acceleration m/s², correct `frame_id`/covariances; if orientation is unavailable, set `orientation_covariance[0] = -1`. Gyro-integrated yaw is not an absolute orientation measurement. |
+| Local odometry | `nav_msgs/msg/Odometry` on `/odom` | `header.frame_id = odom`, `child_frame_id = base_link`, pose/twist covariances meaningful, continuous estimate. |
+| Global localization | `geometry_msgs/msg/PoseWithCovarianceStamped` on `/localization/pose` | `header.frame_id = map`; source timestamp, quality/state published separately. |
+| Map | `nav_msgs/msg/OccupancyGrid` on `/map` | Correct metadata, origin quaternion, occupancy indexing and unknown semantics. |
+| Pose history (optional) | `nav_msgs/msg/Path` on `/trajectory` | Bounded, frame-consistent history; do not publish unbounded growth at IMU rate. |
+| TF | `tf2_msgs/msg/TFMessage` via TF broadcasters | Follow Section 15.2: one broadcaster per dynamic edge, static extrinsics on `/tf_static`. |
+
+A **deskewed** scan may be published separately for diagnostics; its timestamp/frame MUST describe the reference pose to which points were transformed. Do not silently label deskewed beam points as raw `LaserScan` rays when it violates uniform-ray assumptions.
+
+### 15.5 Time, QoS, lifecycle and integration behavior
+
+- The native estimator MUST use monotonic acquisition timestamps for integration and preserve each clock's origin and synchronization uncertainty. ROS stamps are **adapter-side conversions** using a documented and observable time mapping.
+- Honor ROS `use_sim_time` and `/clock` during bag replay/simulation. On backward time jumps, recording seeks, or clock resets, reset/restore state and TF buffers consistently; do not continue integrating across a discontinuity.
+- Record whether a message timestamp is a hardware acquisition instant, reconstructed beam time, ROS receive time, or conversion estimate. Reject unsynchronized data rather than silently pretending precise alignment.
+- Start with conventional ROS QoS profiles: sensor-data-compatible best-effort for sensors where appropriate, configurable odometry QoS, and reliable **transient-local** map delivery for late subscribers. Expose QoS via ROS parameters and test common Nav2/RViz subscription compatibility.
+- ROS-facing applications SHOULD provide remappable topics, frame names, params, launch files, and useful diagnostics. Consider managed lifecycle behavior for Nav2 interoperability where appropriate; it is not part of the core API.
+- Support rosbag2 / MCAP input and output in the adapter. Headless native replay remains available without ROS 2.
+- Only enable ROS-specific dependencies in the dedicated Docker image / Compose profile. Record the supported ROS 2 distribution explicitly when implementing the adapter. Avoid globally changing core compiler flags or introducing ROS transitive dependencies.
+- Any direct or transitive **Boost** component introduced by ROS integration still falls under the **per-case Boost review in Section 4.3**; using an existing ROS package is not blanket approval to add Boost to the native core.
+
+### 15.6 ROS interoperability and no-dependency acceptance
+
+The ROS 2 integration is not considered complete until containerized tests verify:
+
+1. **ROS-free core build** succeeds when ROS packages are absent; its exported CMake targets expose no ROS includes or linked dependencies.
+2. **Independent adapter build** succeeds in a declared ROS 2 Docker environment using `ament_cmake` / `colcon` and the separately installed core.
+3. **Map round trips:** Native occupancy grid -> ROS `OccupancyGrid` -> native and native -> PGM/YAML -> native preserve frame, resolution, occupied/free/unknown, translated and **rotated** map origins, and cell indexing.
+4. **Message conversion:** `LaserScan` timestamps/angles/sign/units, IMU orientation-unavailable semantics, odometry frame IDs, covariances, and yaw/quaternion conversion round-trip against known fixtures.
+5. **TF correctness:** One publisher per edge; static extrinsics, continuous odom, and global corrections produce the correct transform chain. Exercise missing, stale, and conflicting TF authority cases.
+6. **Time semantics:** Test bag replay with `use_sim_time`, delayed sensors, timestamp offsets, clock reset/backward seek, and correct snapshot time alignment.
+7. **Nav2/RViz compatibility:** A documented Docker launch/fixture demonstrates map and scan visualization and a consuming navigation system can resolve `map -> odom -> base_link -> laser` without manual data conversion.
+8. **Resource isolation:** ROS adapter/Web Lab may add overhead but must not starve onboard sensor acquisition or the Ceres tracking deadlines.
+
+ROS 2 adapter tests are **optional to the core Docker test profile**, but mandatory when changes touch the ROS adapter; all such tests MUST run inside the dedicated Docker service. No GitHub Actions runs are required or permitted by default.
+
+## 16. Reference documentation
 
 - [CMake FetchContent](https://cmake.org/cmake/help/latest/module/FetchContent.html)
 - [Catch2 CMake integration](https://github.com/catchorg/Catch2/blob/devel/docs/cmake-integration.md)
@@ -516,5 +627,10 @@ The Web Lab MUST remain optional at compile-time and run-time; a headless SLAM b
 - [Ceres Solver](https://ceres-solver.readthedocs.io/)
 - [GTSAM](https://gtsam.org/)
 - [MCAP](https://mcap.dev/)
+- [ROS REP-103: Units and coordinate conventions](https://reps.openrobotics.org/rep-0103/)
+- [ROS REP-105: Coordinate frames for mobile platforms](https://reps.openrobotics.org/rep-0105/)
+- [ROS 2 OccupancyGrid definition](https://github.com/ros2/common_interfaces/blob/rolling/nav_msgs/msg/OccupancyGrid.msg)
+- [ROS 2 LaserScan definition](https://github.com/ros2/common_interfaces/blob/rolling/sensor_msgs/msg/LaserScan.msg)
+- [Nav2 transform configuration guidance](https://docs.nav2.org/setup_guides/transformation/setup_transforms.html)
 - [Hybrid A* Planning Lab source, inspected branch](https://github.com/civcode/hybrid-astar-cpp/tree/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo)
 - [Hybrid A* Web Lab HTTP integration test reference](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/tests/demo_http_test.py)
