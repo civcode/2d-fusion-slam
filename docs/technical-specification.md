@@ -114,7 +114,7 @@ Maintain per-source clock alignment: host receipt and hardware/sample time where
 
 **ROS 2 simulation compatibility:** the ROS-independent core exposes a clock-injection/time-event interface capable of consuming a controlled simulated nanosecond timeline. An optional ROS 2 adapter honors `use_sim_time` and `/clock` (`rosgraph_msgs/msg/Clock`), converting to/from ROS message timestamps exactly using integer arithmetic and checking ranges. When simulation time is uninitialized, do not publish a valid timed estimate. Pauses must not advance estimator integration; backward jumps, replay seeks, source changes and other discontinuities invalidate state/trajectory interpolation across the boundary and trigger reset or compatible checkpoint restoration. Use the independent host steady clock for CPU deadlines rather than `/clock`. A simulated timestamp need not be monotonic across epochs.
 
-Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples. **OD-002 selects the staged acquisition architecture** and **OD-003 selects the LD19 beam-time reconstruction method**, not their final measured precision or calibration constants. Scan reference/interpolation (OD-004) and replay checkpoint/jump policy (OD-024) remain open.
+Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples. **OD-002 selects staged acquisition**, **OD-003 selects LD19 beam timing**, and **accepted OD-004 selects midpoint deskew and SE(2) exponential trajectory interpolation**. Exact clock calibration, trajectory gap/uncertainty tuning and replay checkpoint/jump policy (OD-024) remain open.
 
 Reference: [ROS 2 Clock and Time design](https://design.ros2.org/articles/clock_and_time.html).
 
@@ -150,7 +150,17 @@ sinc(a) = sin(a)/a  (with sinc(0) = 1)
 
 For Ackermann steering, a nominal model is **yaw_rate = v * tan(steering_angle) / wheelbase**, when actual steering measurements are available. Offer interchangeable kinematic models behind a common prediction interface. Detect wheel/gyro disagreement and increase uncertainty when slip or model mismatch is suspected.
 
-The predictor should provide **pose(t)** and uncertainty interpolation across a short history, and must remain smooth even when global map localization adjusts.
+**Accepted OD-004:** The predictor MUST provide a **timestamp-addressable, continuous SE(2) odometry trajectory** behind a **ROS- and sensor-independent trajectory-provider interface**. It consumes timestamped wheel and bias-corrected gyro/IMU inputs, constructs **piecewise-constant body-frame twist** segments, and evaluates intermediate poses with the **SE(2) exponential map**:
+
+~~~text
+T_odom_base(t) =
+  T_odom_base(t_k) * Exp_SE2(((t - t_k) in seconds) * hat(xi_k))
+  for t_k <= t <= t_{k+1}
+~~~
+
+Here `xi_k = (v_x, v_y, omega)` is expressed in the robot body frame and rates are converted to SI units; each timestamp comes from the OD-001 canonical signed-nanosecond clock. Evaluate the exact constant-twist/curvature arc with a stable zero-yaw-rate limit, not linear interpolation of x, y and yaw. Preserve timestamp-domain/epoch identity, measurement validity, pose covariance and trajectory revision. The local `odom` trajectory remains smooth when the global map correction changes.
+
+The provider MUST report whether a time or interval is **fully interpolatable**, extrapolated or unavailable. Consumers only query poses, coverage and uncertainty; they MUST NOT directly depend on LD19, MPU6050, Pico, encoders or ROS message types. A continuous SE(2) spline MAY later implement the same interface, but is not part of the initial algorithm.
 
 ### 5.2 Yaw-only gyroscope preintegration
 
@@ -171,20 +181,34 @@ r_yaw = wrap(theta_j - theta_i
 
 Use a gyro bias random walk with variance increasing with elapsed time. Include sensor measurement noise and bias uncertainty in factor covariance. Check analytical factor Jacobians against numerical derivatives.
 
-### 5.3 Per-beam full SE(2) deskew
+### 5.3 Per-beam full SE(2) deskew into scan midpoint
 
-For a beam measured at t_i, express it in the laser frame at scan reference time t_ref:
+**Accepted OD-004** defines the scan reference as the **temporal midpoint** of all time-valid acquired beam slots in a scan (regardless of whether their range return is usable):
 
 ~~~text
-p_laser_ref =
-    inverse(T_world_base(t_ref) * T_base_laser)
-    * (T_world_base(t_i) * T_base_laser)
+t_start = min(valid beam acquisition timestamp)
+t_end   = max(valid beam acquisition timestamp)
+t_mid   = t_start + floor((t_end - t_start)/2)
+~~~
+
+Use checked 64-bit nanosecond arithmetic and require a common time-domain/epoch. The assembler must report coverage and partial-scan state; unknown or missing time boundaries are not silently replaced by first/last packet arrival.
+
+For beam `p_i` in the instantaneous laser frame at `t_i`, express it in the laser frame at `t_mid` using the **continuous local odom trajectory**:
+
+~~~text
+p_laser_mid =
+    inverse(T_odom_base(t_mid) * T_base_laser)
+    * (T_odom_base(t_i) * T_base_laser)
     * p_laser_i
 ~~~
 
-Use translation from wheel odometry and rotation from gyro integration. Choose and document a consistent scan reference timestamp (for example scan end or midpoint). Explicitly handle the LiDAR lever arm from a noncentral sensor mounting position.
+This must handle full translation and rotation, including the LiDAR-to-base extrinsic lever arm. Deskew is a derived view of the immutable raw observations; recalibration or offline trajectory/bias corrections can trigger re-deskew and new map revisions (OD-014).
 
-Retain raw points; deskew is a derived view that can be recomputed if offline optimization changes time alignment, gyro bias, or trajectory. Initially, keep bias fixed during one scan and update between scans.
+**Full interpolation is mandatory for ordinary map insertion:** every timestamp-valid beam and the scan midpoint must be covered by valid **interpolated** trajectory segments across `[t_start,t_end]` with no unsupported sensor gap or clock-epoch change. If the motion history has not reached `t_end`, **prefer bounded delayed scan processing** to waiting forever or forecasting future motion. Incomplete coverage, invalid boundary timing or any extrapolated point prevents normal occupancy insertion; report the reason, and retain the raw scan.
+
+**Optional bounded extrapolation:** Explicit latency-sensitive localization/prediction or diagnostics MAY request extrapolation; the default is **disabled**. Initial maximum horizon is **10 ms (10,000,000 ns)** beyond the earliest/latest trusted trajectory boundary. This is an upper bound subject to covariance, gyro/encoder freshness, slip/bias, source timestamp uncertainty and clock/calibration quality gates. Never extrapolate across a discontinuity. Return distinct `INTERPOLATED`, `EXTRAPOLATED` or `UNAVAILABLE` status with horizon and uncertainty. An extrapolated pose MUST NOT silently become valid map-insertion evidence. Choose buffering/quality thresholds by benchmark, not assumed device performance.
+
+The deskewer depends only on the portable timestamp-addressable trajectory provider, timed beams, and extrinsics. The **LD19 adapter (OD-003)** handles packet timing and clock alignment separately; neither the deskewer nor trajectory provider imports sensor-specific or ROS types. A future SE(2) spline may replace the piecewise-exponential provider without changing the deskewer API.
 
 ## 6. Shared geometric frontend (Ceres)
 
@@ -314,8 +338,9 @@ Map metadata shall include format version, grid origin/resolution, occupied/unkn
 Keep interfaces implementation-independent:
 
 ~~~text
-SensorSample -> TimestampAligner -> MotionPredictor
-LidarPacket  -> ScanAssembler -> Deskewer
+SensorSample -> TimestampAligner -> MotionPredictor -> TrajectoryProvider
+LidarPacket  -> LD19 Time Adapter -> TimedScan -> ScanAssembler
+TimedScan + TrajectoryProvider + T_base_laser -> MidpointDeskewer
 DeskewedScan + MapView + PosePrior -> ScanMatcher -> MatchResult
 MatchResult + WheelDelta + GyroDelta -> FactorGraphBackend
 RecordedDataset -> OfflineMapper -> MapBundle
@@ -385,8 +410,8 @@ Measure end-to-end **capture-to-pose latency**, not only Ceres solve time. Use b
 
 - LD19 frame parsing, CRC errors, truncated packets, 30-second timestamp rollover, angle/speed beam-time reconstruction, device-to-host offset/drift, physical-delay calibration/uncertainty, angle wrapping, and serial resynchronization.
 - Clock offset/drift estimation and timing uncertainty; missing or late IMU/encoder samples.
-- SE(2) composition/inverse, curvature integration, Jacobians, and laser/IMU extrinsics.
-- Synthetic moving-wall scenario demonstrating rotational and translational deskew.
+- SE(2) composition/inverse, exponential constant-twist arcs, near-zero angular-rate stability, Jacobians, asynchronous wheel/gyro knots, timestamp-addressable coverage and laser/IMU extrinsics.
+- Synthetic moving-wall/apartment/warehouse scans proving **midpoint-referenced** rotational and translational deskew, full interpolation eligibility, 10 ms quality-gated extrapolation and rejection of 10.1 ms or uncertain/gapped scans.
 - Ceres residual gradients, convergence basin, robust outlier rejection, and degeneracy detection.
 - GTSAM custom factor Jacobians, bias recovery, covariance scaling, loop-closure gating.
 - Map-bundle round-trip, version rejection, artifact integrity, and replay determinism.
