@@ -3,7 +3,7 @@
 **Status:** Proposed / dataset candidates not yet provisioned  
 **Version:** 0.1  
 **Date:** 2026-10-30  
-**Related:** [Technical Specification](technical-specification.md) · [Implementation Contract](https://github.com/civcode/2d-fusion-slam/blob/docs/implementation-contract/docs/implementation-contract.md) (proposed in [PR #1](https://github.com/civcode/2d-fusion-slam/pull/1))
+**Related:** [Technical Specification](technical-specification.md) · [Implementation Contract](implementation-contract.md)
 
 > **Purpose:** Establish a small, reproducible benchmark suite from the beginning of the project, covering 2D LiDAR, yaw-rate IMU, wheel odometry, scan deskew, offline mapping, and known-map live localization. The suite MUST distinguish exact simulated ground truth, independent measured ground truth, LiDAR-derived reference trajectories, and sequences with no ground truth.
 
@@ -153,6 +153,22 @@ Fixture variants include:
 
 Publish B13 outputs: **observed angular coverage fraction, largest missing sector (degrees), missing intervals, valid/invalid/no-return counts, accepted vs rejected partial scans, match/insertion eligibility reasons, malformed-packet count, watchdog recoveries, and free/occupied writes due to invalid/missing measurements (must be zero)**. Include Docker test image/version and report profile thresholds; measure Raspberry Pi 5 impact when real LD19 recordings are available. The Web Lab SHOULD render coverage and missing sectors distinctly, never as inferred free space.
 
+### 4.3 Accepted OD-006 wheel/gyro motion and bias fixtures
+
+Provide a deterministic **minimal wheel-translation + gyro-yaw integrator** fixture with exact SE(2) trajectory truth, configurable body-frame twist, true gyro Z bias, bias random walk/temperature variation, gyro measurement noise, wheel scale/slip/encoder quantization, timing errors and valid/invalid motion evidence. Generate **measured** wheel/steering inputs according to an explicitly selected platform model; do not label steering commands or already-fused odometry as independent raw encoder evidence.
+
+Required cases:
+
+1. **Nominal:** Known wheel translation, zero/constant yaw and constant-curvature motion with asynchronous gyro/wheel samples; compare reconstructed SE(2) path against truth and OD-004 midpoint deskew without Ceres or GTSAM.
+2. **Kinematic selection:** Synthetic differential-drive **only with independently measured left/right wheels**; Ackermann **only with measured steering** and calibrated wheelbase; unknown/unconfigured drivetrain and missing steering MUST fail or degrade explicitly, never silently default to differential drive.
+3. **Stationary calibration:** Inject known fixed Z-rate bias and noise over a verified stationary startup window; measure bias mean error, estimated variance and accepted-calibration rate. Moving startup, insufficient samples or ambiguous stationary evidence MUST reject a false trusted bias.
+4. **Gated online bias:** Separate true stationary bias drift from moving robot and wheel-slip cases. Confirm allowed bounded corrections, rejected updates during motion/slip, logged revision changes and continuous previously published odometry.
+5. **Slip/disagreement:** Inject asymmetric wheel slip, encoder scale mismatch and gyro bias separately. When independent wheel yaw exists, verify covariance-aware wheel/gyro disagreement and increased uncertainty; when absent, report the monitor unavailable. Do not turn slip into a bias update.
+6. **Uncertainty and data gaps:** Compare pose/yaw/bias covariance and cross-covariances with Monte Carlo exact simulated truth, long bias drift intervals, dropped wheel/gyro messages, bad clock epochs and the OD-004 10 ms extrapolation limit. Missing observations must not be interpreted as measured zero motion.
+7. **Architecture/performance:** Run the same dataset through the minimal integrator and a mock alternative provider with the same timestamped trajectory interface (future EKF/smoother candidate); ensure generic C++20 core works without ROS/drivers, and record Raspberry Pi 5 p50/p95/p99 integration/deskew latency, CPU and memory.
+
+**Report** bias estimation error and readiness fraction, integration RPE/ATE **only with exact synthetic or independent ground truth**, yaw drift, slip detection precision/recall where labeled, covariance-vs-error consistency, missing-data coverage, and estimator time/resource cost. Each result must record kinematic model/geometry, sensor input provenance, configured bias/slip/noise parameters, algorithm revision, seed and Docker image. The ROSBOT, MIT and Cartographer datasets support **different measured-source and ground-truth claims**: a bag with only `/odom` is not automatically a pair of raw wheel encoders.
+
 ## 5. Benchmark categories and experiments
 
 | ID | Benchmark | Inputs | Required observations |
@@ -170,6 +186,7 @@ Publish B13 outputs: **observed angular coverage fraction, largest missing secto
 | B11 | LD19 timing reconstruction and alignment (OD-003) | Synthetic device packets + host receive jitter/clock drift; real LD19 capture | Relative per-beam error, clock slope/combined offset, jitter/uncertainty coverage, unknown physical-delay bound, wrap/reset recovery and deskew impact. |
 | B12 | Midpoint SE(2) trajectory and coverage (OD-004) | Exact arc trajectory, asynchronous wheel/gyro streams, nonuniform timed beams, missing samples and extrapolation cases | Midpoint pose/endpoint error; full-coverage map insertion acceptance; quality-gated 9.9/10/10.1 ms extrapolation; interpolation vs delay latency and covariance growth. |
 | B13 | OD-005 angular-seam partial scan and invalid-return safety | LD19 packet/seam fixtures, missing wedges, invalid/no-return states, motion coverage | Circular coverage and gap correctness; partial matching/insertion gates; **zero free or occupied updates from invalid/missing returns**; timeout-only recovery, no phantom beams. |
+| B14 | OD-006 minimal motion estimation and gyro bias | Exact synthetic SE(2), wheel/gyro streams, stationary calibration, slip and gaps; verified kinematics fixtures | Pose/yaw error, bias error/readiness, bias-update gating, covariance consistency, slip detection and missing-source status; Pi runtime. |
 
 Compare **LiDAR-only**, **LiDAR + wheel odometry**, and **LiDAR + wheel + gyro** wherever the dataset supports them. A `no-wheel` dataset must not be included in wheel-fusion averages. If a dataset provides only processed odometry and not raw ticks, label the experiment accordingly; don't imply independent source availability.
 
@@ -416,7 +433,7 @@ The example deliberately uses `null` for **unmeasured** fields: it is a reportin
 
 ### 11.1 Acceptance and delivery phases
 
-**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, midpoint-referenced SE(2) exponential interpolation, 10 ms gated extrapolation, **OD-005 seam/partial-scan/missing-sector and invalid-return safety** fixtures, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
+**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, OD-004 midpoint SE(2)/10 ms gating, OD-005 seam/invalid-return fixtures, **OD-006 stationary gyro bias, wheel slip, kinematic validity and uncertainty fixtures**, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
 
 **D1 — Compact public baseline:** Verify and pin the 38 MB Cartographer bag; implement horizontal-LiDAR/IMU import and standalone LiDAR–IMU smoke replay. Do not call it a full 3-sensor benchmark.
 
