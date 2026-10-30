@@ -33,7 +33,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-007 | Truncated unsigned EDT, bilinear, per-beam Huber and odom prior | P1 | Ceres matching | **Accepted** (implementation/benchmarks pending) |
 | OD-008 | Robust LiDAR-only information, rank gates and covariance calibration | P1 | Graph, localizer quality | **Accepted** (tests/calibration pending) |
 | OD-009 | Covariance-aware local correlation and asynchronous branch-and-bound recovery | P2 | Tracking recovery | **Accepted** (benchmark tuning pending) |
-| OD-010 | Occupancy submap construction and thresholds | P1 | Mapping and graph | Open |
+| OD-010 | 5 cm log-odds occupancy, 90/180 overlap and immutable freezing | P1 | Mapping and graph | **Accepted** (tests/tuning pending) |
 | OD-011 | Distance-field cache / immutable map snapshots | P1 | Map/matcher memory | Open |
 | OD-012 | Native map bundle and persistence format | P1 | Reuse across modes | Open |
 | OD-013 | GTSAM topology and information accounting | P1 | Backend accuracy | Open |
@@ -419,7 +419,7 @@ The **LD19 acquisition adapter** owns frame parsing, CRC, reported motor speed a
 7. Full OD-004 interpolation across the **actual observed** scan interval, including timestamp-valid slots with invalid ranges; missing time boundaries and extrapolated trajectory prevent ordinary insertion. Verify midpoint is not a mean beam time.
 8. Deterministic synthetic apartment/warehouse replay, Docker Catch2/CTest tests, Web Lab overlay of observed/missing angular sectors and quality counters, and measured Pi CPU/latency.
 
-**Consequences:** Angular-seam segmentation, honest partial scans, return validity and safe occupancy behavior, and recovery-only timeouts are **settled**. Exact coverage binning, thresholds, loss tolerance and timeout duration remain **configurable implementation/benchmark tuning**, not permission to invent missing samples. OD-003 owns per-beam time reconstruction; OD-004 owns midpoint trajectory deskew; OD-005 owns **observation grouping and scan eligibility**. OD-006 motion integration is accepted; OD-007 scan matching is accepted; OD-010 occupancy inverse-sensor model remains open.
+**Consequences:** Angular-seam segmentation, honest partial scans, return validity and safe occupancy behavior, and recovery-only timeouts are **settled**. Exact coverage binning, thresholds, loss tolerance and timeout duration remain **configurable implementation/benchmark tuning**, not permission to invent missing samples. OD-003 owns per-beam time reconstruction; OD-004 owns midpoint trajectory deskew; OD-005 owns **observation grouping and scan eligibility**. OD-006 motion integration is accepted; OD-007 scan matching is accepted; OD-010 log-odds occupancy and freezing policy is accepted; OD-011 derived cache management remains open.
 
 ### OD-006 — Minimal wheel/gyro integrator and replaceable kinematics
 
@@ -730,13 +730,104 @@ These are **initial proposed budgets for Raspberry Pi 5 at roughly 10 Hz LD19 in
 
 **External reference:** [Cartographer 2D fast correlative scan matcher](https://google-cartographer.github.io/cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.html) (precomputed maximum-score grid pyramid with branch-and-bound, later Ceres refinement).
 
-### OD-010 — Occupancy submap size and freezing policy
+### OD-010 — Bounded 5 cm log-odds occupancy and two overlapping submaps
 
-**Question:** 5 cm vs finer/coarser grid; overlap size; scans per active submap; occupancy inverse-sensor model and dynamic aging?
+**State:** **Accepted** (architecture chosen; configuration calibration and implementation/tests pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit choice of 5 cm probabilistic grids, 90/180 insertion lifecycle and immutable freezing  
+**Priority:** P1
 
-**Provisional preference:** 0.05 m cell resolution; 1–2 overlapping active submaps and 30–100 scans/submap **as initial tuning ranges only**. Frozen submaps use immutable local coordinates.
+**Decision:** Use **0.05 m** native planar **log-odds occupancy grids** as the **authoritative map**, with normally **two overlapping active submaps**. After **90 accepted scan insertions into the youngest submap**, create a successor; after **180 accepted insertions into the older submap**, permanently **freeze its local occupancy raster**. Thus each complete submap normally contains 180 accepted scan insertions, and adjacent submaps share about **90 accepted scan IDs**, i.e. **50% overlap by insertion count** (not a promise of 50% spatial overlap). Apply configurable **motion filtering and bounded spatial/memory safeguards**. Preserve OD-005 invalid/unknown semantics; updates are probabilistic per-hit/per-free-ray, with **hits taking priority and no repeated cell update within one scan/submap insertion**. Frozen submap **global SE(2) pose may change** through GTSAM while local grid contents never change. EDT (OD-007) and correlative pyramids (OD-009) are **versioned derived caches**, not authoritative maps. No time-based decay of frozen maps; any future dynamic aging belongs in a separate transient layer. All mapping/domain interfaces stay **ROS-independent**.
 
-**Decision gate:** map detail/accuracy and memory on synthetic apartment + warehouse and one real bag; verify hit/miss clamping, unknown handling, no scan matched against itself, consistent overlap/freeze semantics.
+**Options:** (A) 0.05 m — **accepted initial default**; (B) 0.025 m — optional for accuracy if approximately **4×** grid-cell RAM/update cost is justified for a fixed physical area; (C) 0.10 m — optional for large/memory-constrained maps, about one-quarter the 0.05 m cell count; (D) global mutable grid or time-aged frozen submaps — not chosen. Thresholds are configurable and require Pi 5 measurements.
+
+#### Initial configuration (not validated defaults)
+
+| Parameter | Initial setting | Status |
+| --- | --- | --- |
+| Grid resolution | **0.05 m** (5 cm) | Accepted default; configurable |
+| Active submaps | **2 normally**, with 1 during startup/terminal stages | Accepted |
+| Spawn successor | Youngest reaches **90 accepted insertions** | Accepted initial threshold |
+| Freeze predecessor | Oldest reaches **180 accepted insertions** | Accepted initial threshold |
+| Overlap | 90 common inserted scan IDs out of 180 per full submap | Approximately **50% by insertion count** |
+| Occupancy prior | **0.50** | Unknown until first valid observation; retain separate observed flag |
+| Hit update probability | **0.55** | Calibration starting value |
+| Miss update probability | **0.49** | Calibration starting value |
+| Probability limits | **0.10–0.90** for observed cells | Calibration starting bounds |
+| Motion filtering | Minimum translation, rotation and/or elapsed acquisition time | Configurable; no unverified numeric defaults |
+| Extent/memory/number of cells | **Hard bounded** dynamic allocation; safe early freeze/degrade | Numeric limits need Pi measurements |
+| Dynamic occupancy decay | **Off for frozen submaps** | Accepted |
+| Future transient dynamic layer | Optional, versioned separately | Deferred |
+
+The 90-insertion / 0.05 m / 0.55 / 0.49 start points align with published **Cartographer 2D example configuration**, while the 0.10–0.90 clamp is a documented probability range; these values have **not** been optimized for this robot/LD19. An LD19 at ~10 Hz and roughly 450 points/revolution provides many rays, but does **not** justify unbounded per-scan memory or a claim that every scan is useful.
+
+#### Exact lifecycle and insertion-count semantics
+
+- Count **successful logical scan insertions**, **not** raw LD19 packets, beam count, received revolutions, Ceres matching attempts, wall seconds or the number of insertions **summed across both active maps**. A scan must pass OD-005/004 quality and OD-008 localization gates, then the configured **motion filter**, before entering mapping. A skipped scan is retained in the recorder but **does not change any submap counter or occupancy cells**.
+- Every newly accepted scan is transformed into **each currently active submap's own local frame**, inserted **once per submap**, and assigned a stable scan/insertion ID in each. Each map keeps its own accepted insertion count and IDs. If two active submaps exist, the scan is normally inserted into **both**, not alternating between them.
+- **Startup/steady timeline for threshold 90:** insert accepted IDs **1–90** into submap A, create B **after** insertion 90; insert IDs **91–180** into **both** A and B; at ID 180, **freeze A** with 180 insertions while B has 90, then create C for subsequent IDs. Continue: B receives IDs 91–270 and freezes at 180, while C begins at ID 181. A and B share exactly IDs 91–180 in the nominal case.
+- Define boundary event ordering explicitly so scan ID 90 is **not accidentally duplicated into the new B** and ID 180 is **not inserted twice** during the rollover. There are **at most two writable active submaps** in nominal operation. A matching scan **must not match against a map already containing its current insertion**; freeze/snapshot revision read before insertion.
+- **Safeguards override target counts**: spatial extent, occupied allocation count, peak memory, trajectory travel, max walltime only as a safety trigger, or pathological thin geometry may force **early freeze/new-map rotation, skip or safe stop**. Mark the **actual** insertion count, end reason (`COUNT`/`SPATIAL_CAP`/`MEMORY_CAP`/`SHUTDOWN`/`ERROR`) and observed overlap; never claim a shortened map contains 180 scans or guaranteed 50% overlap. If unable to allocate a bounded next map, **stop insertion safely, retain raw scans and diagnostics**, and never silently truncate occupancy/rays. When only one map remains, report reduced overlap.
+- A frozen submap has an immutable **local occupancy raster and local coordinate frame**; its **global graph pose `T_map_submap`** is a **separate mutable/versioned transform**. A pose-graph update does not rewrite frozen cells or invalidate a cache of local-grid geometry; a global spatial index/pose-dependent composite view may need revision updates.
+
+#### Log-odds inverse sensor and unknown semantics
+
+Define per-cell `L = log(p/(1-p))` and an explicit `observed` flag (or equivalent sentinel). Unknown must be distinguishable from an **observed cell with p≈0.50**, including after contradictory updates.
+
+~~~text
+L0 = logit(0.50) = 0                      // prior, unobserved
+Delta_hit  = logit(0.55)                  // > 0
+Delta_free = logit(0.49)                  // < 0
+L_min = logit(0.10),  L_max = logit(0.90)
+
+L_new(c) = clamp(L_old(c) + Delta(c), L_min, L_max)
+p(c) = 1 / (1 + exp(-L(c)))               // only an observed probability
+~~~
+
+- The **first valid update** makes a cell `observed=true`; an untouched prior cell remains **unknown**, not known free. Occupancy confidence and known/unknown support masks feed OD-007 EDT and OD-009 score pyramids. Do not interpret `L=0` alone as "unknown".
+- Use validated `VALID_HIT` endpoints only: cast free-space cells **strictly before** the hit and apply a hit update **at** the endpoint. A device-documented `VALID_NO_RETURN` may clear **only a bounded range** if OD-005's explicit no-return configuration permits it; otherwise it makes no ray update. `INVALID_RETURN` and `MISSING` **never** update either free or occupied cells. Range/intensity validation, calibrated max usable range and OD-004 motion coverage remain mandatory.
+- **Per scan, per submap:** collect unique **hit cells** and unique **free cells** from all valid rays; remove any free cell also marked hit (hit priority), then apply **at most one update per cell** in that insertion. A hit endpoint encountered on another ray's free traversal **must stay hit**. Do not repeatedly strengthen a wall by multiple rays from the same scan; later accepted scans can update it anew.
+- Clip ray traversal to a **bounded allocated grid region** only without inventing an endpoint hit or free evidence outside actual measured, supported rays. If rays/grids cannot be represented safely within memory/extent limits, reject/degrade insertion with an explicit reason rather than fabricate map cells.
+- Motion filter decisions use the accepted **map-frame/local-reference pose, timestamp and calibrated uncertainty**, with tunable minimum translation, yaw and max elapsed accepted-insertion interval. Pure long stationary runs should not saturate maps with thousands of nearly identical scans; real motion/timeout policies are tested rather than guessed. **Do not apply the filter to raw recording, time synchronization or OD-006 odometry.**
+- Dynamic clutter is initially handled by OD-005 validity, OD-007/008 robust matching and repeatable probabilistic evidence; do not implement aging/decay in frozen maps or silently treat transient unknown as free. A future **separate transient overlay** can define time-limited occupancy with independent revision/serialization, not mutate frozen submap source data.
+
+#### Frozen maps, derived caches and modular API
+
+~~~text
+OD-005 quality scan + OD-004 interpolated midpoint deskew
+     -> OD-007/008 localization acceptance against prior map snapshot
+     -> motion filter + spatial/memory budget guard
+     -> active log-odds submap A [and overlapping B] (local frames)
+           |              |
+       accepted IDs      hit/free/unknown masks
+           |              |
+     at 90: spawn new  -> at 180: freeze oldest (per-submap counts)
+                              |
+                      immutable occupancy grid snapshot
+                        |                    |
+               OD-007 versioned EDT   OD-009 versioned score pyramid
+                        \                    /
+                    loop closure / localizer / saved map
+                              |
+             graph optimizes T_map_submap only, not occupancy
+~~~
+
+Native C++20 `OccupancyGrid` / `SubmapBuilder` / `FrozenSubmap` / `MapSnapshot` APIs MUST keep log-odds and known masks independent from derived EDT/pyramids, with explicit local SE(2) frames, resolution, origin including yaw, scan/insert IDs, state, memory/cell usage, immutable occupancy revision and separately versioned global pose. **No Ceres, GTSAM, ROS, LD19, Pico or MPU6050 types** in the generic mapping interface. OD-011 remains open on incremental cache construction/eviction/snapshot publication, and OD-012 on persistence format.
+
+#### Required synthetic/hardware tests (not yet executed)
+
+1. Exact insertion-count regression: A IDs 1–180, B IDs 91–270, two active maximum; stable overlap 90; scan 90/180 rollover; skipped motion-filter scans do not alter counters; early safety freeze reports true counts/overlap.
+2. `0.05`/`0.025`/`0.10` m geometry and cell count/RAM, transformed submap origin including yaw, sensor extrinsic and laser ray endpoints. Compare detail/coverage with exact apartment/warehouse geometry.
+3. Log-odds hit/miss increment/clamps and exact prior unknown-vs-known-neutral discrimination, including contradictory observations and saturation; deterministic serialization/replay equivalence.
+4. A scan/submap's duplicate rays update each cell **at most once**, hit cells always take precedence over traversing free rays; no illegal update from invalid/missing/unverified no-return; no endpoint hit at clipped/outside-grid ray.
+5. Motion filter: nearly repeated stationary scans, meaningful translation/yaw, max elapsed input, skipped scans still recorded and odometry advances; quality/rejected match cannot enter map or increase counters.
+6. Spatial/memory cap, dynamic allocation failures, out-of-grid rays, early freeze and map-creation failure; **no unbounded allocation or silent false occupancy**. Profile x86/Pi 5 memory and insertion CPU, including two active maps.
+7. Freeze immutability across concurrent Ceres/OD-007 EDT and OD-009 correlative matcher readers; pose-graph moves only global `T_map_submap`, local hashes and versioned derived fields remain unchanged; global index may be updated.
+8. Deterministic replay of active-to-frozen transitions, map revisions, forced scan acceptance/rejection, per-submap scan ID provenance and no map self-matching. Verify offline map artifact round trip, ROS-free Catch2/CTest Docker tests and eventual hardware recordings.
+
+**Consequences:** OD-010 settles **authoritative log-odds occupancy, initial 5 cm/90/180 defaults, two overlapping active maps, per-scan hit precedence, safe unknown handling, bounded local grids and immutable freezing**. The exact motion filter thresholds, memory/spatial caps, hit/miss calibration and alternative resolutions remain benchmark-tuned. **OD-011** still decides cache update/eviction/publishing details; **OD-013** graph factor topology, **OD-012** map serialization and **OD-014** offline remapping remain open.
+
+**References:** [Cartographer 2D example configuration](https://github.com/cartographer-project/cartographer/blob/master/configuration_files/trajectory_builder_2d.lua), [Cartographer 2D submap lifecycle](https://google-cartographer.readthedocs.io/en/latest/configuration.html), [Cartographer 2D grid inserter hit precedence](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/2d/probability_grid_range_data_inserter_2d.cc).
 
 ### OD-011 — Immutable map snapshots and distance-field cache
 
@@ -894,6 +985,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-009 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-010 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
