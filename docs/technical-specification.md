@@ -287,7 +287,7 @@ E_Ceres(T) = 0.5 * sum_i Huber_delta( r_i(T)^2 )
 
 **Backend information accounting:** The optimized pose is a **wheel/gyro-prior-regularized posterior**. If GTSAM also has wheel/gyro factors from the same samples, **do not add that posterior as an independent LiDAR factor**. Preserve separate LiDAR geometry/information, odometry prior pose/covariance/source IDs, boundary penalties and immutable map/EDT revisions; OD-008/013 still determine a statistically justifiable graph measurement extraction/conditioning policy. Do not assume subtracting prior Hessian creates an exact independent LiDAR covariance.
 
-**Test requirements:** Docker Catch2/Ceres integration tests must cover EDT Euclidean metrics, truncation and map yaw; bilinear values/derivatives/masks; one-block-per-beam Huber outliers; weight/sigma scaling, Lie Log prior whitening; out-of-grid boundary gradient; unknown and empty maps; overlap/degeneracy and strong-prior non-observability; synthetic apartment and symmetric warehouse false locks; repeatability and Pi 5 runtime. See [OD-007](open-design-choices.md) and [architecture `5](architecture-specification.md).
+**Test requirements:** Docker Catch2/Ceres integration tests must cover EDT Euclidean metrics, truncation and map yaw; bilinear values/derivatives/masks; one-block-per-beam Huber outliers; weight/sigma scaling, Lie Log prior whitening; out-of-grid boundary gradient; unknown and empty maps; overlap/degeneracy and strong-prior non-observability; synthetic apartment and symmetric warehouse false locks; repeatability and Pi 5 runtime. See [accepted OD-007](open-design-choices.md) and [Architecture Section 5](architecture-specification.md).
 
 ## 7. Graph backend (GTSAM)
 
