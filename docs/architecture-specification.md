@@ -83,11 +83,11 @@ Component ownership and forbidden dependencies:
 | `offline_refinement` | OD-014 R0 plus up to 3 selective candidate passes; raw-data replay, dependency invalidation, hold-out gates and rollback | ROS/Ceres/GTSAM-free coordinator; private backend adapters |
 | `localization` | Frozen-map tracking state, confidence and recovery | Read-only map |
 | `io` | Raw MCAP plus OD-012 JSON/zstd map bundles, graph/submap schemas, atomic generations and safe lazy loading | Native ROS-/Ceres-free persistence; adapters own interchange |
-| `apps` | cxxopts CLI, lifecycle, deployment orchestration | Do not duplicate math |
+| `apps` | Four OD-016 Linux processes, versioned Unix seqpacket IPC and cxxopts offline CLI/lifecycle | Portable core has no IPC or OS scheduling dependencies |
 | `web_lab` | Local HTTP JSON and Canvas experiment explorer | C++ backend is only estimator |
 | `fusion_slam_ros` | ROS topics/messages/TF/bag conversions | Isolated ROS-specific build |
 
-Component interfaces MUST remain usable in offline replay with no sensor hardware and, where relevant, with no map loaded. Process/thread decomposition is **OD-016**.
+Component interfaces MUST remain usable in offline replay without hardware/IPC/Web Lab. **Accepted OD-016** deploys four independent acquisition/recorder/SLAM/Web Lab processes with ROS-independent domain APIs.
 
 ## 3. Geometry, frames and time
 
@@ -947,22 +947,73 @@ A prior process-local monotonic nanosecond epoch is **not** safely reusable afte
 
 **Verification:** Docker Catch2 B20: binary golden vectors and x86-64/aarch64 roundtrip, rotated origins, known/unknown-neutral probabilities, graph cross-references/uncertainty, per-submap zstd lazy load and memory caps, schema/feature/migration tests, optional cache mismatch rebuild, required-file corruption/path traversal/decompression-bomb rejection, staging/rename/`CURRENT` crash recovery, map-only versus resumable checkpoint and OD-001 clock epoch integrity. Measure Pi 5 disk space, serialization/checksum/compression CPU, save/read latency and safe behavior under power loss/disk full. No GitHub Actions usage.
 
-## 11. Resource budget and failure policy
+## 11. Accepted OD-016: four-process isolation, versioned IPC and bounded workers
 
-Engineering targets to **measure**, not achieved numbers:
+### 11.1 Process and ownership boundary
 
-| Activity | Nominal rate / proposed target |
+The **Pi 5 production layout** is exactly **four independently supervised processes**, with versioned native Unix IPC:
+
+~~~text
+hardware LD19 / MPU6050 / encoders / optional Pico
+                  |
+        [1] acquisition : own serial/I2C/GPIO/Pico FDs,
+            source packet validity, OD-003 time and clock epochs
+               /                              \
+      RAW events, sequence                 SENSOR event stream
+      with gaps/calibration                 bounded nonblocking
+              |                                   |
+        [2] recorder                           [3] slam
+        raw OD-023 MCAP             ingest -> OD-006 odom/OD-004 deskew
+        durability/INCOMPLETE         -> OD-007 Ceres/OD-008 localizer
+                                             |           |
+                                        map/cache     graph GTSAM
+                                         worker        worker
+                                             \           /
+                                        immutable revision handoff
+                                                  |
+                                       rate-limited telemetry
+                                                  |
+                                            [4] web_lab
+                                    validated async commands to SLAM
+~~~
+
+**Exclusive ownership:** Acquisition alone controls hardware descriptors, Pi→Pico time sync and source clock-generation. Recorder alone owns raw MCAP durability, segment closure, packet-gap/config/synchronization metadata and a lossless-*claim* eligibility decision. SLAM alone owns local state, Pose2/mapping and graph workers; graph remains **in-process**, not a fifth process. Web Lab only owns presentation/validated commands, **not** direct sensor or map mutation. Portable estimator, mapper and dataset libraries can still run within a standalone CLI/test executable **without starting IPC or Web Lab**. The optional ROS2 adapter remains outside these domain dependencies and must not introduce ROS into acquisition/SLAM math.
+
+### 11.2 Versioned native IPC semantics
+
+**Initial transport:** `AF_UNIX/SOCK_SEQPACKET` connected local sockets, ordered and message-boundary-preserving **per connection**. This does **not** imply delivery across peer death, buffer exhaustion or disk failures. Every bounded message envelope contains protocol major/minor and mandatory feature flags, message type/payload length, source/producer and run ID, acquisition **clock-domain/epoch/boot generation**, per-source monotonic sequence, OD-001 canonical integer-ns acquisition stamp and quality/timing metadata, calibration/config revision, and acknowledgment/correlation ID where relevant. Strictly validate length, unknown required features and `MSG_TRUNC`; avoid raw C++/Eigen/ROS/GTSAM object memory and process-specific pointers. Protocol and MCAP/bundle serialization versions remain independent.
+
+| Edge | Buffer/reliability contract |
 | --- | --- |
-| Gyro / wheel ingest | ~200 Hz / ~100–200 Hz; acquisition cannot block |
-| Continuous local odometry | >=100 Hz if measurements support |
-| LD19 revolution | ~10 Hz, ~450 returns each |
-| Full deskew | Aim <2 ms/scan on Raspberry Pi 5 |
-| Ceres local scan match | Aim <20 ms typical on Pi 5; iteration deadline |
-| Map insertion | Aim <5 ms/accepted scan |
-| Online graph and loop closure | Async; can defer work but must report lag |
-| Localizer | Target scan correction ~10 Hz with explicit tracking health |
+| Acquisition→recorder | Separate bounded ordered raw event route with gap/sequence detection, calibration and source clock observations; overflow makes recording **INCOMPLETE or stopped**, never silently lossless |
+| Acquisition→SLAM | Separate bounded nonblocking timestamped sensor route; queue overflow/stale inputs trigger reported gaps and OD-022 degraded confidence, not invented scans/IMU samples |
+| SLAM localizer→graph | Bounded in-process immutable graph jobs; coalesce stale requests, solve asynchronously and validate revisions before atomic map pose correction |
+| Graph/map worker→localizer | Pin OD-011/013 snapshots and graph pose versions; atomically publish **only complete consistent** corrections; never jump OD-006 continuous odom |
+| SLAM→Web Lab | Rate-limited/latest-value-only display frames; drop stale visualization without slowing localizer |
+| Web Lab→SLAM | Validated asynchronous commands with request ID, authorization, applied-config generation and explicit success/error; no blocking UI command on acquisition |
 
-Report p50/p95/p99 capture-to-pose latency, scan match and deskew time, queue backlog, missed deadlines, CPU/RAM and thermal throttling. On overload prioritize **sensor acquisition, continuous odometry and recording integrity**; defer graph updates, throttle global searches and UI, and explicitly degrade global localization state. Never invent a hard real-time guarantee before Pi measurements.
+A successful `send` or `recv` reports **transport**, not recorder `DURABLE` persistence. If acknowledgments are implemented distinguish accepted-to-queue, written, and fsync/segment-complete durability. A receiver that sees a sequence gap must record it with source/epoch/session context. After restart, reconnect using new peer/run identity, negotiate compatible schema and **do not reuse old clock epochs or graph/map generation**. Recorder crashes/disk-full conditions create explicit incomplete segments unless complete continuity is independently proved. Separate process privilege/socket permissions and verify local peer credentials where appropriate (`SO_PEERCRED` Linux). Web-accessible control requires explicit authentication/scope and strict command/schema limits.
+
+**Optional measured optimization:** For large **immutable** map/graph snapshots only, `memfd_create` with suitable Linux read-only sealing and `SCM_RIGHTS` descriptor passing can avoid bulk copies. Transfer file length/hash/revision/owner lifetime and enforce pin/RAM/FD ceilings. Never expose mutable shared pages as OD-011 immutable data. Ordinary bounded socket messages are the baseline; shared memory is not required for raw sensor or control paths.
+
+### 11.3 Fixed workers, backpressure, restart and scheduling
+
+| Inside SLAM | Initial worker policy | On overload |
+| --- | --- | --- |
+| IPC ingest / OD-006 trajectory | Short high-priority bounded ingestion and time ordering | Flag gaps, stale motion and degraded output; never wait for graph |
+| OD-005 assembly / OD-004 deskew | Bounded sequential pipeline with OD-004 coverage gates | Reject/record stale or unsupported scans |
+| OD-007 local scan matcher | Dedicated bounded job executor | Deadline/revision rejection, OD-008 quality reasons; odom continues |
+| OD-013 graph and optional iSAM2 | Lower-priority separate bounded worker | Coalesce/defer, report graph age; immutable consistent results only |
+| OD-011 map/cache and OD-012 save | Budgeted low-priority background work | Fall back to last coherent snapshot under staleness policy; report disk/cache failure |
+| Snapshot publication | Tiny atomic versioned handoff | Drop obsolete graph/cache outputs |
+
+Use **`SCHED_OTHER` normal Linux scheduling first**, tune based on Pi 5 p95/p99 time, thermal and CPU contention. Do not assume `SCHED_FIFO` is safe; only measure bounded acquisition boost with starvation watchdog and privileges if justified. Enforce **fixed worker counts, per-edge item-and-byte queue caps, short nonblocking enqueue, bounded in-flight jobs, cancellation and backpressure**. The **exact** capacities, drop precedence and recorder fsync thresholds remain **OD-021**; they are deliberately not invented by OD-016. Timeouts for execution use host-steady clock, not pausable `/clock`.
+
+**Failure recovery:** Each process has independent health, restart limits, socket/FD cleanup and session-generation checks. Acquisition restart creates source clock epoch/run discontinuities. SLAM restart cannot silently continue an old graph as if the session were identical; it requires a compatible OD-012 checkpoint or a declared new localizer session. Recorder restart rolls a segment/gap and explicitly audits incomplete recordings. A crashed Web Lab has no hardware access and can reconnect to latest coherent telemetry. Graceful shutdown must drain/finalize the recorder within a bounded policy or mark incomplete. Avoid hidden reliability claims: finite buffers cannot guarantee raw losslessness under unbounded disk stalls.
+
+**Benchmark B24:** Test four-process lifecycle and graceful/crash restarts; ordered `SOCK_SEQPACKET` versioned envelopes, `MSG_TRUNC`, `EAGAIN`, sequence gaps, clock epochs and authorization; disk full/slow recorder, stopped SLAM matcher, long graph batch, stale immutable snapshots and long-running map saves while synthetic 10 Hz LD19 + ~200 Hz gyro/wheel ingestion continues. Monitor p50/p95/p99 capture→local pose, input queue age/bytes, gap/incomplete counts, CPU/peak RSS, FDs, thermal/graph lag, false durable acknowledgments, stable odom and stale correction rejection. Optional memfd vs copying benchmark after profiling. Docker Catch2/CTest multi-process tests; no GitHub Actions.
+
+**References:** [Linux unix(7)](https://man7.org/linux/man-pages/man7/unix.7.html) and [memfd_create(2)](https://man7.org/linux/man-pages/man2/memfd_create.2.html).
 
 ## 12. Testing contracts and milestones
 
@@ -976,7 +1027,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 | Ceres and match quality | OD-007 EDT/bilinear/per-beam Huber and prior/boundary; **OD-008** robust LiDAR-only Hessian/rank, scale normalization, covariance coverage and observable-subspace rejection/projection; no double-counted GTSAM factors |
 | Mapping/graph | No self-matching, immutable submaps, wheel/gyro factor independence, bias factor Jacobians, loop rejection |
 | Localization/search | Map->odom correctness, OD-009 zero coarse work in TRACKING, local/recovery/global windows and slice budgets, BnB upper-bound correctness, multiple hypotheses, OD-008 gates, stale/lost and kidnapped recovery, immutable map integrity |
-| IO/replay | MCAP; **OD-012** binary+JSON map/checkpoint golden vectors, version/feature/integrity/clock checks, zstd lazy load, atomic generation/`CURRENT` fault recovery, malicious/oversized file rejection; deterministic replay |
+| IO/replay/IPC | MCAP, OD-012 map checkpoints and **OD-016 four-process seqpacket/versioned schema, restarts, packet gaps, disk-failure INCOMPLETE semantics**, deterministic replay |
 | Adapters | ROS-free core build; optional ROS 2 frames/scan/maps/QoS; Web Lab real backend responses |
 | Performance | Equivalent datasets on ARM64 and x86-64, capture-to-pose tail latency and resource use |
 
