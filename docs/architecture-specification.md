@@ -237,11 +237,12 @@ For `N` beam slots (normally 12), interpolate the unwrapped packet sweep angle t
 
 ~~~text
 theta_i = theta_start + i/(N-1) * (theta_end - theta_start)
-delta_t_i_ref = (theta_i - theta_ref) / omega_signed
-t_device_beam_i ~= t_packet_device + delta_t_i_ref + delta_reference
+delta_t_i_anchor = (theta_i - theta_anchor) / omega_signed
+t_device_beam_i ~= t_packet_device
+                + delta_t_i_anchor + delta_physical_anchor
 ~~~
 
-`theta_ref` and `delta_reference` are **unknown initially**: the manual describes a packet timestamp but does **not** prove it refers to the first/last beam or UART transmission completion. Use measured/bounded delay; quality flags and systematic timing uncertainty MUST remain available before calibration. Cross-check angle-derived duration against speed, adjacent packet timestamps, and scan continuity. Reject/flag near-zero speeds, implausible angles and invalid motor estimates.
+`theta_anchor` is a **documented mathematical reference angle** (for example the end angle) used solely to compute relative beam offsets. It does **not** imply the device timestamp represents that beam. The corresponding physical acquisition-to-packet timestamp offset `delta_physical_anchor` is **unknown initially** and must be calibrated or bounded. This avoids introducing two redundant free reference parameters; the manual does **not** prove the timestamp refers to the first/last beam or UART transmission completion. Use measured/bounded delay; quality flags and systematic timing uncertainty MUST remain available before calibration. Cross-check angle-derived duration against speed, adjacent packet timestamps, and scan continuity. Reject/flag near-zero speeds, implausible angles and invalid motor estimates.
 
 **Unwrap and alignment:** Retain raw 16-bit millisecond ticks and original UART bytes. Handle nominal 30-second rollover, CRC corruption, reordering and sensor reset with separate source epochs. Gaps that may hide multiple wraps make an absolute counter count ambiguous: invalidate/relock rather than guess. Timestamp the documented Pi UART receive event (first byte, last byte, packet completion or read completion), retain its meaning, and fit `t_host_rx_ns ≈ a * t_device_ns + b + d_rx` from several valid observations. Track slope/drift, residuals, window, uncertainty and fit revision.
 
