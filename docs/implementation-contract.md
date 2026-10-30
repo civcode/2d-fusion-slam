@@ -276,6 +276,22 @@ docker compose -f docker/compose.yaml run --rm \
 
 See [Architecture `3.5](architecture-specification.md) and [Accepted OD-002](open-design-choices.md) for clock-domain and test semantics.
 
+### 6.6 LD19 timing adapter contract (accepted OD-003)
+
+The **native LD19 acquisition adapter** MUST own all protocol-specific beam-time reconstruction and clock alignment, while the C++20 core consumes only a **generic timestamped scan**. Do not add LD19 packet fields, UART drivers, vendor SDK dependencies, ROS types, or serial clock-fitting logic to public estimator APIs.
+
+- Decode CRC-validated 47-byte packets, start/end angles (0.01°), reported degrees/s speed, 12 sample slots and the 30-second millisecond timestamp counter.
+- Derive **relative per-beam acquisition times from unwrapped angles and reported speed**, validating rotation direction, speed, angular coverage and missing packets. Never silently assign one receive time to every beam.
+- Unwrap device timestamps with explicit source epoch management, including ambiguous wraps, dropped frames and sensor resets. Convert to OD-001 canonical signed nanoseconds with checked arithmetic.
+- Timestamp the actual observed **Pi UART receive event** and fit **device-to-host monotonic offset and drift** using many valid packet observations. Record model parameters, version, validity, packet jitter and uncertainty.
+- **One-way UART arrival timestamps cannot identify clock epoch offset separately from constant physical transmission/processing delay.** Record a combined offset until an independently measured or bounded **packet reference/acquisition delay** is available. Do not mark such timings exact before calibration.
+- Carry timestamp status, per-beam or shared systematic uncertainty, packet clock drift/jitter, raw device tick and receive time, map/calibration/clock revision provenance and all original packet bytes for offline reprocessing.
+- Keep these algorithms **ROS-independent**; the optional ROS 2 adapter only converts already aligned native per-beam timestamps to standard messages when the format can represent them faithfully.
+- Dockerized Catch2/CTest tests MUST cover angle/speed timing, 0/360 and 30-second wraps, CRC, drop/reordering/reset, bad speed, injected offset/drift/jitter, ambiguous one-way delay, repeatability, and offline re-timestamping. Hardware experiments must establish or bound actual packet-to-beam acquisition delay.
+- Any later Pico-based UART capture remains optional under OD-002; it is not a reason to postpone Pi-only recording or to introduce micro-ROS.
+
+References: [accepted OD-003](open-design-choices.md), [architecture §4.1](architecture-specification.md), and the [LD19 development manual](https://botland.de/img/art/inne/21991_Instrukcja%20rozbudowy.pdf).
+
 ## 7. Testing contract
 
 Tests MUST use **Catch2** and be registered with **CTest**. All test execution, including sanitizer runs and offline replay regression suites, MUST happen within Docker.
@@ -284,7 +300,7 @@ Tests MUST use **Catch2** and be registered with **CTest**. All test execution, 
 
 | Category | Must cover | Dependencies |
 | --- | --- | --- |
-| Unit | SE(2), math, timestamps, LD19 CRC/frames, gyro integration, kinematics, CLI validation | Synthetic/no hardware |
+| Unit | SE(2), math, timestamps, LD19 CRC/frames plus angle/speed beam timing and source-clock drift, gyro integration, kinematics, CLI validation | Synthetic/no hardware |
 | Integration | Ceres scan matching, GTSAM factor Jacobians, map serialization, sensor-stream synchronization | Docker image libs |
 | Optional ROS 2 integration | ROS ↔ native message conversions, TF authority and frame conventions, map-file interoperability, ROS time and QoS, Nav2/RViz smoke tests | Dedicated ROS 2 Docker test image |
 | Regression | Deterministic offline replay, stable outputs, previously fixed bugs | Versioned datasets |
