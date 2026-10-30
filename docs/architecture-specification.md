@@ -585,7 +585,7 @@ OD-006 midpoint prediction + covariance, OD-005/004 eligible scan
 
 ~~~text
 OD-005 valid scan -> OD-004 interpolated midpoint deskew
-      -> OD-007/008 accepted pose against PRE-INSERTION map revision
+      -> OD-007/008 pre-insertion pose OR explicit EMPTY-MAP bootstrap
       -> motion filter + extent/memory guard
       -> same accepted scan ID into EACH active map, once per map
           |
@@ -605,6 +605,8 @@ OD-005 valid scan -> OD-004 interpolated midpoint deskew
 **Count only actual accepted insertions**, not LiDAR packets, attempted Ceres matches, filtered/rejected scans or summed insertions across maps. Apply scan quality, OD-004 interpolation, pose acceptance and **motion filtering** before any update. Skipped scans remain recorded and continue feeding odometry, but increment no submap count. Every accepted scan is transformed into **each active submap's own local coordinates**, inserted **once in each**, and assigned a stable scan ID. A receives #1–180 and B #91–270: overlap is **90 common IDs / 180 ≈50% by count**, **not** guaranteed physical area. Scan #90 creates B only *after* A receives it; #180 freezes A *after* A+B receive it, then creates C. Never match against the occupancy revision **after** inserting the same scan.
 
 **Spatial/memory safeguard:** bounded maximum cells, physical extent/travel, allocation bytes, active submap count and bounded update work. A cap may **freeze early or stop map insertion safely**: record the *actual* scan count, overlap, stop reason and map validity; never claim 180 insertions after an early freeze or synthesize a wall when a ray exceeds bounds. If a new bounded map cannot be allocated, preserve recording/odom and report mapping degraded rather than grow RAM without limit. Exact cap values and motion-filter translation/yaw/time thresholds require Pi benchmarks; alternatives 0.025 m (~4× cells) and 0.10 m (~¼ cells) are optional.
+
+**Empty-map bootstrap:** The initial submap has no occupied EDT support, so its first insertions cannot be Ceres-verified against that same empty map. Start from an explicit submap gauge and trusted initialized OD-006 motion trajectory (or externally documented pose), require OD-003–005 validity, and mark these insertions **BOOTSTRAP_UNVERIFIED_MAP_MATCH** with conservative uncertainty. Once enough geometry exists, transition to OD-007/008 accepted **pre-insertion** matching. Never use bootstrap to bypass tracking loss or claim an independently verified global fix. Subsequent overlapping submaps inherit the established continuous tracked frame and map state.
 
 ### 6.2 Inverse-sensor log odds and hit precedence
 
