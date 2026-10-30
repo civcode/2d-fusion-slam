@@ -980,7 +980,43 @@ Tracking states:
 | `LOST` | Repeated mismatch / invalid calibration or clocks | No valid global fix; start global recovery |
 | `RELOCALIZING` | Alternative candidates undergoing validation | Require cross-scan consistency before adopting pose |
 
-**Accepted OD-009** uses asynchronous hierarchical multi-resolution branch-and-bound and multiple candidate refinement for initial global recovery. A particle filter is **not initially required**; **OD-020** remains open on whether persistent multimodal hypotheses are needed after observing repeated-aisle/kidnapped-robot failures. Transition hysteresis and cross-scan publication semantics remain **OD-022**. Never mutate the frozen map or accept one high coarse correlation as a global fix.
+**Accepted OD-020** fixes the global recovery backend to OD-009 BnB + **bounded persistent top-K temporal hypotheses**; a particle filter is **not** implemented initially. OD-022 still controls quantitative state hysteresis and external pose validity. Never mutate the frozen map or accept one high coarse correlation as a global fix.
+
+### 8.1 Accepted OD-020 — Global relocalization ownership and fail-closed flow
+
+The **ROS-independent SLAM localizer coordinator** owns global recovery, not the Ceres matcher, the graph solver, the spatial retrieval index or ROS. OD-006 continuously produces local motion even when the map frame is unknown; the global coordinator pins a coherent OD-010/011 frozen-map and OD-013/019 graph-pose generation, then orchestrates:
+
+~~~text
+LOST / UNINITIALIZED / RELOCALIZING
+          |
+OD-018 eligible frozen-map enumeration + prioritized signature retrieval
+          |     (spatial proximity is only a hint after kidnapping)
+OD-009 async full-region, 360-degree BnB, coverage ledger and work slices
+          |
+spatially distinct top-K SE(2) global candidates
+          |
+OD-007 Ceres under recovery-mode prior + OD-008 LiDAR-only quality
+          |
+persistent hypothesis tracks <-- OD-006 relative odom at scan midpoints
+          |                   <-- next eligible OD-005/004 LiDAR scans
+geometry + observability + temporal + ambiguity/coverage gates
+          |
+    [unresolved?] -- yes --> remain unlocalized; repeat bounded verification
+          |
+          no
+OD-022 version-checked map-to-odom correction; TRACKING eligible
+~~~
+
+**Coverage is part of trust, not a mere performance counter.** Index ranking may order jobs, but arbitrary relocation requires fallback over the **whole eligible frozen-map search domain** and 360° yaw, including regions outside historical OD-006 covariance. Track visited, admissibly pruned, pending, unavailable, omitted and failed-load submap/tile/yaw regions against exact revisions; no unvisited region is silently classified negative. A PARTIAL_BUDGET, RESOURCE_LIMIT or unavailable region that could contain a viable competitor prevents a trusted winner. Only a completed discrete search or a conservatively justified verified competitor-exclusion condition can permit commitment; tune any such early-exclusion policy in B28, never infer it from a good score alone.
+
+Each **bounded top-K track** has stable ID, initial candidate and frozen-target IDs, map-to-odom hypothesis, relative-odom propagation and covariance, scan/time/evidence lineage, geometric rank/overlap/residual and temporal consistency history. Deduplicate by both translation and yaw; separate LiDAR-only OD-008 observability from the odometry-conditioned Ceres result; do not count repeated overlapping scans as independent proof. Reevaluate on new viewpoints when possible. Symmetric rooms, parallel corridors and partial LD19 sectors must leave plausible rivals alive and produce a truthful **unlocalized** status, not false confidence. If pruning the K cap would hide credible alternatives, mark ambiguity/overflow.
+
+**Isolation, mapping and publication:** OD-016 schedules cancel/resume between **100–200 ms initial unmeasured** OD-009 global work slices on lower-priority bounded workers. Queue, CPU, map-pin and memory limits apply; revision changes invalidate saved frontiers and stale corrections. Keep OD-006 continuous local odom and source recording live. Suppress **all** new scan insertions, active-submap creation and localization-derived graph-factor admission until trusted map-frame recovery; never backfill scans collected while untrusted. Publish only an explicit versioned map-to-odom correction at the accepted scan midpoint after OD-022 state checks, without a jump in odom-to-base. A large correction does not rewrite immutable frozen submaps.
+
+**Portable contracts and replay:** Native GlobalRelocalizer, RelocalizationRequest, PoseHypothesis, HypothesisTrack, SearchCoverage, RecoveryDecision and diagnostic interfaces carry map/pose/pyramid/calibration/clock revisions, source IDs, diverse candidates, quality/rank, scan lineage, visited/pruned/unsearched coverage, budget exhaustion, alternatives and decision reasons; implementation-private Ceres/BnB adapters compose them. Do not expose ROS, GTSAM, Ceres or Linux worker handles in OD-017 installed SDK headers. Stable evaluation ordering and tie-breaks, exact snapshot references and recorded scheduling/budget decisions make OD-024 deterministic replay practical.
+
+**B28 acceptance (not yet tested):** Synthetic unknown/teleported SE(2) poses, repetitive corridors, rotated/reflective symmetries, partial LD19 scans, stale overconfident old pose, failed retrieval/partial coverage, odom drift/slip, multi-scan disagreement, map revision changes and worker starvation. Report **wrong global-lock rate** and refusal-to-localize separately from recovery rate/time, along with map suspension, continuous odom, CPU/RSS and pose-publication provenance. A high nominal success rate cannot excuse a false confident pose. Particle filtering is a later evidence-triggered comparison only.
+
 
 ## 9. Concurrency, queue discipline, and lifecycle
 
