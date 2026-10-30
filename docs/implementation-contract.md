@@ -35,6 +35,7 @@
 | Application and replay runtime | **Executed inside Docker containers**. |
 | Dataset / map artifacts | Versioned, reproducible, separately mounted from code and images. |
 | ROS | Optional adapter; no ROS dependency in the core algorithms. |
+| Debugging / visualization | **Web Lab**: framework-free HTML/CSS/JavaScript and Canvas; small local C++ HTTP/JSON adapter; no algorithms duplicated in JavaScript. |
 | GitHub Actions | No workflows required by default; **never run Actions** without explicit authorization. |
 
 All new production code and test code MUST use C++20. A 3rd-party dependency MAY use an older language standard internally, provided it does not force a lower standard or extensions on project targets.
@@ -65,6 +66,8 @@ The implementation SHOULD evolve toward:
     localization/
     io/
   apps/
+    web_lab/
+      web/          # static HTML/CSS/JavaScript
     recorder/
     offline_mapper/
     live_localizer/
@@ -200,6 +203,7 @@ The initial container implementation MUST provide:
 | `offline-mapper` | Process mounted datasets and write versioned maps. |
 | `localizer` | Load a read-only map and run live scan matching/fusion. |
 | `online-slam` | Full mapping mode, created when the corresponding application exists. |
+| `web-lab` | Opt-in local visualization and replay/diagnostic API served by a C++ adapter, with explicitly mapped loopback-only host port. |
 
 A multi-stage `docker/Dockerfile` with `dev` / `test` / `runtime` stages, and a `docker/compose.yaml` or root-level `compose.yaml`, SHOULD be the standard. Services may share an image when it avoids redundant dependencies. A top-level Makefile or helper script MAY wrap Docker commands, but MUST NOT bypass Docker.
 
@@ -352,6 +356,7 @@ A **documentation-only change** need not create fake code or run unavailable app
 | --- | --- | --- |
 | C0 — Toolchain scaffold | CMake C++20, FetchContent Catch2/cxxopts, Docker stages and Compose, minimal executable + tests | Fresh-container build/test and runtime smoke check work without host C++ dependencies. |
 | C1 — Recorder/replay | LD19 parser, timestamp schema, MCAP writer/reader, cxxopts CLIs | Synthetic packet suite and deterministic replay pass in test container. |
+| C1-W — Web Lab foundation | Browser Canvas view, local C++ HTTP/JSON API, map/scan view, dataset timeline, status/metrics, Compose service | Real backend data is rendered; headless/API and geometry tests pass in containers; no JavaScript SLAM implementation. |
 | C2 — Motion/deskew | Wheel/gyro estimator, yaw bias, continuous SE(2) interpolation, full scan deskew | Numerical and synthetic moving-scan tests pass. |
 | C3 — Ceres frontend | Grid/submap representation, distance field, scan matcher | Synthetic alignment and degeneracy tests pass; time budget benchmarked on Pi 5. |
 | C4 — GTSAM offline mapper | Bias/wheel/LiDAR graph constraints, loops, batch optimization, map bundle | Offline replay produces evaluated, versioned map. |
@@ -360,7 +365,148 @@ A **documentation-only change** need not create fake code or run unavailable app
 
 Do not create all scaffolding in advance merely to satisfy the directory diagram; implement each checkpoint end-to-end.
 
-## 14. Reference documentation
+
+## 14. Web Lab: visualization, testing, and debugging contract
+
+### 14.1 Motivation and reference architecture
+
+The project MUST offer an **opt-in browser-based Web Lab** for inspecting, replaying, debugging, and comparing the real C++ SLAM implementation. It takes inspiration from the user's [Hybrid A* Planning Lab](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo/README.md), as inspected at source commit [2832244](https://github.com/civcode/hybrid-astar-cpp/commit/2832244407c92c7ff3e393adc69fa75376814208).
+
+The inspected reference deliberately uses **static HTML/CSS/JavaScript without a SPA framework or Node.js application server**, **Canvas for visualization**, and a small **native C++ executable exposing HTTP/JSON endpoints**. Its browser does not implement Hybrid A*; the C++ library computes the result. Its UI presents configuration, visual overlays, animation/scrubbing, and numerical diagnostics. Relevant source boundaries:
+
+- [Web assets](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo/web/index.html), [rendering and requests](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo/web/app.js), [coordinate transforms](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo/web/map_geometry.js), and [brush editing](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo/web/map_editor.js).
+- [HTTP server and CLI](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo/main.cpp) (loopback default, explicit fixed assets/routes, request-size limits, structured error responses) and [planner orchestration](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo/demo.cpp).
+- [Browser/HTTP integration tests](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/tests/demo_http_test.py) and [Docker Compose](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/compose.yaml).
+
+**Transfer the architecture, not the planner-specific UI or its exact HTTP protocol.** The SLAM Web Lab requires timeline-based asynchronous data, multiple synchronized sensors, localization state, and long-running replay; those are new responsibilities rather than properties of the original demo. No code from the other repository is copied by this contract.
+
+### 14.2 Architectural boundaries
+
+The C++ algorithm libraries are **the sole source of truth** for timestamps, scan deskew, coordinate transforms, maps, pose estimation, solver results, and evaluation metrics. JavaScript MUST NOT implement a second SLAM pipeline or silently alter estimation results.
+
+~~~text
+                    Browser (static HTML / CSS / JS)
+                controls + Canvas layers + timeline + metrics
+                                 |
+                          local HTTP / JSON
+                                 |
+                  C++ Web Lab adapter / controller
+                 request validation + lifecycle + DTOs
+                         /              \
+                        /                \
+       Dataset replay / experiment       Live read-only snapshots
+              runner                           from localizer
+                 |                                  |
+     Shared sensor, motion, deskew, Ceres, GTSAM, mapping core
+                 |
+       Raw MCAP, configs, maps, reports, metrics
+~~~
+
+- A thin `web_lab` executable/service MUST serve fixed static assets and a **versioned API**. It MUST use the same core interfaces as headless CLI applications.
+- The adapter MAY live in the same process as the offline experiment runner, or communicate with a separate local worker, but long-running work MUST NOT block HTTP responsiveness or sensor acquisition.
+- Headless CLI and dataset replay MUST remain fully functional when Web Lab is disabled or unavailable.
+- The browser is a **debugging/experimentation client**, not a control-loop dependency, safety interface, or public production endpoint.
+- The Web Lab MUST NOT write to or mutate live robot maps, SLAM state, hardware configuration, or sensor drivers by default. Explicit editing applies only to a copied, isolated experimental state.
+
+### 14.3 First-class user workflows
+
+The Web Lab MUST support the following workflows incrementally:
+
+| Workflow | Visible data and controls | Intended phase |
+| --- | --- | --- |
+| **Offline replay** | Dataset/session selection, play/pause, step by scan, seek by timestamp, playback rate, scan index, deterministic rerun | First Web Lab release |
+| **Scan debugging** | Raw vs deskewed LiDAR beams, reference timestamp, beam acquisition spread, invalid/outlier points, timing gaps | First release |
+| **Pose and geometry** | Wheel/gyro prediction, scan-match pose, optimized trajectory, map-to-odom correction, optional uncertainty ellipses | First release / C3 |
+| **Mapping inspection** | Occupancy/unknown/free cells, active/frozen submaps, scan-to-submap associations, loop-closure links | C3–C4 |
+| **Localization inspection** | TRACKING/UNCERTAIN/LOST, match score, covariance/degeneracy, recovery candidates, age of last good fix | C5 |
+| **Solver diagnostics** | Ceres iteration counts, residual distributions, inlier/overlap ratio; GTSAM factors, bias estimates, graph errors | C3–C5 |
+| **Experiments** | Algorithm toggles (e.g., deskew variants), seed, solver budget, scenario parameters; compare saved runs | C2–C5 |
+| **Live monitor** | Timestamped pose/scan snapshots, packet loss, clock offset, FIFO/queue age, CPU and latency | C5–C6 |
+
+The UI SHOULD have a clear left-side experiment/control panel, a prominent map/scan Canvas, timeline/playback controls, synchronized diagnostic charts or readouts, and an explicit connection/replay/quality status. Interactive layers MUST be independently toggleable to avoid obscuring the scan.
+
+**Critical distinction:** The replay timeline uses **sensor acquisition time**, not when HTTP responses arrive. Seeking MUST restore the correct deterministic pipeline state using replay/reset and optional checkpoints. It MUST NOT pretend that independently interpolated poses are verified solver outputs.
+
+### 14.4 Map and coordinate visualization
+
+- Render a 2D Canvas, using device-pixel-ratio-aware scaling and resize handling.
+- Explicitly convert **world ↔ map-local ↔ grid cell ↔ canvas pixel** coordinates. Map origin translation, yaw, resolution, row orientation, and unknown occupancy MUST be honored. Reuse tested geometry conventions consistent with `docs/technical-specification.md`.
+- Provide zoom, pan, fit-to-map, grid/scale legend, pointer readout in metres, and optional heading arrows. Inputs to the estimator use documented SI units and radians; if UI controls display degrees, convert at the adapter boundary and label visibly.
+- Provide separately color-coded/toggleable views for raw beams, deskewed beams, scan matching, sensor prediction, global optimized path, live pose, submaps, loop constraints, and candidate relocalization hypotheses.
+- Large maps MUST NOT be returned as full dense JSON on every pose update. Send immutable map metadata and occupancy representation (tiles, run-length encoding, or compact binary payload) once per map revision, then small timestamped dynamic overlays.
+- Rendering MUST remain responsive when the backend is computing; throttle/coalesce visual updates and cap history buffer sizes. A requested higher visualization rate must never drive the core estimator cadence.
+- Avoid implying visual accuracy beyond the actual timestamp, covariance, and scan-matching quality. Highlight missing/stale data instead of extrapolating invisibly.
+
+### 14.5 Experimental isolation and revision consistency
+
+The source Planning Lab's most important transferable reliability pattern is **immutable map snapshots plus request-local changes**. Its browser invalidates stale output after map edits and checks a revision number before accepting a result; SLAM MUST extend this to all relevant inputs.
+
+Each run MUST have a unique **run ID**, and every result MUST identify relevant immutable inputs:
+
+- Dataset ID/hash, acquisition timestamp or processed scan index.
+- Map ID/revision, calibration revision, configuration/parameter hash, and algorithm/build version.
+- Frame ID, units, request ID, status/quality, and solver timing where applicable.
+
+User-side edits (experimental obstacles, sensor masks, parameter changes, artificial clock offsets) MUST create an isolated **derived run**, never modify the source MCAP or the production map. A display must NOT combine scan points, pose estimates, and maps from incompatible revisions without an explicit compare mode.
+
+The browser MUST cancel superseded requests and/or reject responses whose request generation, run ID, or revision no longer matches the selected experiment. It MUST reset invalidated results when map or config changes; completion order must not decide what is shown. Exported experiment reports MUST include the effective parameters and provenance required to reproduce the run.
+
+### 14.6 Proposed API and transport
+
+Start with a minimal **HTTP/JSON contract** to keep build and runtime dependencies low. The following paths are **proposed, not implemented**; the initial scaffold MUST document its real routes and return schemas. All APIs live under `/api/v1/`.
+
+| Method / path | Responsibility |
+| --- | --- |
+| `GET /api/v1/capabilities` | Build features, modes, available sensors, data formats, supported visualization layers. |
+| `GET /api/v1/status` | Health, current run ID, state, backend progress, latest sensor timestamp, dropped packets. |
+| `GET /api/v1/datasets` | Enumerate **allowlisted / mounted** datasets; no arbitrary server-side path access. |
+| `POST /api/v1/replay` | Start/reset replay from a selected dataset ID and validated experiment config; return run ID. |
+| `POST /api/v1/replay/control` | Play/pause, bounded speed, step by scan, or seek; must include expected run ID. |
+| `GET /api/v1/snapshot?run_id=...&at=...` | Consistent map/scan/pose/diagnostic snapshot at acquisition time; may return not-ready. |
+| `GET /api/v1/maps/{map_id}/metadata` | Occupancy origin, resolution, dimensions, map revision, available tile/field layers. |
+| `GET /api/v1/maps/{map_id}/tiles/...` | Bounded static tiles or compact occupancy data keyed by revision. |
+| `GET /api/v1/runs/{run_id}/metrics` | Estimator accuracy (where ground truth exists), latency, convergence and diagnostics. |
+| `GET /api/v1/runs/{run_id}/export` | Download reproducible experiment summary with inputs, parameters and metrics. |
+
+Do not implement every endpoint in the first milestone; define schemas and version them before clients depend on them. The contract MUST specify typed error responses, limits, timestamp units, frame semantics, status enumerations, empty/missing data behavior, and incompatible-version handling.
+
+- **Replay/experiment computation:** asynchronous background worker with bounded queue and cancellable job IDs; polling for snapshots/status is sufficient initially.
+- **Live telemetry:** start with rate-limited snapshot polling; if measurements justify it, add **Server-Sent Events or WebSocket** for one-way streaming, with bounded buffers, reconnection and backpressure. Do not assume the original Planning Lab supports streaming.
+- Never use request arrival order as the ordering of sensor measurements or results.
+- Implement JSON serialization and validation server-side; do not send opaque internal Eigen/Ceres/GTSAM object layouts directly to JS.
+- Preserve a CLI / headless output with equivalent metrics; browser-only behavior is not acceptable.
+
+### 14.7 Security and Docker networking
+
+The original demo serves allowlisted files, defaults to IPv4 loopback, and uses bounded requests. The SLAM Web Lab MUST adopt equally constrained defaults:
+
+1. Default bind: **127.0.0.1** in native mode; when binding to `0.0.0.0` inside a Docker container is required, Compose MUST publish only `127.0.0.1:HOST_PORT:CONTAINER_PORT` unless explicitly approved.
+2. No public internet exposure, production authentication assumptions, generic filesystem browser, arbitrary dataset path URL, command execution endpoint, or unrestricted map upload.
+3. Only fixed static assets and documented API routes may be served. Validate methods, MIME types, duplicated/unknown parameters, numeric bounds, payload length, and effective solver/scan budgets.
+4. Set restrictive response headers including `X-Content-Type-Options: nosniff` and an appropriate Content Security Policy. Do not permit wildcard CORS by default.
+5. Use read-only mounts for source datasets and immutable map bundles, and a distinct restricted writable directory for derived experiment artifacts.
+6. Containers MUST run with least privilege; browser routes must not expose raw sensor devices. Hardware access belongs only to acquisition services.
+7. Limits MUST bound concurrent jobs, CPU/memory, result history, HTTP requests, search ranges, and export size. Long runs must expose progress and cancellation without blocking the HTTP service.
+8. A web debugging server MUST NOT be positioned as an authenticated remote robot management service. Remote access requires a separately reviewed design (e.g., SSH port forwarding).
+
+The Compose scaffold SHOULD provide an opt-in `web-lab` service and documented loopback port (e.g., 8765). The source project uses this port, but the final SLAM port is an implementation detail. All backend execution and tests MUST remain containerized.
+
+### 14.8 Testing and acceptance of the Web Lab
+
+Web Lab tests MUST execute within the Docker `test` environment and be registered with CTest (including non-C++ checks as necessary). Keep these test layers:
+
+- **Pure geometry tests:** map/world/canvas conversion (including rotated origins), zoom/pan, angle and unit conversion; browser JavaScript helpers MUST have deterministic tests. A headless JS runtime MAY be included in the **test image only**, not required in the production server.
+- **Core/adapter tests with Catch2:** snapshot serialization, schema versions, timestamp ordering, run/revision consistency, parameter validation, and safety limits.
+- **Real HTTP integration tests:** launch the actual local C++ server and verify assets, capabilities, read-only data access, replay controls, invalid methods/parameters, malformed/oversized requests, and typed errors.
+- **Replay-based tests:** deterministic pause, one-scan stepping, seek/reset, raw-vs-deskew alignment, map provenance, and refusal to present stale/wrong-revision results.
+- **Browser smoke tests:** UI boots, backend unavailable message is visible, canvas shows a known fixture, playback changes the displayed acquisition time, export includes provenance; headless-browser tests are encouraged when affordable.
+- **Performance tests:** benchmark web-on versus web-off latency/CPU, payload sizes, large maps, and slow clients; enable a limited publish/snapshot rate so the Pi 5 real-time path is not starved.
+
+Initial Web Lab acceptance requires a **real C++-backed** scan/map viewer, **deterministic offline replay** with pause/step/seek, correct origin/coordinate visualization, exported diagnostic JSON, reproducible run IDs and revisions, and passing HTTP/geometry tests in Docker. Later milestones add full solver and live diagnostics.
+
+The Web Lab MUST remain optional at compile-time and run-time; a headless SLAM build MUST NOT require a browser, JS/Node runtime, or the local HTTP debug server.
+
+## 15. Reference documentation
 
 - [CMake FetchContent](https://cmake.org/cmake/help/latest/module/FetchContent.html)
 - [Catch2 CMake integration](https://github.com/catchorg/Catch2/blob/devel/docs/cmake-integration.md)
@@ -370,3 +516,5 @@ Do not create all scaffolding in advance merely to satisfy the directory diagram
 - [Ceres Solver](https://ceres-solver.readthedocs.io/)
 - [GTSAM](https://gtsam.org/)
 - [MCAP](https://mcap.dev/)
+- [Hybrid A* Planning Lab source, inspected branch](https://github.com/civcode/hybrid-astar-cpp/tree/feature/nav2-full-warehouse-margin-pipeline-benchmark/apps/demo)
+- [Hybrid A* Web Lab HTTP integration test reference](https://github.com/civcode/hybrid-astar-cpp/blob/feature/nav2-full-warehouse-margin-pipeline-benchmark/tests/demo_http_test.py)
