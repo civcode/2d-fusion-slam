@@ -32,7 +32,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-006 | Minimal wheel/gyro integrator and replaceable kinematics | P1 | Odometry, bias and slip | **Accepted** (calibration/tests pending) |
 | OD-007 | Truncated unsigned EDT, bilinear, per-beam Huber and odom prior | P1 | Ceres matching | **Accepted** (implementation/benchmarks pending) |
 | OD-008 | Robust LiDAR-only information, rank gates and covariance calibration | P1 | Graph, localizer quality | **Accepted** (tests/calibration pending) |
-| OD-009 | Coarse correlative search design | P2 | Tracking recovery | Open |
+| OD-009 | Covariance-aware local correlation and asynchronous branch-and-bound recovery | P2 | Tracking recovery | **Accepted** (benchmark tuning pending) |
 | OD-010 | Occupancy submap construction and thresholds | P1 | Mapping and graph | Open |
 | OD-011 | Distance-field cache / immutable map snapshots | P1 | Map/matcher memory | Open |
 | OD-012 | Native map bundle and persistence format | P1 | Reuse across modes | Open |
@@ -50,7 +50,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-024 | Replay checkpoints, seek and reproducibility | P1 | Benchmarks/Web Lab | Open |
 | OD-025 | ROS 2 distro, QoS and adapter interface | P3 | Nav2/RViz integration | Open |
 
-Recommended **review order**: OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009/020/022 (live localization), then OD-016/019/025 (full online/deployment). Some concurrency questions in OD-016/021 must be settled earlier if they block recorder implementation.
+Recommended **review order**: OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009 accepted coarse recovery, OD-020/022 (global hypotheses and tracking state), then OD-016/019/025 (full online/deployment). Some concurrency questions in OD-016/021 must be settled earlier if they block recorder implementation.
 
 ## 3. Sensor, timestamp and odometry decisions
 
@@ -668,13 +668,67 @@ Docker Catch2/CTest MUST verify analytical PSD Hessians with beam weights counte
 
 **References:** [Ceres covariance documentation](https://ceres-solver.readthedocs.io/latest/nnls_covariance.html) and [Ceres robust-loss conventions](https://ceres-solver.readthedocs.io/latest/nnls_modeling.html).
 
-### OD-009 — Coarse search for poor initial pose
+### OD-009 — Covariance-aware multi-resolution correlative search and branch-and-bound recovery
 
-**Question:** Resolution pyramid correlative matching, branch-and-bound, grid search or particle hypotheses? Search budget per mode?
+**State:** **Accepted** (architecture chosen; implementation, calibration and Raspberry Pi measurements pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection of mode-dependent correlative search and branch-and-bound  
+**Priority:** P2
 
-**Provisional preference:** bounded multi-resolution correlative scan search to recover small-to-moderate pose errors before Ceres; reserve full-map search for the relocalization module.
+**Decision:** During normal tracking, initialize **OD-007 Ceres directly from the OD-006 motion-predicted midpoint pose**, with **no coarse search**. When confidence falls, use bounded **local correlative search** to propose Ceres seeds. For recovery or global relocalization, use **multi-resolution correlative branch-and-bound** over **immutable, versioned map/submap snapshots**. Search windows derive from pose covariance and tracking state, subject to configured mode maxima and **separate real compute budgets**. Preserve several spatially distinct hypotheses where necessary, refine candidate poses using OD-007, and **accept corrections only after OD-008 LiDAR-only quality, observability and state-appropriate innovation checks**. Run large searches **asynchronously**, never blocking acquisition, odometry, recording or local tracking. The coarse-search interface remains independent of ROS and Ceres.
 
-**Decision gate:** perturbation sweeps in metres and degrees, false match rate in repetitive aisles, p95 latency on Pi and candidate quality under 100 ms scan cadence. Keep search implementation separate from local nonlinear refinement.
+**Alternatives:** (A) Ceres-only from odometry — retained for **normal** tracking, insufficient after large pose error; (B) small bounded local exhaustive/correlative search — selected for degraded tracking; (C) **precomputed multi-resolution branch-and-bound — selected for recovery/global**, with provable score bounds if exact pruning is claimed; (D) persistent particle filter — **not required initially**, potentially revisited under OD-020 if multimodal kidnapping/repeated-aisle behavior needs ongoing hypothesis tracking. Search is a *candidate generator*, not a reliable pose measurement by itself.
+
+#### Accepted operating modes and initial budget targets
+
+| Mode | Search window | Initial CPU execution budget | Strategy |
+| --- | --- | --- | --- |
+| `TRACKING` (normal) | Ceres seed at odometry prediction | **0 ms coarse** per scan | OD-007 direct Ceres |
+| `DEGRADED` / `UNCERTAIN` | **±0.3 m X/Y, ±10° yaw** | **10–20 ms** per scan when invoked | Bounded local correlative scan search; top candidate(s) -> Ceres |
+| `RECOVERY` | **±1.0 m X/Y, ±30° yaw** | **30–50 ms** per invocation | Multi-resolution branch-and-bound, candidate refinement |
+| `GLOBAL_RELOCALIZATION` | Full eligible frozen candidate submap(s), **360° yaw** | **100–200 ms per processing slice** | Asynchronous multi-resolution branch-and-bound with checkpointed/cancellable slices |
+
+These are **initial proposed budgets for Raspberry Pi 5 at roughly 10 Hz LD19 input**, **not measured or guaranteed runtimes, schedulability proofs or hard real-time deadlines**. The budget measures **host steady monotonic execution time**, not pausable ROS `/clock` event time, and MUST cap evaluated candidate nodes, memory and queued work independently of elapsed time. Full global search may require **multiple slices** and MUST NOT be falsely advertised as exhaustively completed within one slice. Record actual p50/p95/p99 latencies, scheduling interference, queue lag and thermal effects; tune on real Pi hardware.
+
+#### Covariance-aware windows, angular resolution and hypotheses
+
+- Derive a **bounded covariance-aligned SE(2) search region** around the OD-006 predicted pose for local modes, with explicit tangent-frame/unit conversion and a configured confidence multiplier. Clip the final X/Y/yaw extents to the **mode-specific maxima** above, report truncation/clipping and avoid implying complete recovery outside the cap. Handle invalid/strongly correlated/degenerate prediction covariance by degrading mode or moving to global recovery, not fabricating a tiny window.
+- Choose angular sampling **from occupancy-grid spatial resolution and useful beam range** so rotation between samples does not displace informative endpoints by more than a configured spatial sampling tolerance (approximate small-angle relation `delta_yaw <= spatial_step / representative_range`); handle near-zero/large ranges and cap sample count.
+- Preserve **multiple distinct high-scoring hypotheses** using nonmaximum suppression or equivalent SE(2) separation (translation/yaw with proper wrap), source map/scan revisions, geometric support, score, remaining budget and rank. Avoid returning duplicates of one local peak as independent hypotheses.
+- Candidate score is a **coarse ranking**, not a covariance, likelihood calibration or OD-008 acceptance. Correlation ambiguity in repeating warehouse aisles requires cross-scan temporal consistency before a global relock; this persistent-confirmation policy is coordinated with **OD-020/OD-022**.
+
+#### Immutable correlation maps and valid branch-and-bound
+
+- Maintain an **occupancy-derived, versioned, immutable correlative score grid and precomputed multi-resolution search pyramid** for each frozen map/submap snapshot. The occupancy grid remains the source of truth; the OD-007 EDT is a **distinct derived cache** and need not share an objective with the coarse matcher. Store source occupancy revision/hash, known/unknown mask, score policy, resolution/origin/yaw, pyramid construction parameters, cache version and memory size. Invalidate/rebuild **on map revision change**, not every scan; caching/eviction remains OD-011.
+- **Unknown, out-of-map, invalid and OD-005 missing returns must not be scored as known free or occupied evidence.** Only OD-004 midpoint-deskewed valid-hit endpoints enter the coarse candidate score (or a separately documented sensor-supported valid-no-return policy for an explicitly tested objective). Track number/fraction of supported beams, occupancy coverage and map support across levels.
+- If pruning is called **branch-and-bound**, coarse-level cells MUST provide **admissible upper bounds for the same finer-resolution score** under all translations, yaw samples and supported-region/unknown-mask handling. A maximum-over-descendants/precomputation approach is a candidate; prove or exhaustively test bounds. A coarse **average, EDT minimum or heuristic** is not automatically an upper bound. If admissibility cannot be shown, label the algorithm **heuristic best-first multiresolution** and do not claim optimality or exhaustive exclusion.
+- Use deterministic ordering/tie breaking, controlled score quantization and proper occupancy-map rotated origin transforms. Cache precomputation is separate from scan-time CPU budget, but **must** be measured and bounded in RAM/build time. Reuse map pyramids across scans; validate cache lifetime across online map revision publication.
+
+#### Quality, refinement, cancellation and failure
+
+1. **Direct normal path:** OD-005 scan + OD-004 midpoint deskew and OD-006 predicted pose -> OD-007 Ceres -> **OD-008** quality evaluator. No coarse pyramid work on the critical path unless explicitly enabled by tracking health.
+2. **Degraded/local:** on deteriorating OD-008 score/overlap/rank/innovation, perform a **bounded** local correlative search then Ceres refinement on top candidate(s). Refined candidates must pass OD-008; high coarse correlation alone is never sufficient.
+3. **Recovery/global:** schedule branch-and-bound on a **background bounded worker**, holding immutable pinned map/scan/calibration/clock revisions. Search can yield **PARTIAL_BUDGET** or **CANCELLED** without implying no valid poses exist. If a worker resumes, its search frontier/checkpoint must match the original snapshot and configuration; stale/replaced snapshots require invalidation/restart.
+4. **Refinement vs priors:** A distant correct recovery hypothesis may violate a **tight OD-007 motion prior**. Use a mode-appropriate covariance/prior policy (weakened, validity-gated or explicitly configured no-prior Ceres path) rather than forcing all global hypotheses back toward a stale odometry seed. Still apply **OD-008** LiDAR observability and **state-aware** innovation/relock gates; do not turn a large kidnapped-robot jump into an unconditional high-confidence correction.
+5. **Acceptance:** Separate search score, local refined pose, OD-008 geometric acceptance, and multi-scan/global relock confirmation. **Normal occupancy map insertion remains disabled when global pose is uncertain/lost**, even if a partial search or one coarse hypothesis looks plausible. OD-006 local odometry continues, while recovery attempts are logged.
+6. **Resource isolation:** enforce host-steady CPU slice budgets **plus** node-count, hypothesis-count, memory, queue-depth and cancellation limits. Do not call a long search synchronously from sensor acquisition, packet decoding, recording, odometry, live frontend deadline or ROS callback. A processing slice must yield to higher-priority tracking. Detect starvation, map revisions, new scans, source clock jumps and shutdown; cancel or explicitly restart.
+7. **Native boundary:** Define an abstract `CoarseSearch` or `PoseCandidateSearch` taking an immutable map-score snapshot, OD-005/004 prepared scan, covariance/pose hint if available, search mode/budget and cancellation token; return versioned ranked `PoseCandidate` list, progress/coverage, `COMPLETE`/`PARTIAL_BUDGET`/`CANCELLED`/`INVALID` and detailed diagnostics. A separate coordinator invokes **OD-007 ScanMatcher** and **OD-008 MatchQualityEvaluator** for each selected candidate. No Ceres, ROS, sensor hardware or micro-ROS types in coarse-search public headers. Coarse score objective and budget configuration are **independent** of Ceres solver cost/budget; shared authoritative map identity is enforced.
+
+#### Test and benchmark requirements (not yet executed)
+
+1. Synthetic apartment/corridor/warehouse with exact pose perturbations (small, ±0.3 m/10°, ±1.0 m/30°, large global 360°); confirm correct mode selection, bound clipping and odom-only normal coarse-work **0**.
+2. Rotation sampling vs map resolution/beam distance, SE(2) yaw wrap, rotated/translated occupancy origin, partial/missing OD-005 beams and unknown-region support.
+3. Compare branch-and-bound versus exhaustive fine-grid enumeration on small fixtures: upper-bound admissibility, deterministic pruning, candidate scores/ranks and no lost true optimum under **completed** full-budget search.
+4. Repetitive shelving and symmetric apartment layouts: deduplicated distinct top-K candidates, ambiguity flag, Ceres refinement/OD-008 true-vs-false lock decisions and independent multi-scan relock stability.
+5. Candidate covariance-window scaling/clipping under growing OD-006 wheel slip/bias uncertainty; stale predictions and mixed map/scan revisions; no false certainty from an invalid prior.
+6. Quantified **10–20 / 30–50 / 100–200 ms** host-steady execution slices with hard node/memory limits, explicit incomplete/cancelled result, resumable frontier and no blocking of simulated 10 Hz acquisition.
+7. Global kidnapped-robot recovery using a correctly relaxed/no-prior OD-007 refinement policy and OD-008 state-aware innovation, with no map insertion while LOST/RELOCALIZING.
+8. Immutable occupancy-derived pyramid cache reuse, invalidation on revision change, independent EDT vs correlative score objective, map/unknown masks, bounded build time and RAM.
+9. Docker Catch2 and end-to-end benchmarks measure success/false-lock, branch pruning efficiency, number of candidates and Ceres runs, final pose accuracy with independent truth, p50/p95/p99 latency, Pi CPU/memory and acquisition queue delay. No GitHub Actions execution.
+
+**Consequences:** Multi-mode search, initial covariance-aware windows, proposed resource targets, branch-and-bound for recovery/global, asynchronous execution and **OD-008-only correction trust** are accepted. Exact score function, pyramid resolution/depth, admissibility construction, candidates K, normalized scoring, thresholding, memory/latency caps and state transitions remain tunable or related to OD-011/020/021/022. Particle filtering is **not initially required**; it remains an alternative if multi-modal ambiguity demands persistent beliefs. **No measured performance or completed search implementation is asserted.**
+
+**External reference:** [Cartographer 2D fast correlative scan matcher](https://google-cartographer.github.io/cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.html) (precomputed maximum-score grid pyramid with branch-and-bound, later Ceres refinement).
 
 ### OD-010 — Occupancy submap size and freezing policy
 
@@ -760,9 +814,9 @@ Docker Catch2/CTest MUST verify analytical PSD Hessians with beam weights counte
 
 ### OD-020 — Global localization / kidnapped robot recovery
 
-**Question:** Adaptive particle filtering, hierarchical correlative pose search, or hybrid particle + Ceres refinement?
+**Question:** Does accepted OD-009 branch-and-bound with several hypotheses suffice for kidnapped-robot/global recovery, or is persistent particle filtering required?
 
-**Provisional preference:** keep a clean multi-hypothesis recovery interface. Benchmark a correlative baseline and AMCL/Beluga-style adaptive particle localization on the same frozen map before selecting.
+**Provisional preference:** use accepted OD-009 asynchronous branch-and-bound + OD-007 refinement + OD-008/022 multi-scan validation first; only benchmark a persistent AMCL/Beluga-style particle baseline if global repeated-aisle ambiguity or kidnapping shows a material unsolved failure mode.
 
 **Decision gate:** unknown initial pose, robot teleportation, repeated aisles, dynamic obstacles, success rate, false-lock rate, CPU/memory, time to stable lock and multi-scan consistency. Never call single-match convergence a global relocalization.
 
@@ -840,6 +894,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-008 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-009 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
