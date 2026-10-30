@@ -191,14 +191,14 @@ LD19 v2.5 documentation specifies 12 samples per 47-byte UART packet, motor spee
 theta_i = theta_start_unwrapped
         + i/(N-1) * (theta_end_unwrapped - theta_start_unwrapped)
 
-delta_t_i_ref ≈ (theta_i - theta_ref) / omega_signed   [seconds]
+delta_t_i_anchor ≈ (theta_i - theta_anchor) / omega_signed   [seconds]
 
 t_device_beam_i ≈ t_device_packet_unwrapped
-                + delta_t_i_ref + delta_reference
+                + delta_t_i_anchor + delta_physical_anchor
 ~~~
 
 - `omega_signed` is the packet speed converted from degrees/s with verified rotation direction. Validate measured angle span against speed and neighboring packet times; handle small/invalid speed, inconsistent angle coverage, packet loss and motor-speed variation conservatively.
-- `theta_ref` and `delta_reference` describe the **physical acquisition event and delay associated with the packet timestamp**. They are **calibration parameters with unknown initial values**, not a hardcoded first/last beam assumption.
+- `theta_anchor` is an **arbitrary documented computational reference**, e.g. the packet end angle. Choosing it **does not assert** the device timestamp marks that beam; it merely sets the origin for **relative** beam offsets. The **unknown physical acquisition-to-packet timestamp offset** is captured by a separate calibrated/bounded `delta_physical_anchor`. Use one explicit anchor and one offset, not two independently free reference parameters.
 - A relative beam-time model can be computed before absolute packet-reference calibration; tag its **absolute** times as uncertain until a valid clock mapping and physical offset are available.
 - The scan reference time used for deskew (`OD-004`) is separate from the per-beam acquisition-time reconstruction.
 
