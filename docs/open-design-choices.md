@@ -419,7 +419,7 @@ The **LD19 acquisition adapter** owns frame parsing, CRC, reported motor speed a
 7. Full OD-004 interpolation across the **actual observed** scan interval, including timestamp-valid slots with invalid ranges; missing time boundaries and extrapolated trajectory prevent ordinary insertion. Verify midpoint is not a mean beam time.
 8. Deterministic synthetic apartment/warehouse replay, Docker Catch2/CTest tests, Web Lab overlay of observed/missing angular sectors and quality counters, and measured Pi CPU/latency.
 
-**Consequences:** Angular-seam segmentation, honest partial scans, return validity and safe occupancy behavior, and recovery-only timeouts are **settled**. Exact coverage binning, thresholds, loss tolerance and timeout duration remain **configurable implementation/benchmark tuning**, not permission to invent missing samples. OD-003 owns per-beam time reconstruction; OD-004 owns midpoint trajectory deskew; OD-005 owns **observation grouping and scan eligibility**. OD-006 motion integration is accepted; OD-007 scan matching is accepted; OD-010 log-odds occupancy and freezing policy is accepted; OD-011 derived cache management remains open.
+**Consequences:** Angular-seam segmentation, honest partial scans, return validity and safe occupancy behavior, and recovery-only timeouts are **settled**. Exact coverage binning, thresholds, loss tolerance and timeout duration remain **configurable implementation/benchmark tuning**, not permission to invent missing samples. OD-003 owns per-beam time reconstruction; OD-004 owns midpoint trajectory deskew; OD-005 owns **observation grouping and scan eligibility**. OD-006 motion integration is accepted; OD-007 scan matching is accepted; OD-010 log-odds occupancy and freezing policy is accepted; OD-011 coherent snapshot and derived-cache architecture is accepted, with numeric performance tuning pending.
 
 ### OD-006 — Minimal wheel/gyro integrator and replaceable kinematics
 
@@ -814,7 +814,7 @@ OD-005 quality scan + OD-004 interpolated midpoint deskew
              graph optimizes T_map_submap only, not occupancy
 ~~~
 
-Native C++20 `OccupancyGrid` / `SubmapBuilder` / `FrozenSubmap` / `MapSnapshot` APIs MUST keep log-odds and known masks independent from derived EDT/pyramids, with explicit local SE(2) frames, resolution, origin including yaw, scan/insert IDs, state, memory/cell usage, immutable occupancy revision and separately versioned global pose. **No Ceres, GTSAM, ROS, LD19, Pico or MPU6050 types** in the generic mapping interface. OD-011 remains open on incremental cache construction/eviction/snapshot publication, and OD-012 on persistence format.
+Native C++20 `OccupancyGrid` / `SubmapBuilder` / `FrozenSubmap` / `MapSnapshot` APIs MUST keep log-odds and known masks independent from derived EDT/pyramids, with explicit local SE(2) frames, resolution, origin including yaw, scan/insert IDs, state, memory/cell usage, immutable occupancy revision and separately versioned global pose. **No Ceres, GTSAM, ROS, LD19, Pico or MPU6050 types** in the generic mapping interface. Accepted OD-011 specifies active incremental tile architecture, the initial full-rebuild baseline, atomic snapshot publication and bounded frozen cache eviction/reload; OD-012 remains open on persistence format.
 
 #### Required synthetic/hardware tests (not yet executed)
 
