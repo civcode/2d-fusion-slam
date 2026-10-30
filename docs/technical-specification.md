@@ -45,7 +45,7 @@ The initial version will not provide 3D SLAM, vision-based SLAM, learned feature
 | FR-08 | Fuse LiDAR geometry and OD-006 wheel/gyro motion in OD-013 keyframe/submap GTSAM Pose2 graph; gyro bias remains in the local estimator initially, with OD-015 sparse offline graph bias knots optional after validation. |
 | FR-09 | Support offline global mapping, loop closure, batch optimization, and refined map export. |
 | FR-10 | Support low-latency localization against a previously built, read-only map. |
-| FR-11 | Detect uncertain/lost localization and support global initialization or relocalization. |
+| FR-11 | Detect uncertain/lost localization; recover globally using OD-009/018 BnB search and OD-020 bounded persistent top-K multi-scan verification. Never accept ambiguous global fixes or map while untrusted. |
 | FR-12 | Support incremental online SLAM with an asynchronous GTSAM backend. |
 | FR-13 | Replay recorded sessions deterministically and compare estimator configurations using identical data. |
 | FR-14 | Build and test core algorithms on ARM64 and x86-64 Linux. |
@@ -396,7 +396,7 @@ These are **unmeasured Pi 5 starting targets** around 10 Hz LD19, not guaranteed
 
 **Asynchronous execution and safety:** Run large searches in bounded workers with pinned immutable map/score pyramid, scan, calibration and source-clock epoch. A partial frontier can resume only with matching revisions; otherwise cancel/restart. Acquisition, recording, local odometry, normal local scan matching and ROS callbacks MUST NOT wait on a global search. While LOST/RELOCALIZING or without validated OD-008 correction, keep odom publishing, mark global pose uncertain/unavailable, and **disable map insertion**.
 
-The **native `PoseCandidateSearch`** interface returns ranked candidates, search mode, score/overlap, map/time/calibration revisions, budget/progress and status. It depends on no Ceres types, ROS messages or hardware drivers. Its adapter/coordinator calls OD-007 Ceres and OD-008 quality evaluator separately. A particle filter is not an initial requirement; OD-020 may reconsider persistent multi-hypothesis filtering after benchmark failures.
+The **native `PoseCandidateSearch`** interface returns ranked candidates, search mode, score/overlap, map/time/calibration revisions, budget/progress and status. It depends on no Ceres types, ROS messages or hardware drivers. Its adapter/coordinator calls OD-007 Ceres and OD-008 quality evaluator separately. **Accepted OD-020** adds bounded persistent top-K temporal verification after BnB; particle filtering remains a conditional later backend only if B28 demonstrates shortcomings.
 
 **Verification:** Docker Catch2/CTest: covariance bounds, angular sampling, rotation/map origin and 360° wrap, per-scan zero coarse work when TRACKING, precomputation cache reuse/invalidation, admissible BnB bounds vs exhaustive small search, top-K distinct candidates in repeated aisles, wrong-odometry-prior recovery, OD-008 quality rejection, partial-budget/yield/cancel and no blocked acquisitions. Pi execution budgets need on-device measurement, not inferred Docker x86 times. See [accepted OD-009](open-design-choices.md), [architecture `5.5](architecture-specification.md) and [Cartographer 2D fast correlative matching](https://google-cartographer.github.io/cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.html).
 
@@ -595,17 +595,33 @@ Offline replay must support deterministic scan selection, configurable processin
 
 Load a frozen map or indexed map tiles plus precomputed distance fields. Keep high-rate wheel/gyro odometry continuous and match each deskewed scan using Ceres in the nearby map region. Publish global correction via **map -> odom**, while **odom -> base_link** remains continuous.
 
-The localization state machine has three states:
+The localization state model includes these five states (exact hysteresis thresholds remain OD-022):
 
 | State | Behavior |
 | --- | --- |
+| UNINITIALIZED | No trusted map pose; schedule full-map OD-020 candidate search and prohibit mapping. |
 | TRACKING | Predict using wheel/gyro, then locally refine with Ceres. |
 | UNCERTAIN | Enable bounded OD-009 local correlation (±0.3 m/±10°, initially 10–20 ms), refine selected candidates with Ceres and require OD-008 acceptance. |
-| LOST | Schedule OD-009 asynchronous BnB recovery/global (up to 360° over frozen candidate maps), refine top distinct candidates and require OD-008 plus multi-scan confirmation; do not insert scans into map. |
+| LOST | Revoke trusted global fix and suspend all mapping; schedule OD-020 map-wide OD-009/018 asynchronous BnB recovery with 360° yaw. |
+| RELOCALIZING | Propagate persistent top-K hypotheses using continuous OD-006 odom; test across subsequent LiDAR scans, geometry, ambiguity and search coverage. Publish no global correction until all gates pass. |
 
-The initial localizer uses the **accepted OD-006 minimal local predictor with conservative prediction/measurement uncertainty**. An EKF or GTSAM recent-state smoother may replace/enhance it later **only if benchmarks justify the complexity**. A local optimizer alone does **not** solve global or kidnapped-robot localization. **Accepted OD-009** supplies coarse multiresolution branch-and-bound recovery; particle filtering is deferred unless OD-020 experiments show persistent multi-hypothesis tracking is required.
+The initial localizer uses the **accepted OD-006 minimal local predictor with conservative prediction/measurement uncertainty**. An EKF or GTSAM recent-state smoother may replace/enhance it later **only if benchmarks justify the complexity**. A local optimizer alone does **not** solve global or kidnapped-robot localization. **Accepted OD-009/020** supplies multiresolution branch-and-bound and persistent top-K multi-scan recovery. A persistent particle filter is **not** the initial backend; introduce or compare it only if B28 proves a need.
 
 A lost/stale pose must be explicitly signaled to downstream navigation/control; it must not silently present an old pose as current.
+
+### 8.2.1 Accepted OD-020 — Bounded global hypothesis tracking and publication
+
+**Recovery input:** Given unknown global start, a suspected kidnapping or repeated local match failures, freeze map insertion and load immutable OD-010/011 eligible submaps with OD-012 generation identity. Do not constrain global search to an outdated OD-006 covariance/spatial vicinity. OD-018 signature retrieval may prioritize target submaps but must have deterministic full-map fallback over all eligible regions (including as-yet unloaded tiles) and 360° yaw. OD-009 BnB provides multiple spatially *and rotationally* distinct coarse poses; each is individually OD-007 refined with recovery-specific relaxed/no stale global pose prior and OD-008 LiDAR-only checked.
+
+**Coverage and budget:** Maintain a per-snapshot complete eligible-domain ledger of considered, visited/evaluated, **admissibly pruned**, pending, unavailable and failed-load map regions/yaw cells; do not confuse retrieval recall with search completeness. Return COMPLETE, PARTIAL_BUDGET, CANCELLED, INVALID or RESOURCE_LIMIT, map/graph/score-cache/config/clock revision and work/node counts. Incomplete or unvisited credible regions may conceal a competing pose and block global acceptance. Run a bounded OD-016 async worker in OD-009's **unmeasured 100–200 ms work slices**, bounded by nodes, candidate K, queue age, pinned cache, CPU/RSS and total work; yield/cancel between slices, restart on revision changes and never stall acquisition/recording/local odometry. No invented search time guarantee.
+
+**Persistent tracking:** Hold a configurable fixed-cap K of nonmaximum-suppressed hypotheses with stable IDs, separate map-to-odom transforms, SE(2) covariance/quality and source scan IDs. Propagate each using the OD-006 **relative** midpoint-to-midpoint odometry delta plus valid uncertainty (no stale absolute map prior). Validate subsequent eligible OD-005/004 scans for OD-008 LiDAR-only rank/overlap/robust residual, innovation, physically meaningful new geometric support, and consistent map-frame motion; reject stale/duplicated scans and correlated repeated views as independent evidence. Keep alternatives where symmetry cannot be broken, and record overflow when K-limiting would discard viable modes.
+
+**Fail-closed acceptance:** Require sustained geometrically observable multi-scan evidence, temporal consistency, no contradictory motion, credible separation from alternative hypotheses and sufficient resolved map-search coverage. Symmetric rooms, repetitive corridors and incomplete LD19 sectors must default to **remain unlocalized** instead of confident wrong lock. Exact K, separation, scan/time windows, rank/margin/coverage thresholds and state hysteresis require B28/OD-022 calibration. A high Ceres score or OD-008 local covariance does not by itself establish *global* uniqueness.
+
+**Mapping and frame contract:** While UNINITIALIZED, LOST or RELOCALIZING, suspend scan-to-map insertion, new active submaps and localization-derived graph constraints; continue continuous quality-rated local odom, and mark map pose unavailable/stale. Once verified, publish an **explicit version-checked map-to-odom correction** at the accepted scan midpoint without resetting odom-to-base or replaying untrusted scans into the map. OD-019 global graph publication must not bypass this trust gate; OD-022 still defines consumer-specific status and hysteresis.
+
+**ROS-independent API/replay:** Native GlobalRelocalizer / HypothesisTrack / SearchCoverage / RecoveryDecision contain source scans, OD-001 epochs, map/graph/calibration/config revisions, OD-006 odom deltas, candidates with Ceres/OD-008 geometric evidence, coverage/frontier state, time/work budgets, rejected/missing regions, competing hypotheses and decision/correction reason codes. Preserve exact deterministic ordering and scheduling/evidence lineage for OD-024 replay. Keep ROS, Linux thread handles, solver objects and hardware adapters private. **B28** validates wrong-prior arbitrary relocation, repetitive corridors and symmetric rooms, partial LD19 sectors, incompletely searched maps, competing hypotheses, false locks, continuity, noninterference and deterministic decisions (not yet executed).
 
 ### 8.3 Mode C — Full online SLAM (third priority)
 
@@ -833,7 +849,7 @@ Numerical accuracy thresholds should be set only after obtaining repeatable hard
 | Online graph growth | Asynchronous backend, keyframes, submap pruning, optional fixed-lag local estimation. |
 | Offline/map-version mismatch | Version artifacts and reject mismatched calibration or coordinates. |
 
-**Open decisions:** final robot drive type; availability of measured wheel speeds/steering angle on DeepRacer; Pico transport and clock-model tuning (the Pi-first/Pico-future approach is accepted under OD-002); exact LiDAR/IMU mounting; ROS 2 integration boundary; map binary serialization; and whether global relocalization uses a custom particle filter, Beluga, or hierarchical correlative matching.
+**Open decisions:** final robot drive type; availability of measured wheel speeds/steering angle on DeepRacer; Pico transport and clock-model tuning (the Pi-first/Pico-future approach is accepted under OD-002); exact LiDAR/IMU mounting; ROS 2 integration boundary; map binary serialization; and OD-020 B28-measured recovery threshold/K/resource tuning (the BnB + persistent top-K algorithm itself is Accepted; particle filtering is deferred).
 
 ## 14. Implementation milestones
 
