@@ -38,7 +38,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-012 | Versioned JSON manifest, zstd binary submaps/graph and atomic generations | P1 | Reuse across modes | **Accepted** (schema/tests pending) |
 | OD-013 | Keyframe+submap Pose2 graph; fused odom and correlation-safe factors | P1 | Backend accuracy | **Accepted** (implementation/tests pending) |
 | OD-014 | Bounded offline refinement, selective re-deskew/remap and rollback | P1 | Mapping quality | **Accepted** (tests/tuning pending) |
-| OD-015 | Keyframe, submap and gyro-bias knot policy | P1 | Graph size/accuracy | Open |
+| OD-015 | 0.20 m/5°/2 s motion keyframes; independent submap anchors; optional sparse bias knots | P1 | Graph size/accuracy | **Accepted** (tuning/tests pending) |
 | OD-016 | Process/thread layout | P1 | Pi resource isolation | Open |
 | OD-017 | Native CMake target/API decomposition | P0 | Implementation scaffold | Open |
 | OD-018 | Loop candidate retrieval and verification | P1 | Offline mapping | Open |
@@ -1050,7 +1050,7 @@ The strict JSON manifest MUST contain:
 
 **Decision:** Optimize **keyframe global SE(2) poses `X_k`** and **submap global SE(2) poses `S_j`** in **GTSAM**. Initially add **one fused wheel/gyro relative-motion constraint per keyframe interval**, **one primary geometrically justified local keyframe-to-submap constraint**, and carefully validated **inter-submap/keyframe loop closures**. Maintain raw wheel/gyro-based continuous trajectory, stationary/online gyro-bias correction and OD-004 beam deskew **outside the graph initially** under OD-006; **do not create separate graph bias, wheel and gyro factors** for that same fused evidence. Preserve every factor's source IDs, timing, scan-insertion membership, shared motion intervals, OD-011 pinned map revision, OD-008 observability/covariance calibration and explicit correlation policy. **Do not treat measurements as independent merely because they were created by separate processing stages.** Keep graph-domain interfaces **ROS- and GTSAM-independent**; GTSAM only in the backend.
 
-**Alternatives:** (A) pose-only wheel/scan graph — simpler baseline/ablation, less explicit submap connectivity; (B) **keyframe + submap Pose2 graph — selected** as a natural fit for OD-010 overlapping immutable submaps; (C) full joint pose/submap/gyro bias (or continuous trajectory) graph — **deferred** pending verified consistency/accuracy gains versus Pi/desktop cost. Keyframe spacing remains OD-015, loop retrieval OD-018, online iSAM2 scheduling OD-019.
+**Alternatives:** (A) pose-only wheel/scan graph — simpler baseline/ablation, less explicit submap connectivity; (B) **keyframe + submap Pose2 graph — selected** as a natural fit for OD-010 overlapping immutable submaps; (C) full joint pose/submap/gyro bias (or continuous trajectory) graph — **deferred** pending verified consistency/accuracy gains versus Pi/desktop cost. **Accepted OD-015** selects keyframe motion thresholds/anchors; loop retrieval remains OD-018, online iSAM2 scheduling OD-019.
 
 #### Variables, gauge and graph topology
 
@@ -1145,7 +1145,7 @@ OD-010 overlapping submaps -> immutable OD-011 snapshots + membership ledger
 9. Portable OD-012 graph roundtrip of node/submap IDs, admitted/rejected factors, source membership/scan IDs, OD-008 calibration, correlation groups, and no raw GTSAM object serialization.
 10. Report ATE/RPE, yaw drift, loop acceptance/false loop rate, held-out NEES/coverage where valid, graph node/factor count, optimization p50/p95/p99, RAM/CPU, mapping throughput and graph-pose revisions on x86-64 and Pi 5 if available. Test no Actions dispatch.
 
-**Consequences:** **Keyframe/submap Pose2 topology, fused interval odometry, single primary local LiDAR evidence, explicit motion/deskew/overlap correlations, conservative factors, batch-first GTSAM and native interface isolation** are accepted. Exact keyframe spacing (OD-015), loop retrieval (OD-018), online iSAM2 budget (OD-019), correlated joint models and numerical inflation/thresholds remain benchmarks/extensions. This selection is a specification, **not** evidence that graph code exists or its uncertainty is calibrated.
+**Consequences:** **Keyframe/submap Pose2 topology, fused interval odometry, single primary local LiDAR evidence, explicit motion/deskew/overlap correlations, conservative factors, batch-first GTSAM and native interface isolation** are accepted. **Accepted OD-015** sets initial keyframe thresholds (unvalidated); loop retrieval (OD-018), online iSAM2 budget (OD-019), correlated joint models and calibrated uncertainty remain benchmarks/extensions. This selection is a specification, **not** evidence that graph code exists or its uncertainty is calibrated.
 
 **References:** [GTSAM BetweenFactor Pose2](https://borglab.github.io/gtsam/betweenfactor/); [Cartographer PoseGraph2D](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/internal/2d/pose_graph_2d.h); [Cartographer graph constraint tags](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/proto/pose_graph.proto).
 
@@ -1224,15 +1224,103 @@ Raw immutable LD19 packets/beam times, IMU, encoders, calibration & epochs
 9. Compare selective vs unconditional full rebuild and one-pass baseline on exact synthetic apartment/warehouse; report ATE/RPE, beam alignment, map-cell disagreement, cache rebuild count, false closures, objective on common observations, CPU/RAM and outer-loop convergence/stop reasons.
 10. Verify no ROS dependency in coordinator, frozen-map hashes unchanged under rigid changes, deterministic resume/replay source references, staging failure/abort recovery and no GitHub Actions run.
 
-**Consequences:** The one-pass first milestone, **three additional-iteration cap**, 2.5 cm geometric candidate trigger, selective re-deskew/remap, observability-gated bias/time corrections and transactional validation/rollback are accepted. Thresholds, graph convergence parameters, calibration identifiability, workload limits and measured gains remain benchmarking tasks. **OD-024** still controls replay checkpoints/seeks, **OD-015** keyframes and **OD-018** loop candidate retrieval.
+**Consequences:** The one-pass first milestone, **three additional-iteration cap**, 2.5 cm geometric candidate trigger, selective re-deskew/remap, observability-gated bias/time corrections and transactional validation/rollback are accepted. Thresholds, graph convergence parameters, calibration identifiability, workload limits and measured gains remain benchmarking tasks. **OD-024** still controls replay checkpoints/seeks, **Accepted OD-015** governs motion keyframes; **OD-018** loop candidate retrieval remains open.
 
-### OD-015 — Keyframes, submap poses and bias knot spacing
+### OD-015 — Motion-threshold keyframes, quality adaptation and optional sparse gyro-bias knots
 
-**Question:** Distance/angle threshold, uncertainty or information-gain keyframes; how many bias states per interval?
+**State:** **Accepted** (policy selected; implementation, numerical tuning and offline knot validation pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit motion/quality and sparse optional knot selection  
+**Priority:** P1
 
-**Provisional preference:** begin with roughly **0.3–0.5 m** or **10–15 degrees** keyframe movement as *unverified tuning seeds*; allow time-based fallback when stationary bias matters. Bias knots may be less frequent than pose nodes.
+**Decision:** Create timestamped OD-013 **keyframe Pose2 nodes** using deterministic SE(2) **translation/rotation/elapsed-moving-time eligibility**, with an **uncertainty-aware secondary request** and a quality/information/observability gate for associated **LiDAR factor admission**. Initial parameters: **0.20 m** translation, **5° yaw** (`pi/36 rad`), **2.0 seconds during meaningful motion**, **0.2-second minimum keyframe interval**; do **not** make periodic keyframes while stationary without a specific observable constraint. Always maintain independent `X_k=T_map_base(t_k)` and `S_j=T_map_submap_j` variables, and create/associate a **submap anchor keyframe** when OD-010 starts a new submap, without double-counting its source evidence. **OD-010 submaps still advance at 90/180 accepted map insertions**, irrespective of graph keyframe count. Keep the evolving OD-006 gyro bias **outside the initial GTSAM graph** (zero graph bias knots). A **future optional OD-014 offline joint-refinement variant** may add scalar, time-indexed gyro-bias knots with random-walk evolution, initially every **5–10 s**, only after independent observability and held-out accuracy/consistency evidence justifies its complexity. Native selection and state APIs remain ROS-/GTSAM-independent.
 
-**Decision gate:** graph RAM/solve time, path reconstruction quality, low-motion bias observability, long straight corridors and loop deformation; measure on identical recordings with varied thresholds.
+**Alternatives:** (A) every scan or time-only keyframe — rejected as wasteful during stationary/poor-geometry periods; (B) **translation/rotation/meaningful-moving-time with uncertainty adaptation — accepted**; (C) information-gain-only online selection — deferred until information quality and cost are validated; (D) one gyro-bias variable per scan — rejected; (E) **no graph bias knots initially, optional sparse offline random-walk knots — accepted** subject to measurements; (F) joint bias/pose/continuous scan model in online graph — deferred.
+
+#### Initial keyframe and bias policy
+
+| Item | Initial selection | Interpretation |
+| --- | --- | --- |
+| Translation trigger | **0.20 m** | Body/planar SE(2) displacement since last keyframe; configurable |
+| Rotation trigger | **5° = pi/36 radians** | Absolute shortest relative yaw, wrap-safe |
+| Moving-time fallback | **2.0 s** | Only if meaningful motion persists; no idle heartbeat keyframes |
+| Minimum interval | **0.2 s** | Regular keyframe admission floor; submap-anchor exception explicitly recorded |
+| Stationary keyframes | **Suppressed** | Unless special constraint/observable experiment explicitly requires |
+| Uncertainty | **Secondary trigger**, bounded | High uncertainty requests consideration, not unconditional node growth |
+| Information gain | Optional future trigger | No unvalidated formula or fabricated information metric |
+| Submap creation | **OD-010 90/180 map insertions** | Independent of graph keyframe selection |
+| New submap anchor | **Associate/create one anchor keyframe** | Explicit exceptional reason if inside min interval; no duplicate evidence |
+| Initial graph gyro-bias knots | **0** | OD-006 estimator owns bias and trajectory |
+| Future offline bias-knot spacing | **5–10 s initially** | Only when observable, justified by drift dynamics, not every scan |
+| Future bias dynamics | Scalar yaw-axis random walk | `Var(b_(j+1)-b_j) = q_b * Delta_t_j` |
+
+All numeric thresholds are **starting values, not measured Pi 5 or robot defaults**. Time comparisons are typed OD-001 **canonical integer-nanosecond** differences within a consistent domain/epoch. Use **scan midpoint timestamp** (OD-004) for a keyframe, deterministic ordering and source IDs (OD-005), and avoid crossing paused/reset simulated-clock epochs. A wall-time/system uptime tick is not an acquisition-time substitute for the 2 s rule.
+
+#### Deterministic eligibility versus factor admission
+
+1. For each eligible OD-005 scan with valid OD-004 midpoint pose, calculate `Delta=T_last_keyframe^-1*T_candidate` with the accepted SE(2) tangent convention; measure Euclidean translation and wrapped absolute yaw. Request a keyframe when **any** of distance `>=0.20 m`, yaw `>=5°`, **elapsed >=2 s with meaningful motion**, or independently justified rising prediction uncertainty triggers. Require **elapsed >=0.2 s** since the last keyframe for normal admission. If the floor blocks a threshold request, log **DEFERRED_MIN_INTERVAL** and re-evaluate subsequent eligible scans rather than silently violating it. Initial/root keyframe and OD-010 anchor events are explicit exceptions.
+2. **Meaningful motion** for the elapsed-time trigger must be established by verified translation/rotation or the OD-006 predictor over the period, with configurable floor and source quality. Remaining stationary for hours **does not** create a new keyframe at every 2 s. If bias calibration benefits from stationary data, OD-006 may use **raw IMU** without adding pose graph nodes.
+3. Evaluate OD-006 prediction covariance/innovation and OD-008 LiDAR geometry support/overlap/rank/quality. Elevated uncertainty may request **earlier bounded pose sampling**, **but cannot turn a rank-deficient scan into reliable LiDAR evidence**. If uncertainty is high and new geometry is uninformative, keep tracking/odometry continuity and trigger OD-009 recovery/OD-022 degraded state instead of making many empty/unconstrained keyframes. Resource-admission limits and deduplication prevent runaway graph growth.
+4. **Keyframe node admission and LiDAR factor admission are distinct**: a keyframe may be needed to preserve a continuous fused OD-006 relative-motion chain or submap anchor even when its OD-008 LiDAR match fails; mark pose/quality status and admit **no independent LiDAR factor** until geometry, rank and shared-evidence policy pass. Conversely, accepting a scan for **OD-010 map insertion** does **not** necessarily create a keyframe. Never treat a keyframe-selection threshold as proof of measurement quality.
+5. Build **one fused OD-006 wheel/gyro relative-motion factor per successive keyframe interval** using exactly the original timestamped source samples spanning that interval, with calibrated bias/uncertainty, freshness and overlapping-source provenance; no duplicate factors when an earlier candidate was deferred. Preserve OD-013's one-primary-LiDAR-factor-per-encounter, self-match prohibition, and shared A/B submap membership.
+6. At each OD-010 new-submap event **after its own 90 accepted insertions**, find a stable keyframe at or near the boundary (create a special **ANCHOR** at the valid event timestamp if necessary), initialize `S_j` from the local builder's anchor frame and retain association. An anchor keyframe is **not** a second local LiDAR measurement; split/refactor motion intervals without duplicating raw wheel/gyro likelihood if a forced anchor falls between existing pose nodes. Report any minimum-interval override. **Submap spawn/freeze counters remain completely independent** of graph node count; a keyframe's scan may belong to A and B, but overlap is not evidence for two independent local factors.
+7. Apply the same deterministic, documented selection policy during OD-014 raw replay, or record a **new versioned keyframe selection** when trajectory/quality changes alter thresholds. Rebuild affected relative odom intervals, scan/anchor/submap associations and OD-013 factors using original source IDs; never append duplicates from the previous generation.
+
+#### Sparse optional offline yaw-bias knots (future extension, NOT initial graph)
+
+Keep `b_g(t)` in OD-006's local wheel/gyro integrator initially; GTSAM graph variables are only `X_k, S_j`. The optional future OD-014 offline model introduces **time-indexed scalar yaw gyro-bias knots** `b_j` on one acquisition clock epoch, initially separated **5–10 s** and adapted only to **measured drift, temperature, and identifiable information**. The assumed bias random walk is:
+
+~~~text
+b_(j+1) = b_j + w_j
+w_j ~ N(0, q_b * Delta_t_j)
+Var(w_j) = q_b * Delta_t_j
+q_b >= 0, units (rad/s)^2 / s; Delta_t_j measured in seconds
+~~~
+
+- Bias-knot spacing is **independent of the approximately 10 Hz LiDAR scan rate** and graph keyframe density. The 5–10 s window is a tunable first experiment, not a validated bias drift timescale. If sensors are stationary, OD-006 may calibrate bias without any keyframe or knot. Add knots only for identifiable drift/temperature changes, not to chase map-fit noise.
+- Any optional knot must be correctly **coupled to the yaw-motion measurement prediction and its covariance/cross-correlation**, rather than adding a random-walk prior on unused independent `b_j` variables. Develop a **planar wheel+gyro bias-aware relative-motion factor** (or equivalent joint model) with tested Jacobians and interval integration, source provenance and bias interpolation/hold policy. A GTSAM 3D IMU-preintegration API is **not automatically an appropriate drop-in** for this planar encoder+gyro model.
+- **No double-counting:** If a knot-conditioned joint odometry factor replaces the initial bias-corrected fused odometry constraint, remove/supersede the original factor for the corresponding interval. Re-deskew and selectively rebuild affected OD-010 local maps through OD-014 if the changed bias modifies beam geometry, and use OD-008 calibration/OD-013 correlated-factor gates. Do **not** add separate yaw-bias corrections next to an already bias-corrected fused motion factor and treat them as independent.
+- An unobservable bias (e.g. wheel slip, straight corridor with poor yaw geometry, clock uncertainty or absence of sufficiently independent stationary/revisit evidence) must remain **fixed or regularized to genuinely measured prior uncertainty**; do not introduce unconstrained knots or claim low posterior covariance. Validate against **held-out independent yaw/motion truth**, not only reduced training scan-to-map residual.
+- Persist source time/epoch, calibrated bias/uncertainty, knot spacing and timestamps, random-walk `q_b`, affected raw gyro sample intervals, factor revisions and model-version IDs in OD-012 future-checkpoint/schema extension. OD-001 clock jumps/epochs never share a single unqualified `Delta_t`.
+
+#### Architecture, tests and consequences
+
+~~~text
+OD-005 scans + OD-004 midpoint / OD-006 prediction
+       -> native KeyframeSelector: motion or meaningful moving-time threshold
+       -> min-interval + uncertainty/quality/node-budget gates
+           |                          |
+      X_k admitted              no keyframe; keep odom continuity
+           |
+    OD-013 one fused relative odom factor since previous keyframe
+           |
+     OD-008 LiDAR factor?    [YES geometry / NO unsupported]
+           |
+    OD-010 independent 90/180 active-submap boundary
+           -> ensure anchor association; S_j independent Pose2
+           |
+     batch OD-013 graph initially: X_k and S_j only
+           |
+    optional OD-014 offline experiment: sparse b_j (5–10 s)
+           -> bias-aware interval factors + selective re-deskew/remap
+~~~
+
+Native C++20 `KeyframeSelector`, `KeyframePolicy`, `KeyframeDecision`, `SubmapAnchorAssociation` and optional `BiasKnotPlan` inputs/outputs depend only on timestamped SE(2), covariance/OD-008 diagnostics, source/scan IDs and revisions, **not on ROS/GTSAM/Ceres or individual sensor driver APIs**. The backend privately creates GTSAM Pose2 variables and factor objects; clock and raw motion uncertainty stay explicit.
+
+**Required Docker Catch2/CTest and benchmark B23:**
+
+1. Exact comparisons at **0.20 m**, **5°**, **2.0 s while moving**, **0.2 s min interval** including below/equal/above, yaw wrap, acquisition timestamp discontinuity and deterministic ties.
+2. Stationary/repetitive observations cause **no 2 s keyframe flood**, while small but meaningful motion gets a bounded elapsed-time keyframe. Bias calibration can continue without graph pose nodes.
+3. High uncertainty with no observable LiDAR info triggers OD-009 degradation/recovery **not a chain of artificial LiDAR factors or unbounded nodes**. High uncertainty plus informative geometry may request keyframes within resource caps; source and reason logged.
+4. Compare OD-010 submap insertion 90/180 counts **unchanged** when keyframe thresholds vary. At new submap boundary a valid anchor is associated/created; if within 0.2 s mark explicit exception and no duplicated fused factor. Both A/B memberships retained, one primary local LiDAR factor.
+5. One fused wheel/gyro motion factor across actual successive keyframe intervals, even with deferred/missed scans, correct covariance/source ID nonoverlap; rejected LiDAR geometry does not enter graph.
+6. Optional `b_j` 5/10 s random walk: `Var(w)=q_b*Delta_t` scaling, bias interpolation, random-walk factor Jacobians, temperature/drift cases, unobservable bias held fixed. After replacing initial odom with bias-aware factors no duplicate interval evidence.
+7. OD-014 reselected keyframes and changed bias timing rebuild affected factor/scan provenance with deterministic replay and selective map updates; OD-012 localization map/optional future checkpoint serialization preserves model revision.
+8. Metrics: graph node/factor density, motion/loop/ATE/RPE and covariance truth, held-out calibration/observability, CPU/RAM and batch/iSAM2 prospective budget across synthetic apartment/warehouse and Pi 5; no GitHub Actions.
+
+**Consequences:** OD-015 fixes **motion-based keyframe defaults and independent submap anchors**, uncertainty-gated factor admission and **zero initial graph bias knots**; sparse 5–10 s bias knots and random-walk coupling are an **optional offline future extension**, not an instruction to add new initial GTSAM variables. Numerical thresholds/bias dynamics and benefits remain unmeasured; OD-016/017/018/019 still control execution layout, target APIs, loop retrieval and incremental compute budgets. **Cartographer's motion filter is a related design reference, not a claim that its scan-insertion filter is our graph keyframe policy.**
+
+**Reference:** [Cartographer 2D motion-filter configuration](https://github.com/cartographer-project/cartographer/blob/master/configuration_files/trajectory_builder_2d.lua), [Cartographer motion-filter source](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/internal/motion_filter.cc).
 
 ### OD-018 — Loop closure retrieval, verification and rejection
 
@@ -1350,6 +1438,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-014 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-015 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
