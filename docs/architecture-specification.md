@@ -76,7 +76,7 @@ LD19 UART      MPU6050        wheel encoders / steering
 | `slam_storage` | **Yes: `slam::storage`** | OD-012 versioned map bundle, recording and deterministic replay APIs (OD-023/024) |
 | `slam_frontend` | **No** | OD-004/005/006 trajectory/scan/deskew, OD-015 keyframes, OD-018 spatial/signature retrieval, OD-009 BnB/quality and OD-014 offline orchestration |
 | `slam_match_ceres` | **No** | OD-007 bilinear EDT Ceres optimizer and private OD-008 Jacobian extraction, native quality output |
-| `slam_graph_gtsam` | **No** | OD-013 graph and OD-018 provenance-gated loop factors, optional incremental implementation |
+| `slam_graph_gtsam` | **No** | OD-013 offline keyframe/submap batch, OD-018 verified loops and OD-019 sparse global submap iSAM2; conditional local fixed-lag |
 | `slam_platform_linux` | **No** | Linux sensor/Pico acquisition adapters, OD-002/003 clock synchronization, OD-016 `SOCK_SEQPACKET` IPC, runtime process/scheduler helpers |
 
 **The three native host executable targets** are `slam_acquisitiond` (platform/core), `slam_recorderd` (storage/platform), and `slam_localizerd` (engine/mapping/platform with private backend composition). They are thin `cxxopts` CLIs with independent startup/shutdown, versioned IPC and status reporting. **Web Lab remains the independent fourth OD-016 runtime process but is built separately**; Pico firmware is a separate RP2040/Pico SDK cross-compile. No default fourth/fifth host executable, forced Pico SDK, ROS 2, JavaScript/Web Lab build or external hardware requirement.
@@ -819,7 +819,7 @@ OD-018 spatial/signature candidates -> OD-009 BnB ------┘ |      |
 
 The **native `PoseGraphModel` / `GraphFactorSpec` / `EvidenceProvenance` / `GraphFactorAdmission` / `GraphOptimizationResult`** types (illustrative) must use native SE(2), stable typed IDs, calibrated uncertainties or observable subspaces, scan membership, OD-011 map snapshot/source hash, raw motion sample interval, uncertainty calibration revision, correlation/dedup groups and accept/reject diagnostics. **No `gtsam::`/`ceres::`/ROS/vendor types in domain headers**. A private backend translates portable records to GTSAM `Pose2`/factor graph, and OD-012 serializes portable constraints—not native GTSAM objects. Keep backend construction out of acquisition and sensor adapters.
 
-**Batch GTSAM first:** Validate graph error/linearizations, gauge, analytic versus numerical factor Jacobians, synthetic exact truth, robust loop rejection, and covariance consistency on independent held-out trajectories. Batch offline optimization runs on bounded asynchronous work outside capture/recording and local OD-006 prediction. Add iSAM2 incrementality only when OD-019 budgets and a measurable benefit justify it; retain the same domain topology/provenance. OD-014 offline re-deskew/remapping produces a **new versioned authoritative map**, not silent edits of frozen raster cells.
+**Batch GTSAM first:** Validate graph error/linearizations, gauge, analytic versus numerical factor Jacobians, synthetic exact truth, robust loop rejection, and covariance consistency on independent held-out trajectories. Batch offline optimization runs on bounded asynchronous work outside capture/recording and local OD-006 prediction. **Accepted OD-019** adds an initial sparse global **submap-only** iSAM2 graph for online use; a second GTSAM local fixed-lag smoother remains conditional on measured benefit and preserves OD-013 original provenance. OD-014 offline re-deskew/remapping produces a **new versioned authoritative map**, not silent edits of frozen raster cells.
 
 **Publication:** Publish immutable graph-pose revisions after numerical sanity/loop validation. Changing `S_j` changes global map/submap placement and `T_map_odom`, **not** a frozen OD-010 occupancy grid or its OD-011 local EDT/correlation cache. `T_odom_base(t)` remains continuous; global map correction may move and must carry time/freshness/quality (OD-022). Never let optimization block sensor ingestion or raw MCAP recording.
 
@@ -870,6 +870,53 @@ query scan/keyframe OR newly frozen submap
 **Portable SDK/internal boundary:** Declare native `LoopCandidateRetriever`, `LoopVerifier`, `LoopHypothesis` and `LoopDecision` interfaces without Ceres/GTSAM/ROS/Linux IPC classes. Implement retrieval/2D signature index and orchestrator within internal `slam_frontend`, refinement in `slam_match_ceres`, and graph conversion in `slam_graph_gtsam`, respecting OD-017's eight-library target inventory.
 
 **Required B26:** Docker/Catch2 synthetic apartment true revisits with drift, warehouse repetitive shelving false positives, OD-005 partial scans, OD-010 A/B overlapping/self evidence, OD-009 branch-bound admissibility/completeness and cancellation, OD-007 wrong-prior independent geometric refinement, OD-008 rank/covariance calibration and multiple hypotheses, false graph loop rejection/rollback, 2D signature rotation/mask/source consistency, concurrent OD-011/013 revision changes and Pi 5 background CPU/p95/p99/localization latency. No GitHub Actions.
+
+### 7.3.2 Accepted OD-019 — Bounded online submap iSAM2 and optional correlation-preserving local smoother
+
+**Selected online topology, staged for low implementation risk:** **Stage I** retains OD-006's independent high-rate wheel/gyro motion estimator and adds **ONE persistent GTSAM iSAM2 submap-only global Pose2 graph** inside the OD-016 SLAM process, managed by private OD-017 `slam_graph_gtsam`. The global graph stores every historical OD-010 submap pose `S_j` plus **admitted, source-traceable summarized inter-submap information and OD-018 validated loops**. It does **not** contain an unbounded stream of high-rate/keyframe pose variables and does **not** initially run a second GTSAM fixed-lag smoother or add gyro-bias knots. **Stage II (conditional)** adds a bounded local keyframe + active/recent submap GTSAM fixed-lag window only after held-out accuracy, uncertainty or node-complexity measurements justify it. The accepted OD-013 **full keyframe+submap batch graph** remains the offline reconstruction and evaluation authority, not an always-running second optimizer.
+
+~~~text
+OD-005 scan -> OD-006 continuous local motion (no GTSAM bias nodes)
+     |                    |
+ OD-007/008 frontend    OD-010 active/frozen submaps + OD-015 keyframes
+     |                    |
+ OD-013 source/correlation ledger and verified OD-018 loop evidence
+                          |
+                source-traceable submap summaries
+                          |
+       Stage I: persistent global submap Pose2 iSAM2
+             historical S_j never arbitrarily pruned
+                          |
+         immutable graph revision -> map->odom correction
+                          |
+    OPTIONAL Stage II: separate bounded local fixed-lag GTSAM
+      X_k + active/recent S_j, retained joint separators
+         -> conditional nonduplicate summary transfer
+                          |
+       offline OD-013 full keyframe/submap batch rebuild
+       from OD-012/014 original sources, not old summaries
+~~~
+
+**Stage I factor policy:** An anchor association or two overlapping OD-010 raster memberships is **not** independent submap-to-submap evidence. Compute a submap-level relative factor only from defensible **jointly condensed/independently verified** OD-006/007/008/013 source data, with timestamps, source scan/motion IDs, OD-011 occupancy version, OD-008 rank/calibrated noise and OD-013 correlation group. Do not synthesize several independently weighted edges by mixing fused odometry, deskewed scan matches and adjacent A/B map overlap. If correct summary correlations or calibrated uncertainty cannot be represented, **defer the factor** and preserve the raw source history rather than inventing certainty. Global iSAM2 never adds an original full keyframe factor **and** its summary as independent evidence.
+
+**Stage II local window (not initial):** Initially propose **30–60 s** time horizon, about **150–200 keyframes**, two active submaps plus a recently frozen boundary. Real retention depends on the OD-010 90/180 insertion lifecycle and OD-015 motion keyframes. Maintain a valid local gauge, boundary references and sources; do not merely drop an old `X_k` with active factors or force the initial OD-006 bias estimator into an online GTSAM bias graph. Keyframe expiry requires numerically valid **joint marginalization** with both Schur information and vector terms:
+
+~~~text
+H = [ H_mm   H_mb ]
+    [ H_bm   H_bb ]
+H_sep = H_bb - H_bm * solve(H_mm, H_mb)
+g_sep = g_b - H_bm * solve(H_mm, g_m)
+~~~
+
+Here `m` is eliminated local keyframe state and `b` all retained separator variables. Avoid explicitly forming `H_mm^-1`; use verified gauge/rank-aware factorization. The resulting joint separator factor may be **dense and correlated across multiple submap poses**. **Do not replace** it with artificially independent pairwise submap edges, floor its unknown nullspace into certainty or discard the RHS/linearization anchor. Mark source factor IDs as **superseded** when transferring a summary, and preserve a conditional message/ownership protocol so the local and global graphs **do not jointly count the same measurement again**. A nonleaf marginalization unsupported by the pinned GTSAM solver must be implemented through an appropriate tested elimination/fixed-lag path, not a blind `removeFactorIndices` operation. Nonlinear marginalization depends on linearization points and must be reproducible from raw factors after major loops.
+
+**Graph growth:** OD-010 ~90 accepted scans/new submap means approximately **400 new submaps per hour at an assumed sustained 10 accepted scans/s**; this is a workload projection, not a verified dataset rate. Retain **all historic global submap variables** for OD-018 loops (even as the persistent global graph grows). Remove only duplicate or proven-invalid loops, or factors **properly superseded** by a validated summary; no arbitrary constraint pruning to meet a size limit. Emit `RESOURCE_LIMIT`/degraded status on exhausted memory instead of inventing a statistically invalid shortcut. Regional archiving/partitioning is a future measured option.
+
+**Incremental scheduling:** OD-016 maintains a **lower-priority, bounded and coalescing graph job queue**, batch-admitting OD-013 provenance-checked submap/loop factors **on events**, not per beam. Targets: **global ordinary completed iSAM2 update p95 <50 ms**, **local smoother completed update p95 <20 ms only if Stage II exists**; a large loop may exceed these targets on a separate background job. Do not interrupt an active `ISAM2::update` at an arbitrary deadline, mutate solver state concurrently or publish a half-updated Bayes tree. Budget/timeout controls govern **admission before a job, batching, snapshots, worker queue and later scheduling**, with cancellation only between safe operations or on disposable candidate copies. Tune relinearization skip/threshold, ordering/re-elimination, factor-slot reuse and cleanup according to Pi 5 profiling. Graph update results carry exact source IDs, graph/map revision, lag, factor count, elapsed time/CPU/RSS and accept/reject status; stale outputs must be revalidated before OD-012/022 atomic publication. Local `T_odom_base(t)` stays continuous while global `T_map_odom`/`S_j` change.
+
+**Offline cleanup / batch rebuild:** Persist **original accepted OD-013 keyframe-level factors, fused-motion samples, scans, memberships, loop provenance, calibration and source revisions**, not just compressed online edges. OD-012 map bundles contain authoritative maps/graph metadata, whereas **OD-014 full beam re-deskew still needs immutable raw MCAP acquisition**. Reconstruct a fresh full batch `X_k/S_j` graph offline from non-superseded source evidence (not old approximated summary factors), optionally re-deskew/remap selectively under OD-014, remove verified-invalid loops, optimize and validate held-out OD-008 covariance/graph consistency. Publish a **new coherent immutable OD-012 generation** only after verifying concurrent live-update revision and keeping prior accepted state for rollback. Global gauge and historical submap variable IDs must remain stable; no on-device acquisition or localizer wait for cleanup.
+
+**Domain and test boundaries:** Native `GlobalSubmapGraph`, `LocalWindowPolicy`, `SeparatorInformation`, `SubmapSummaryFactor`, `GraphUpdateBudget` and `GraphReconstructionPlan` carry portable SE(2), factor provenance/linearization version, information cross terms, and update results without GTSAM, ROS, Ceres, Linux or IPC types. `slam_graph_gtsam` alone owns iSAM2 or optional fixed-lag implementation; no ninth OD-017 library or fifth OD-016 process. **B27**: Stage I sole global submap graph/continuous OD-006, Stage II optional 30/60 s/150–200 keyframe controlled Schur marginalization vs exact linear batch reference, true loop after large linearization changes, no duplicated information, factor removal vs marginalization, multi-hour submap growth, 20/50 ms completed-update p95 load tests, stale graph snapshots, offline batch replacement/rollback and Pi worker noninterference.
 
 ### 7.4 Accepted OD-014 — Bounded selective offline replay and reconstruction
 
