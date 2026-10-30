@@ -42,7 +42,7 @@ The initial version will not provide 3D SLAM, vision-based SLAM, learned feature
 | FR-05 | Correct LiDAR scan motion distortion using point acquisition times and a time-indexed SE(2) trajectory. |
 | FR-06 | Match deskewed scans against occupancy-grid submaps using a Ceres-based geometric frontend. |
 | FR-07 | Build overlapping local occupancy-grid submaps and generate quality-checked LiDAR constraints. |
-| FR-08 | Fuse independent LiDAR, wheel, and gyroscope information using a GTSAM factor graph, including gyro-bias evolution. |
+| FR-08 | Fuse LiDAR geometry and OD-006 wheel/gyro motion in OD-013 keyframe/submap GTSAM Pose2 graph; gyro bias remains in the local estimator initially, with OD-015 sparse offline graph bias knots optional after validation. |
 | FR-09 | Support offline global mapping, loop closure, batch optimization, and refined map export. |
 | FR-10 | Support low-latency localization against a previously built, read-only map. |
 | FR-11 | Detect uncertain/lost localization and support global initialization or relocalization. |
@@ -600,32 +600,39 @@ Every pose output should carry a reference frame, source timestamp, covariance/q
 - **Platforms:** Linux ARM64 and x86-64 with portable core algorithms.
 - **Testing:** Unit tests, synthetic-sensor tests, deterministic dataset replay, portable map/checkpoint B20 integrity/fault tests and local benchmark executable.
 
-Suggested source layout:
+**Accepted OD-017 initial source/build layout** (eight libraries, three host daemons, and independently built Web Lab/Pico; tests/optional integrations excluded from target count):
 
 ~~~text
-include/fusion_slam/
+include/slam/
+  core/{time.hpp,geometry.hpp,sensor_data.hpp,trajectory.hpp,interfaces/}
+  mapping/{occupancy_grid.hpp,submap.hpp,map_snapshot.hpp}
+  engine/{slam_engine.hpp,configuration.hpp,diagnostics.hpp}
+  storage/{map_bundle.hpp,recording.hpp}
 src/
-  sensors/
-  time_sync/
-  calibration/
-  motion/
-  deskew/
-  mapping/
-  frontend_ceres/
-  backend_gtsam/
-  localization/
-  io/
+  core/             # slam_core -- SDK
+  mapping/          # slam_mapping -- SDK
+  engine/           # slam_engine -- SDK facade/private runtime
+  storage/          # slam_storage -- SDK
+  frontend/         # slam_frontend -- internal
+  match_ceres/       # slam_match_ceres -- internal
+  graph_gtsam/       # slam_graph_gtsam -- internal
+  platform_linux/   # slam_platform_linux -- internal
 apps/
-  recorder/
-  offline_mapper/
-  live_localizer/
-  online_slam/
-  replay_evaluator/
+  slam_acquisitiond/  # native host daemon
+  slam_recorderd/     # native host daemon
+  slam_localizerd/    # native host daemon
+  web_lab/            # separate application build, OD-016 fourth process
+firmware/pico/        # separately cross-compiled only when enabled
 tests/
+cmake/
 docs/
 ~~~
 
-Do not add automatic GitHub Actions triggers by default; prefer local tests and builds. If CI workflows are introduced, keep them manual (**workflow_dispatch**) unless explicitly requested otherwise.
+**Only four SDK libraries are installed/exported:** `slam_core` as `slam::core`, `slam_mapping` as `slam::mapping`, `slam_engine` as `slam::engine` and `slam_storage` as `slam::storage`. Remaining four libraries are implementation-private and not SDK targets. CMake uses ≥3.25, C++20 per-target features, isolated dependency/include visibility and an installed **versioned `FusionSLAMConfig.cmake` / `FusionSLAMConfigVersion.cmake` / `FusionSLAMTargets.cmake`**. The installed header/API namespace is `include/slam/{core,mapping,engine,storage}/`. Old provisional `include/fusion_slam`, `fusion_slam_core`, many-module layout and separate offline mapper host executable suggestions are superseded by this accepted initial target plan; future tools may be separately selectable without changing the fixed baseline.
+
+**Dependency requirements:** `slam_core` has no ROS, Ceres, GTSAM, Linux, native IPC or driver dependencies; `slam_mapping` may link core only; `slam_storage` uses portable data types and private serializer codecs; `slam_engine`'s public API is portable but private runtime composition may use `slam_frontend`, `slam_match_ceres` and `slam_graph_gtsam`. `slam_platform_linux` is the outer acquisition/IPC adapter for host apps only, not portable SDK/algorithm libraries. Public installed headers cannot include solver types, `sys/socket.h`, ROS/Pico headers, IPC worker scheduling or private cache implementation; Ceres and GTSAM remain behind their own targets. Optional ROS2 package depends on installed SDK only.
+
+**SDK install correctness:** Ensure actual `PUBLIC`/`PRIVATE`/`INTERFACE` CMake link closure is acyclic. A static engine `PRIVATE` dependency on internal static libraries can leak `$<LINK_ONLY:...>` into installed target exports; use a shared façade/pImpl or other demonstrably self-contained package model. Install/private-link required runtime solver libraries as needed without claiming binary runtime independence. Test a **clean out-of-tree consumer** with `find_package(FusionSLAM CONFIG REQUIRED)` and all four `slam::*` imports; require no private headers/targets or Ceres/GTSAM/ROS at consumer compile/configure. `BUILD_TESTING=OFF` excludes Catch2; cxxopts limited to three daemon CLIs; Web Lab and Pico built independently. **B25** measures install/consumer/test/runtime correctness on x86-64 and ARM64/Pi 5. Keep GitHub Actions manual-only if any are added; no Actions required.
 
 ### 10.1 Accepted OD-012 — Platform-independent native map bundle and checkpoint format
 
