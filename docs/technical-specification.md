@@ -64,22 +64,25 @@ The initial version will not provide 3D SLAM, vision-based SLAM, learned feature
 
 The MPU6050 is a six-axis accelerometer/gyroscope, **not an absolute yaw reference**. Gyro integration drifts; LiDAR geometry and independent encoder yaw measurements help correct it. Avoid double integration of accelerometer data for planar translation in the initial implementation.
 
-### 3.1 LD19 packet requirements
+### 3.1 LD19 packet and per-beam timing requirements (accepted OD-003)
 
-The LD19 communicates over approximately 230400-baud UART. A nominal packet has **47 bytes**: header (1), version/count (1), speed (2), start angle (2), 12 samples of distance and intensity (36), end angle (2), packet timestamp (2), and CRC (1). The device timestamp has millisecond units and wraps at approximately **30,000 ms**.
+The LD19 uses ~230400-baud UART packets of **47 bytes** (header, version/count, speed, start angle, 12 range/intensity samples, end angle, 16-bit timestamp, CRC). The documented **speed is degrees/s**, angles **0.01°**, ranges **millimetres**, and device packet timestamp **milliseconds with a nominal 30-second rollover**. The manual describes a **packet timestamp** but does not establish the exact physical acquisition event to which it refers.
 
-The parser must:
+**The LD19 acquisition adapter MUST:**
 
-- Validate the full frame and CRC before accepting points; resynchronize after corruption.
-- Preserve serial receive time, device packet timestamp, scan angle, motor speed, range, and intensity.
-- Unwrap device timestamps and angles across rollover.
-- Estimate per-point angles by interpolating unwrapped packet start/end angles.
-- Estimate per-point acquisition times from packet timing, angular progression, and observed motor speed.
-- Mark interpolated times as estimates: the exact packet timestamp-to-beam reference and communication latency must be characterized experimentally.
-- Preserve acquisition order even if a downstream interface exposes an angle-sorted scan.
-- Map the device's angle convention into canonical CCW-positive robot/LiDAR coordinates only after validating mounting and sign conventions.
+- Validate full frames and CRC, resynchronize after corruption, track missing/suspicious packets, and preserve raw bytes, receive timestamp, device tick, angle, speed, range and intensity.
+- Unwrap start/end packet angles across 0°/360°, verify the device's rotation direction, and reconstruct per-point angles using the documented packet interpolation. Convert to native REP-103 CCW-positive laser coordinates only after the sensor sign convention is validated.
+- Compute **relative per-beam times** from unwrapped start/end angles and measured angular speed; guard against near-zero speed, implausible angle/speed disagreement, nonuniform motor motion and missing data. The assumed reference angle/event for a packet timestamp **MUST NOT** silently default to the first or last beam.
+- Unwrap the device timestamp's **~30-second millisecond counter**. Distinguish normal wraps from out-of-order packets, bad frames and restarts; after sufficiently long gaps where the number of wraps is ambiguous, begin a new device epoch or invalidate source-time alignment.
+- Record a **Pi-monotonic** UART reception timestamp and the exact host event it represents (byte/packet arrival vs driver read completion). Account for serial transmission duration and buffered I/O before comparing with the device clock.
+- Estimate a calibrated **LD19-to-Pi clock offset and drift** from multiple device-counter / host-reception observations, with fitting outlier rejection, residuals, validity interval, calibration revision, uncertainty, and reset/relock diagnostics.
+- **Explicitly preserve the one-way offset/delay ambiguity:** UART reception measurements alone cannot separate a constant source clock offset from a constant physical sensor/serial acquisition-to-arrival delay. The acquisition-to-packet reference offset MUST be **experimentally determined or conservatively bounded**, not advertised as exact from a regression.
+- Propagate timestamp granularity (1 ms device counter), rotation-speed/angle estimation, UART latency and jitter, drift, host scheduling, unknown acquisition delay and shared per-packet systematic uncertainty into quality-rated **signed 64-bit canonical nanosecond beam timestamps**.
+- Produce a **generic, ordered ROS-independent timed scan** with beam timestamps and quality indicators. Record both source and derived times so that improved offline clock calibration can re-run deskew without modifying the original raw packets. Do not timestamp an entire revolution as a single instantaneous scan.
 
-**Do not silently treat one scan's timestamp as the acquisition time of all beams.** A 10 Hz revolution spans roughly 100 ms, so motion distortion can be substantial.
+**Experimentally validate** (1) 30-second rollover, variable angular velocity, angle seams, missing frames and resets, (2) clock fit under offset/drift/jitter/quantization, and (3) the physical beam-to-reported-timestamp delay using controlled motion, optional external timing references, and gyro/scan consistency. Until the physical delay is validated or bounded, expose timing as *estimated/uncertain*. The scan reference time used by the deskewer remains a distinct **OD-004** choice.
+
+This adapter's implementation and its LD19-specific timing calibration belong at the **sensor acquisition boundary**. Neither the portable C++20 SLAM core nor the optional ROS 2 interface may contain LD19-specific packet timing calculations. See [accepted OD-003](open-design-choices.md) and [Architecture §4.1](architecture-specification.md).
 
 ## 4. Coordinates, clocks, and calibration
 
@@ -105,13 +108,13 @@ All rigid transforms must have documented source/target frame names and multipli
 
 Architect an optional **Raspberry Pi Pico firmware backend** for later hardware-near acquisition of IMU and wheel-encoder events. The Pico uses **custom Pico SDK C/C++ firmware**, **not micro-ROS**, DDS or ROS message serialization. A small versioned, checksummed native framing protocol (initial transport candidate USB CDC, UART optional) carries source timestamps, sample data, sequence numbers, status and Pico boot/session identity. The Pi estimates a Pico-to-host offset and drift from repeated bidirectional timestamp exchanges (host t1/t4, Pico t2/t3), including latency/asymmetry and mapping uncertainty, and converts source time into the accepted canonical signed 64-bit nanosecond timeline. On Pico reboot/reconnect, invalidate the previous clock mapping and start a new epoch.
 
-The RP2040 Pico hardware timer provides 64-bit **microseconds since boot**. Converting its ticks to nanoseconds does **not** create nanosecond precision. Pico **PIO** may improve deterministic encoder edge counting or event capture, but it does not automatically produce samples stamped with the hardware timer; the capture path must be designed, measured and compared with a simpler IRQ/timer implementation before selecting PIO. The LD19 may remain on Pi UART; its packet-to-beam timestamp model is a separate problem (OD-003). Keep Pico physical time independent of ROS 2 `/clock`, even during simulation. See [Architecture `3.5](architecture-specification.md) for source/timestamp interfaces.
+The RP2040 Pico hardware timer provides 64-bit **microseconds since boot**. Converting its ticks to nanoseconds does **not** create nanosecond precision. Pico **PIO** may improve deterministic encoder edge counting or event capture, but it does not automatically produce samples stamped with the hardware timer; the capture path must be designed, measured and compared with a simpler IRQ/timer implementation before selecting PIO. The LD19 may remain on Pi UART. Its **accepted angle/speed and source-clock reconstruction method (OD-003)** stays in the LD19 adapter; the physical packet-to-beam delay requires experimental calibration. Keep Pico physical time independent of ROS 2 `/clock`, even during simulation. See [Architecture `3.5](architecture-specification.md) for source/timestamp interfaces.
 
 Maintain per-source clock alignment: host receipt and hardware/sample time where available, clock offset, drift, uncertainty, rollover, fit version, validity interval and acquisition event definition. Do not compare unconverted timestamps from different clock domains or epochs.
 
 **ROS 2 simulation compatibility:** the ROS-independent core exposes a clock-injection/time-event interface capable of consuming a controlled simulated nanosecond timeline. An optional ROS 2 adapter honors `use_sim_time` and `/clock` (`rosgraph_msgs/msg/Clock`), converting to/from ROS message timestamps exactly using integer arithmetic and checking ranges. When simulation time is uninitialized, do not publish a valid timed estimate. Pauses must not advance estimator integration; backward jumps, replay seeks, source changes and other discontinuities invalidate state/trajectory interpolation across the boundary and trigger reset or compatible checkpoint restoration. Use the independent host steady clock for CPU deadlines rather than `/clock`. A simulated timestamp need not be monotonic across epochs.
 
-Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples. **OD-002 selects the staged acquisition architecture, not its final measured accuracy or fit parameters**; LD19 beam interpolation (OD-003) and replay checkpoint/jump policy (OD-024) remain open.
+Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples. **OD-002 selects the staged acquisition architecture** and **OD-003 selects the LD19 beam-time reconstruction method**, not their final measured precision or calibration constants. Scan reference/interpolation (OD-004) and replay checkpoint/jump policy (OD-024) remain open.
 
 Reference: [ROS 2 Clock and Time design](https://design.ros2.org/articles/clock_and_time.html).
 
@@ -380,7 +383,7 @@ Measure end-to-end **capture-to-pose latency**, not only Ceres solve time. Use b
 
 ### 12.1 Unit and integration tests
 
-- LD19 frame parsing, CRC errors, truncated packets, 30-second timestamp rollover, angle wrapping, and serial resynchronization.
+- LD19 frame parsing, CRC errors, truncated packets, 30-second timestamp rollover, angle/speed beam-time reconstruction, device-to-host offset/drift, physical-delay calibration/uncertainty, angle wrapping, and serial resynchronization.
 - Clock offset/drift estimation and timing uncertainty; missing or late IMU/encoder samples.
 - SE(2) composition/inverse, curvature integration, Jacobians, and laser/IMU extrinsics.
 - Synthetic moving-wall scenario demonstrating rotational and translational deskew.
@@ -413,7 +416,7 @@ Numerical accuracy thresholds should be set only after obtaining repeatable hard
 
 | Issue | Risk / planned response |
 | --- | --- |
-| LD19 beam timing not fully hardware-synchronized | Estimate, calibrate, and track timestamp uncertainty; do not claim sub-ms precision without evidence. |
+| LD19 beam timing not fully hardware-synchronized | Accepted OD-003 angle/speed reconstruction and affine clock alignment; experimentally determine or bound physical packet timestamp delay. Do not claim sub-ms precision without evidence. |
 | MPU6050 gyro bias and temperature drift | Stationary startup calibration, graph bias estimation, noise characterization, optional temperature model. |
 | Acceleration and wheel slip | Conservative wheel noise, gyro disagreement monitoring, robust LiDAR constraints. |
 | Corridors / repetitive geometry | Degeneracy-aware scan matching, multiple pose hypotheses in recovery, properly scaled covariances. |
