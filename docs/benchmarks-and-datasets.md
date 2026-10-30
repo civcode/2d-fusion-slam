@@ -3,7 +3,7 @@
 **Status:** Proposed / dataset candidates not yet provisioned  
 **Version:** 0.1  
 **Date:** 2026-10-30  
-**Related:** [Technical Specification](technical-specification.md) · [Implementation Contract](implementation-contract.md) (currently proposed in PR #1)
+**Related:** [Technical Specification](technical-specification.md) · [Implementation Contract](https://github.com/civcode/2d-fusion-slam/blob/docs/implementation-contract/docs/implementation-contract.md) (proposed in [PR #1](https://github.com/civcode/2d-fusion-slam/pull/1))
 
 > **Purpose:** Establish a small, reproducible benchmark suite from the beginning of the project, covering 2D LiDAR, yaw-rate IMU, wheel odometry, scan deskew, offline mapping, and known-map live localization. The suite MUST distinguish exact simulated ground truth, independent measured ground truth, LiDAR-derived reference trajectories, and sequences with no ground truth.
 
