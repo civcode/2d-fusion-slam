@@ -74,9 +74,9 @@ LD19 UART      MPU6050        wheel encoders / steering
 | `slam_mapping` | **Yes: `slam::mapping`** | OD-010 authoritative occupancy/known mask, local submaps, OD-011 immutable map snapshots and portable maps |
 | `slam_engine` | **Yes: `slam::engine`** | High-level mapping/localization session/config/status API, private frontend/matching/graph orchestration |
 | `slam_storage` | **Yes: `slam::storage`** | OD-012 versioned map bundle, recording and deterministic replay APIs (OD-023/024) |
-| `slam_frontend` | **No** | OD-004/005/006 trajectory/scan/deskew, keyframe selector OD-015, OD-009 correlation search, native match-quality and OD-014 offline orchestration |
+| `slam_frontend` | **No** | OD-004/005/006 trajectory/scan/deskew, OD-015 keyframes, OD-018 spatial/signature retrieval, OD-009 BnB/quality and OD-014 offline orchestration |
 | `slam_match_ceres` | **No** | OD-007 bilinear EDT Ceres optimizer and private OD-008 Jacobian extraction, native quality output |
-| `slam_graph_gtsam` | **No** | OD-013 keyframe/submap batch graph and loop/factor backend, optional incremental implementation |
+| `slam_graph_gtsam` | **No** | OD-013 graph and OD-018 provenance-gated loop factors, optional incremental implementation |
 | `slam_platform_linux` | **No** | Linux sensor/Pico acquisition adapters, OD-002/003 clock synchronization, OD-016 `SOCK_SEQPACKET` IPC, runtime process/scheduler helpers |
 
 **The three native host executable targets** are `slam_acquisitiond` (platform/core), `slam_recorderd` (storage/platform), and `slam_localizerd` (engine/mapping/platform with private backend composition). They are thin `cxxopts` CLIs with independent startup/shutdown, versioned IPC and status reporting. **Web Lab remains the independent fourth OD-016 runtime process but is built separately**; Pico firmware is a separate RP2040/Pico SDK cross-compile. No default fourth/fifth host executable, forced Pico SDK, ROS 2, JavaScript/Web Lab build or external hardware requirement.
@@ -804,7 +804,7 @@ Independent GTSAM noise models on two factors **do not encode `Sigma_cross`**. P
 OD-006 fused wheel+gyro interval motion ───────┐
 OD-004/005 LiDAR -> OD-007 Ceres -> OD-008 ──┐ |
 OD-010 overlap membership -> OD-011 snapshots ├─> native GraphFactorAdmission
-OD-018 loop candidates -> OD-009 search ------┘ |      |
+OD-018 spatial/signature candidates -> OD-009 BnB ------┘ |      |
                                                 v      v
                                     native X_k, S_j, factors
                                     (IDs, sources, correlation groups)
@@ -824,6 +824,52 @@ The **native `PoseGraphModel` / `GraphFactorSpec` / `EvidenceProvenance` / `Grap
 **Publication:** Publish immutable graph-pose revisions after numerical sanity/loop validation. Changing `S_j` changes global map/submap placement and `T_map_odom`, **not** a frozen OD-010 occupancy grid or its OD-011 local EDT/correlation cache. `T_odom_base(t)` remains continuous; global map correction may move and must carry time/freshness/quality (OD-022). Never let optimization block sensor ingestion or raw MCAP recording.
 
 **Mandatory tests / B21:** Pose2 graph gauge and Jacobians, fused one-per-interval factor uniqueness, different submap anchors/gauge choices, overlap A/B 90 scan IDs and one primary local constraint, self-match and duplicate loop rejection, Ceres strong-prior posterior not reused as graph LiDAR, OD-008 rank-deficient admission, aggressive rotational deskew error correlation and held-out covariance inflation, wrong/repeated loops, graph pose revisions not touching local frozen hashes, Ceres/GTSAM/ROS-free domain compilation, and Pi CPU/RAM/backlog measurements. See [accepted OD-013](open-design-choices.md) and [B21](benchmarks-and-datasets.md).
+
+### 7.3.1 Accepted OD-018 — Frozen-submap retrieval and verified loop closure
+
+**Stage I (first implementation):** Use covariance-aware **spatial proximity retrieval against frozen OD-010 submaps**, OD-009 admissible multi-resolution **branch-and-bound (BnB)**, OD-007 **Ceres refinement**, and OD-008/013 factor acceptance. **Stage II:** Add **rotation-tolerant planar occupancy/known-mask signatures** for global retrieval among frozen submaps, once local loop closure is demonstrably reliable. **Individual keyframe scan descriptors are deferred.** This remains ROS independent and runs as a lower-priority, cancellable, bounded worker inside OD-016's SLAM process using OD-017's existing internal libraries, not a ninth CMake library or separate service.
+
+~~~text
+query scan/keyframe OR newly frozen submap
+            |                         |
+    pose + covariance              Stage II: rotation-tolerant
+    spatial search                 2D frozen occupancy signatures
+            \                         /
+             merge, exclude near/overlapping/self,
+              deduplicate top 3–5 distinct candidates
+                             |
+             pin OD-011 coherent frozen map,
+                EDT and score pyramid revisions
+                             |
+              OD-009 admissible multires BnB
+             (bounded / incomplete / top hypotheses)
+                             |
+                 OD-007 Ceres refinement
+                  same immutable map source
+                             |
+             OD-008 LiDAR-only residual/rank/
+                calibrated covariance validation
+                             |
+               OD-013 source/correlation/dedup
+                 + drift-aware graph consistency
+                      /             \
+               accept factor       reject with diagnostics
+                 into GTSAM         and no graph mutation
+~~~
+
+**Local spatial retrieval:** Query a versioned index of frozen submap bounds/poses using predicted query location and **covariance-aware search windows** bounded by OD-009 radius/angle and work limits. Enforce configurable time/trajectory separation to exclude trivial neighbors, refuse targets **containing the query scan**, and suppress adjacent overlapping submaps, repeated encounters and shared source-scan evidence. A graph-pose correction may require rebuilding the **global spatial index**, not the unchanged frozen local raster/EDT. Do not hard-reject a true loop solely because accumulated odometry drift makes the current global pose innovation large.
+
+**Stage II descriptors:** For each immutable frozen local occupancy grid, build a **2D** rotation-tolerant polar/geometry signature with explicit **observed/unknown** support; compare circular-angle shifts and record coverage and orientation hypotheses. A 3D height-derived Scan Context implementation is not a valid unchanged LD19 descriptor. Index only known frozen revisions; key descriptors by OD-011 local source/hash and configuration, so missing/corrupt/stale entries rebuild asynchronously. Updates to only global submap pose do **not** invalidate local descriptors. Compare newly frozen submaps with historical ones and inspect **both** scan-membership sets before treating a match of overlapping raster content as new evidence.
+
+**Candidate contract:** A portable `LoopHypothesis` contains stable query keyframe/scan or frozen submap ID, target frozen submap ID, encounter/correlation/source scan sets, retrieval mode and ranked score, OD-001 time/epoch, OD-011 pinned occupancy/EDT/pyramid and descriptor source revision/config hashes, graph/spatial-index revision, candidate covariance/window and budget state. Merge spatial and signature hits, deduplicate, and initially retain **top 3–5 distinct hypotheses**; do not create GTSAM evidence from candidate/descriptor scores alone. A worker result with stale map, membership or graph pose revision must be explicitly revalidated/rebased or rejected before graph publication.
+
+**Verification and admission order:** (1) temporal and OD-010 source-scan/self-match exclusion; (2) OD-009 BnB against the pinned, coherent score pyramid, with admissible bounds, search completeness and explicit `INCOMPLETE`/`BUDGET_EXHAUSTED` outcomes; (3) refine each plausible distinct hypothesis using OD-007 truncated unsigned EDT, bilinear and **per-beam Huber** on a compatible immutable snapshot. An incorrect odometry prior may be used only as a seed/controlled broad regularizer for distant-loop search: **do not publish the odometry-conditioned Ceres posterior as independent LiDAR graph evidence**. Obtain separately evaluated LiDAR-only or correctly conditioned geometric constraints in OD-008 supported directions. (4) OD-008 robust LiDAR-only residual/overlap/observability/rank/calibrated covariance, timing-quality and multi-hypothesis ambiguity gates; (5) OD-013 shared scan/membership, motion-conditioned deskew, repeated/overlap-correlated factor and innovation checks; (6) **drift-aware, provisionally optimized graph consistency**. A true large-loop correction can disagree with raw odometry and still pass with strong independent geometry/other observations. An ambiguous loop or one that distorts the established map/held-out consistency must be rejected/rolled back; robust GTSAM losses are **not** an alternative to verification.
+
+**Asynchronous work, status and provenance:** Execute against pinned immutable OD-011 map snapshots with bounded candidate count, memory, worker queue and **CPU time per invocation**, cancellation and lag/version checks. Initial **unmeasured Pi 5 targets**: spatial **1–5 ms**; descriptor lookup **5–20 ms** (Stage II); BnB **20–50 ms per candidate**; **top 3–5** candidates; **100–250 ms background batch** including refinement. Do not assume five 50 ms searches plus Ceres fit in 100 ms; enforce total budget, return incomplete status, or resume work later without blocking acquisition, recording, local odometry or local Ceres tracking. OD-021 will choose numeric queue capacities. Preserve retrieval/source map hashes, geometric scores, coarse completeness, Ceres convergence, OD-008 information rank/covariance, OD-013 factor group, drift innovation, acceptance or typed rejection reason, worker latency/CPU/memory and provisional graph result. When OD-014 remaps local geometry, invalidate all affected descriptors, candidate matches and loop factors using source-version dependencies; purely rigid global graph updates require only spatial-index/consistency refresh.
+
+**Portable SDK/internal boundary:** Declare native `LoopCandidateRetriever`, `LoopVerifier`, `LoopHypothesis` and `LoopDecision` interfaces without Ceres/GTSAM/ROS/Linux IPC classes. Implement retrieval/2D signature index and orchestrator within internal `slam_frontend`, refinement in `slam_match_ceres`, and graph conversion in `slam_graph_gtsam`, respecting OD-017's eight-library target inventory.
+
+**Required B26:** Docker/Catch2 synthetic apartment true revisits with drift, warehouse repetitive shelving false positives, OD-005 partial scans, OD-010 A/B overlapping/self evidence, OD-009 branch-bound admissibility/completeness and cancellation, OD-007 wrong-prior independent geometric refinement, OD-008 rank/covariance calibration and multiple hypotheses, false graph loop rejection/rollback, 2D signature rotation/mask/source consistency, concurrent OD-011/013 revision changes and Pi 5 background CPU/p95/p99/localization latency. No GitHub Actions.
 
 ### 7.4 Accepted OD-014 — Bounded selective offline replay and reconstruction
 
