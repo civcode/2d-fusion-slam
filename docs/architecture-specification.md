@@ -75,7 +75,7 @@ Component ownership and forbidden dependencies:
 | `motion` | Minimal wheel/gyro integrator, gyro bias, pose–bias uncertainty, replaceable KinematicModel, piecewise SE(2) trajectory, coverage and quality | No drivetrain assumption or global-map jumps; expose generic provider |
 | `scan_assembly` | Fixed-seam generic timed-beam grouping, partial coverage, missing sectors and return validity | No LD19 packet or ROS dependency |
 | `deskew` | Per-beam transformation into temporal midpoint laser frame, full-coverage validation and provenance | No device/ROS/optimizer dependence |
-| `mapping` | Authoritative occupancy grids and log-odds, submap builders, frozen snapshots and versioned derived EDT fields | No direct GTSAM or Ceres dependency |
+| `mapping` | OD-010 bounded 5 cm log-odds, two active 90/180 overlapping submaps, immutable local grids and derived EDT/BnB caches | Ceres/GTSAM/ROS-free domain; graph pose separate |
 | `frontend_ceres` | OD-007 EDT/Ceres solve and **LiDAR-only** residual/Jacobian extraction with separate prior/boundary diagnostics | No ROS/device I/O; Ceres private behind native ScanMatcher |
 | `match_quality` | OD-008 robust PSD information, normalized rank/eigenvectors, calibrated full covariance or observable subspaces and acceptance | Native C++20/Eigen; no Ceres, ROS or sensor SDKs |
 | `coarse_search` | OD-009 covariance-aware local correlation, immutable multires score pyramids, async BnB and versioned candidate sets | No Ceres/ROS; bounded worker and native interface |
@@ -577,41 +577,79 @@ OD-006 midpoint prediction + covariance, OD-005/004 eligible scan
 
 **Reference:** [Cartographer 2D fast correlative scan matcher](https://google-cartographer.github.io/cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.html) documents precomputed maximum-score pyramids, BnB pruning and Ceres refinement.
 
-## 6. Occupancy grids and immutable submaps
+## 6. Accepted OD-010: 5 cm log-odds occupancy and overlapping frozen submaps
 
-Submap lifecycle:
+### 6.1 Authoritative occupancy and 90/180 lifecycle
+
+**The occupancy grid is the sole authoritative spatial map**: initial **0.05 m** resolution, **log-odds** per observed cell, **separate known/unknown state**, bounded dynamic allocation, local SE(2) frame including rotated origin, and immutable source revision after freezing. Normally maintain **two overlapping active submaps** (one during startup). The configured initial lifecycle uses **90 accepted scan insertions to create a successor** and **180 accepted insertions per submap to freeze its local raster**.
 
 ~~~text
-accepted scan -> active occupancy builder -> frozen immutable snapshot
-                       |                       |
-                    next scan             distance field /
-                    insertion            matching / loop closure
-                       |
-              when complete, create new active submap
+OD-005 valid scan -> OD-004 interpolated midpoint deskew
+      -> OD-007/008 accepted pose against PRE-INSERTION map revision
+      -> motion filter + extent/memory guard
+      -> same accepted scan ID into EACH active map, once per map
+          |
+      A: IDs 1-90; create B AFTER #90
+      A+B: IDs 91-180; freeze A AFTER #180; create C
+      B+C: IDs 181-270; freeze B AFTER #270; ...
+          |
+        frozen authoritative occupancy + observed mask
+             |                            |
+     OD-007 immutable EDT          OD-009 score pyramid
+             \                            /
+            localization, matching, loop closure
+                              |
+         GTSAM optimizes global T_map_submap only
 ~~~
 
-- A scan MUST match a map that has not yet included it.
-- Document occupied/free updates, unknown handling, range truncation, log-odds clamping and dynamic rejection.
-- Each match pins **an authoritative occupancy and derived EDT revision**, including known-space mask, threshold and truncation provenance. Optimizing global submap poses does not rewrite the submap's local raster or silently reuse a stale EDT cache.
-- Offline re-deskew or re-mapping creates a **new artifact**, not a silent mutation of previous outputs.
-- Live localization only reads published frozen map tiles; no map mutation or experimental Web Lab edits on the production bundle.
-- Resolution, overlap/freeze trigger **OD-010**; distance-field storage and snapshot/eviction **OD-011**.
+**Count only actual accepted insertions**, not LiDAR packets, attempted Ceres matches, filtered/rejected scans or summed insertions across maps. Apply scan quality, OD-004 interpolation, pose acceptance and **motion filtering** before any update. Skipped scans remain recorded and continue feeding odometry, but increment no submap count. Every accepted scan is transformed into **each active submap's own local coordinates**, inserted **once in each**, and assigned a stable scan ID. A receives #1–180 and B #91–270: overlap is **90 common IDs / 180 ≈50% by count**, **not** guaranteed physical area. Scan #90 creates B only *after* A receives it; #180 freezes A *after* A+B receive it, then creates C. Never match against the occupancy revision **after** inserting the same scan.
 
-Proposed map bundle:
+**Spatial/memory safeguard:** bounded maximum cells, physical extent/travel, allocation bytes, active submap count and bounded update work. A cap may **freeze early or stop map insertion safely**: record the *actual* scan count, overlap, stop reason and map validity; never claim 180 insertions after an early freeze or synthesize a wall when a ray exceeds bounds. If a new bounded map cannot be allocated, preserve recording/odom and report mapping degraded rather than grow RAM without limit. Exact cap values and motion-filter translation/yaw/time thresholds require Pi benchmarks; alternatives 0.025 m (~4× cells) and 0.10 m (~¼ cells) are optional.
+
+### 6.2 Inverse-sensor log odds and hit precedence
+
+~~~text
+L_prior = logit(0.50) = 0                  // initially UNKNOWN
+Delta_hit  = logit(0.55)                   // positive
+Delta_free = logit(0.49)                   // negative
+L_new = clamp(L_old + Delta, logit(0.10), logit(0.90))
+p_observed = sigmoid(L_new)               // separate observed flag retained
+~~~
+
+Values are **initial tuning parameters, not validated sensor probabilities**. A genuinely **observed** cell returning to `p≈0.50` after contradictory readings must **not** become unknown. All unused cells remain unknown, never implicitly free. OD-007 occupied-confidence threshold and OD-009 supported/unknown masks derive from observed occupancy, not bare numeric log odds alone.
+
+For `VALID_HIT`, raycast trusted **free cells strictly before** its real endpoint and mark the endpoint occupied; for `VALID_NO_RETURN`, only a documented and explicitly enabled bounded ray may clear free cells. `INVALID_RETURN` and `MISSING` under OD-005 produce **no free or occupied updates**, even at a scan's missing angular sector. Use calibrated laser origin/extrinsics and midpoint deskew in the local submap frame. **Within one scan and one submap**, gather unique free and hit cell sets, subtract hits from free (hit priority), and apply **at most one update per cell**. Prevent duplicate beam updates from over-strengthening occupancy and prevent a ray passing through another beam's hit from clearing it. Multiple later accepted scans may update the same cell again.
+
+Clip traversal to known allocated support without **inventing a hit** at the edge or clearing beyond an observed/validated bounded ray. Invalid/saturated/out-of-range measurements are not max-range clear rays unless independently verified by OD-005. No dynamic time decay of authoritative frozen maps; a future **separate transient map layer** may have its own aging and versioning.
+
+### 6.3 Freezing, independently moving graph poses and derived caches
+
+When frozen (normal count 180 or an explicit safety/shutdown reason), the submap's **local occupancy cells, observed mask, local origin and insertion history become immutable**. Its **global pose `T_map_submap` is stored separately** and may change under GTSAM graph optimization. A global pose update must not modify local cells, source hash, EDT or correlation-score pyramid; only global pose tables/composite spatial indexes may require updates. Freeze and graph revisions are independently identified.
+
+OD-007 **unsigned truncated EDT** and OD-009 **multiresolution correlation-score pyramid** are **distinct, versioned derived caches** built from the occupancy grid and known mask, with the source content revision/hash, cell resolution, occupied threshold, origin, algorithm and score/truncation parameters. Cache reuse is valid for an unchanged frozen **local** raster even when its global graph pose moves. Readers use coherent immutable snapshots of active maps; no matcher reads a concurrently mutating grid. **OD-011** remains open for active snapshot cadence, incremental rebuilds, eviction and cache memory policy.
+
+### 6.4 Portable APIs, artifacts and validation
+
+ROS-independent C++20 `OccupancyGrid`, `SubmapBuilder`, `FrozenSubmap` and `MapSnapshot` interfaces expose local geometry, unknown/observed flags, log-odds, scan IDs, insertion counts, memory limits, freeze cause, source hashes and independently revisioned global pose. Mapping-domain headers must not include Ceres, GTSAM, LD19/MPU6050/Pico or ROS types; adapters perform those conversions.
+
+**Docker Catch2/CTest:** verify exactly A #1–180/B #91–270 and at most two active maps; seam-accepted but motion-filter-skipped scans do not increment; logit hit/miss/clamping and known-neutral cells; crossing rays hit-priority and per-scan unique cell updates; zero invalid/missing clearing; ray outside extent without fake endpoint; rotated submap origins and 5/2.5/10 cm grids; early cap/allocator failure with honest freeze counts; immutable local source hashes across graph pose change; EDT/pyramid cache coherence, no map self-match, deterministic replay and Pi CPU/RAM measurements.
+
+**Proposed native map bundle** (exact serialization is still OD-012):
 
 ~~~text
 map_name/
-  manifest.json          # format version, source dataset, hashes, frames, resolutions
-  calibration.yaml       # extrinsics, timing model, wheel parameters
-  occupancy.*            # ROS-compatible grid origin incl. yaw
-  submaps.*              # immutable local textures + poses
-  distance_fields.*      # versioned derived cache
-  graph.*                # factors/vertices and provenance
-  trajectory.*           # timestamped corrected poses
-  metrics.json           # optional, truth class explicit
+  manifest.json               # source/version/hash/frame/resolution
+  calibration.yaml            # sensor extrinsics, time/encoder parameters
+  occupancy.*                 # authoritative local log-odds and observed mask
+  submaps.*                   # insertion IDs, lifecycle, local origin, global poses
+  distance_fields.*           # OD-007 derived/rebuildable, versioned EDT
+  correlation_pyramids.*      # OD-009 derived/rebuildable, versioned
+  graph.*                     # loop factors and graph-pose revisions
+  trajectory.*                # corrected pose/time history
+  metrics.json                # truth class and benchmark evidence
 ~~~
 
-Physical serialization, checksums, schema migration, atomic export and tile indexing are **OD-012**. PGM/YAML export is supported but does not preserve graph structure or all probabilistic occupancy information.
+PGM/YAML export may aid ROS consumers but alone does not preserve all probabilities, known-neutral status, graph topology or provenance. Offline remapping creates a **new versioned artifact**, not mutations of frozen submaps; live known-map localization only reads published snapshots.
 
 ## 7. GTSAM graph and loop closure
 
