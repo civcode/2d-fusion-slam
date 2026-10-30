@@ -35,7 +35,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-009 | Covariance-aware local correlation and asynchronous branch-and-bound recovery | P2 | Tracking recovery | **Accepted** (benchmark tuning pending) |
 | OD-010 | 5 cm log-odds occupancy, 90/180 overlap and immutable freezing | P1 | Mapping and graph | **Accepted** (tests/tuning pending) |
 | OD-011 | Coherent immutable snapshots, tiled active EDT and frozen-cache reuse | P1 | Map/matcher memory | **Accepted** (baseline first; optimization pending) |
-| OD-012 | Native map bundle and persistence format | P1 | Reuse across modes | Open |
+| OD-012 | Versioned JSON manifest, zstd binary submaps/graph and atomic generations | P1 | Reuse across modes | **Accepted** (schema/tests pending) |
 | OD-013 | GTSAM topology and information accounting | P1 | Backend accuracy | Open |
 | OD-014 | Offline re-deskew and remapping iteration | P1 | Mapping quality | Open |
 | OD-015 | Keyframe, submap and gyro-bias knot policy | P1 | Graph size/accuracy | Open |
@@ -814,7 +814,7 @@ OD-005 quality scan + OD-004 interpolated midpoint deskew
              graph optimizes T_map_submap only, not occupancy
 ~~~
 
-Native C++20 `OccupancyGrid` / `SubmapBuilder` / `FrozenSubmap` / `MapSnapshot` APIs MUST keep log-odds and known masks independent from derived EDT/pyramids, with explicit local SE(2) frames, resolution, origin including yaw, scan/insert IDs, state, memory/cell usage, immutable occupancy revision and separately versioned global pose. **No Ceres, GTSAM, ROS, LD19, Pico or MPU6050 types** in the generic mapping interface. Accepted OD-011 specifies active incremental tile architecture, the initial full-rebuild baseline, atomic snapshot publication and bounded frozen cache eviction/reload; OD-012 remains open on persistence format.
+Native C++20 `OccupancyGrid` / `SubmapBuilder` / `FrozenSubmap` / `MapSnapshot` APIs MUST keep log-odds and known masks independent from derived EDT/pyramids, with explicit local SE(2) frames, resolution, origin including yaw, scan/insert IDs, state, memory/cell usage, immutable occupancy revision and separately versioned global pose. **No Ceres, GTSAM, ROS, LD19, Pico or MPU6050 types** in the generic mapping interface. Accepted OD-011 specifies active incremental tile architecture, the initial full-rebuild baseline, atomic snapshot publication and bounded frozen cache eviction/reload; Accepted OD-012 defines JSON + portable zstd binary generations; detailed version-1 schemas and tests remain pending.
 
 #### Required synthetic/hardware tests (not yet executed)
 
@@ -944,13 +944,102 @@ Core-domain `MapSnapshotProvider`, `CacheConfig` and `SnapshotHandle` APIs depen
 
 **References:** [Felzenszwalb–Huttenlocher, *Distance Transforms of Sampled Functions*](https://toc.cs.uchicago.edu/articles/v008a019/), [Cartographer fast correlative matching precomputation](https://google-cartographer.github.io/cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.html), [accepted OD-010](open-design-choices.md).
 
-### OD-012 — Persisted map bundle format
+### OD-012 — Versioned directory map bundle: JSON manifest + portable compressed binary
 
-**Question:** Directory with JSON/YAML metadata plus compact binary grids/graphs, single binary container, or database-backed tiles?
+**State:** **Accepted** (format architecture chosen; exact binary schema/loader and crash tests pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection of Option A  
+**Priority:** P1
 
-**Provisional preference:** versioned manifest + binary blobs, explicit checksums and atomic publication. Offer Nav2 PGM/YAML import/export separately, accepting information loss on export.
+**Decision:** Implement a **versioned directory-based native map bundle** with a strictly validated **JSON manifest**, platform-independent, fixed-width **binary authoritative submaps and graph payloads**, and **per-file Zstandard (zstd) compression**. Persist authoritative OD-010 occupancy log-odds **and separate observed/unknown mask**, submap-local transforms, global poses and the graph's nodes, constraints, uncertainty and reconstruction/calibration metadata. Support **lazy, independently bounded submap loads**. OD-007 EDT and OD-009 correlation pyramids are **optional, versioned and regenerable OD-011 caches**, not required to open a valid map. Require **major/minor schema compatibility**, SHA-256 integrity/size checks, strict bounded decoding and **atomic generation publication with crash recovery**. Keep ROS Nav2/PGM/YAML import-export and future single-file packaging separate from core persistence.
 
-**Decision gate:** schema evolution, round-trip rotated map origins, unknown occupancy and calibration identity; partial write recovery, large map load time, target-endianness and portability. One frozen map must support both batch output and onboard localizer.
+**Alternatives:** (A) **directory + JSON + binary selected** for transparent inspection, individual submap loading, clean versioning and independent compression; (B) YAML as canonical metadata — rejected; (C) single-file container — deferred **optional export/transport**; (D) SQLite/other database tile store — deferred until much larger maps or incremental transaction requirements justify the complexity. No initial database or custom monolithic container dependency.
+
+#### Canonical bundle layout and intent
+
+~~~text
+building_a.slam/                         # root directory, not an in-place mutable map
+  CURRENT                                 # atomic generation pointer (if checkpointed)
+  generations/
+    000000000001/
+      manifest.json                       # strict schema and authoritative file index
+      graph.bin.zst                       # nodes, submap poses, factors, uncertainty
+      submaps/
+        sm_000001.bin.zst                 # independent occupancy + observed mask
+        sm_000002.bin.zst
+      cache/
+        sm_000001.edt.bin.zst             # OPTIONAL OD-007, source/config-keyed
+        sm_000001.corr.bin.zst            # OPTIONAL OD-009, source/config-keyed
+      preview.png                         # OPTIONAL non-authoritative visualization
+      checkpoint/                         # only for resumable sessions
+        state.bin.zst                     # mutable estimator/active-map/replay state
+    000000000002/                         # next complete immutable generation
+~~~
+
+For a **one-shot export** a self-contained directory containing `manifest.json` and the referenced payloads MAY be used directly. For **repeated save/checkpoint** use uniquely named immutable generation directories plus a small atomic `CURRENT` pointer; **do not attempt an unsafe rename over an existing non-empty directory**. A reader resolves `CURRENT` once, then pins that generation and its manifest, avoiding mixed-generation reads. The final file layout and names are illustrative but the generation semantics are mandatory.
+
+**Two bundle purposes** are explicitly distinguished by manifest `bundle_kind`:
+- `LOCALIZATION_MAP`: frozen/local authoritative occupancy plus graph poses and sufficient calibration/frames to load a known map; no live continuation is implied. It may include loop data if needed to audit or reoptimize the saved graph, but cannot claim to reconstruct unrecorded sensor history.
+- `RESUMABLE_CHECKPOINT`: includes all authoritative map/graph data **and** versioned **active submap builders, insertion IDs/counters, estimator bias/covariance/trajectory state, calibration/clock-domain/session mapping, replay cursor/input identity and consistent graph-optimization state** required to continue. A `LOCALIZATION_MAP` MUST NOT be silently accepted as resumable; an incomplete checkpoint MUST fail resume with a descriptive error.
+
+#### Manifest schema and authoritative contents
+
+The strict JSON manifest MUST contain:
+
+| Category | Required semantics |
+| --- | --- |
+| Format | Magic/type, **major/minor version**, required/optional features and minimum compatible reader |
+| Identity | Unique map ID, generation ID, deterministic content/source identifiers, creation provenance (wall-clock informational only) |
+| Frames | REP-103/105-aligned map/odom/base/laser frame definitions, SE(2) transform conventions, grid-local origin **including yaw**, units, coordinate and covariance tangent ordering |
+| Submaps | Stable ID, state (frozen/active where checkpoint), resolution, width/height/extent, local transform, insertion count, scan IDs/range/overlap, content hash, per-submap file |
+| Graph | Graph schema revision, node and submap IDs/poses, factors, measurement types, robust/uncertainty model, correspondence/loop evidence, graph-pose revision and file |
+| Calibration | Extrinsics, OD-001 canonical timestamp representation/clock domain/epoch identity, OD-002/003 clock-fit/calibration revision, OD-006 wheel/gyro model and bias settings, OD-004 trajectory convention, OD-010 log-odds and occupied/known thresholds |
+| Index | Every required/optional file's normalized safe **relative path**, role, encoding/compression, **compressed size, uncompressed size, SHA-256 of stored bytes**, payload schema/version and optional uncompressed hash |
+| Compatibility | Feature flags, codec requirements, decoder limits and migration requirements |
+| Checkpoint only | Consistent acquired/replayed input offset/identity, active map and estimator/graph/clock state required for resume |
+
+**Preserve authoritative information**: packed log-odds (encoding defined explicitly) and a **distinct observed-space bit mask**; a cell with observed `p≈0.5` is **not UNKNOWN**. Preserve submap local frames, exact grid origin rotation and width/height, immutable source hashes, per-submap accepted insertion IDs and freeze reason. Graph serialization must preserve not just best poses but **nodes, constraints, covariance/information, factor provenance, submap identifiers and revision** sufficient to reconstruct the supported graph semantics. The exact portable factor serialization is a separately versioned payload schema, not native GTSAM object memory. Persist the pose-table version consistently with occupancy and graph snapshot.
+
+**Binary portability:** Define **field-by-field fixed-width** unsigned/signed integer sizes, floats (IEEE 754 only where specified), explicit little-endian (or documented explicit) byte order, units, count/length bounds, binary magic and payload version, index/cell order, transform and covariance ordering and NaN/Inf rejection. **Never write C++ object layouts, compiler padding, host pointers, platform `size_t`, raw Eigen memory or native GTSAM classes.** Use deterministic encoding/order for identical logical content where practical. A writer and reader must work across x86-64 and aarch64 and reject unsupported architectures/features rather than guess.
+
+**Compression:** Use an **independently decompressible zstd frame per submap** (and separately per graph/cache/checkpoint file where compression is used). RFC 8878 documents portable lossless frames; it does not itself provide arbitrary random access *inside* one compressed stream, hence the independent file/frame layout. Manifest sizes/hashes protect the full stored files independently of optional zstd frame checksums. Decoder MUST apply **pre-open and streaming decompressed-size, memory/window and file-count limits**, not trust untrusted file sizes or claim that compression alone prevents decompression bombs.
+
+**Derived cache policy:** Cache entries carry their own algorithm version, source authoritative occupancy hash/revision, known-mask/occupied-threshold configuration, EDT truncation/interpolation or correlative score/pyramid configuration. Cache missing, corrupt, stale or incompatible => **ignore/delete/rebuild safely** under OD-011's bounded background worker; **do not fail loading the authoritative map solely because an optional cache is bad**. A pose graph changing only `T_map_submap` does not invalidate local-frame occupancy or locally keyed caches; it may invalidate global spatial indexes.
+
+#### Transactional save, crash safety and recovery
+
+1. Capture a **consistent, immutable point-in-time map+graph snapshot**: all referenced submaps and graph poses/constraints/covariances must agree; a checkpoint additionally captures compatible estimator, active submaps, clock/session and replay progress. Pause/quiesce or coordinate a *snapshot barrier* where necessary, but **do not block acquisition** for slow compression/disk writes.
+2. Create a **new unique staging directory on the target filesystem**. Write each payload independently; compute and check size/hash; write and schema-validate `manifest.json` **after** the complete authoritative file index is known. Bound bytes, count, time, memory and scratch disk space; report disk-full/io errors.
+3. **Durability:** flush payloads and the manifest to stable storage (file `fsync`/`fdatasync` where appropriate), then sync their containing directories and the staging root as supported. Validate cross-file references, IDs, feature compatibility, bounded sizes/checksums and checkpoint completeness **before publication**.
+4. **Publish an immutable generation** by renaming staging to a **previously nonexistent generation name on the same filesystem**, and durably sync its parent directory. For repeated saves, write a small temporary `CURRENT` file containing the new generation ID (and optional checksum), flush it, **atomically replace the `CURRENT` pointer**, and sync its directory. A one-shot named bundle is likewise published only at a **previously nonexistent destination**, or under an explicit generation scheme.
+5. **Retention:** Keep at least one previously validated generation until the new pointer is durably published and validated. Garbage-collect old generations only after retention and reader pin policies permit. Do not overwrite/delete the only known-good checkpoint.
+6. **Load/recovery:** Resolve `CURRENT` once; validate its generation's manifest and all **required authoritative** file indexes, sizes, hashes and references before exposing any graph/map to SLAM. If the current pointer/required data are invalid after an interrupted save, **scan only bounded allowed prior generations** and select the newest fully validated compatible one, reporting recovery provenance. Ignore incomplete staging directories. Never expose half-published or mixed-generation maps.
+
+**Important filesystem limitation:** A rename is atomic **only under the target filesystem's supported semantics**, and atomic visibility is **not the same as durable recovery**. Durability relies on correct flush/fsync and filesystem/hardware behavior, including directory sync support. Cross-filesystem renames and some network/removable media have different guarantees; **detect unsupported operations and fail safely or document a weaker guarantee**, never promise universal power-loss atomicity. Replacing nonempty directories is not a portable atomic overwrite; the immutable-generation + pointer protocol avoids that ambiguity.
+
+**Untrusted-file loading:** Reject absolute/parent-traversal paths, unexpected symlinks/hardlinks/links out of the bundle root, duplicate paths/IDs, path case-normalization collisions as applicable, directory recursion, malformed lengths/overflow, unexpected graph endpoints, corrupt checksums, unsupported codec/version/required features, nonfinite poses/covariances, mismatched grids/masks and resource-limit violations. Read/verify with bounded memory and **do not publish partially reconstructed runtime state**. Optional preview/cache corruption is nonfatal. SHA-256 provides integrity, **not source authenticity**; signed origin/authentication remains out of initial scope.
+
+#### Version evolution, clock identity and ROS interop
+
+- Use explicit **major/minor** versions and required feature flags. A reader must reject unknown **required** features or incompatible major versions, ignore safe unknown optional manifest keys and apply **version-specific readers or explicit tested migrations** for old versions. Migration writes a **new validated generation** and preserves the original.
+- **OD-001 time identity:** Preserve signed nanosecond values **with clock domain, epoch/session origin and calibration mapping provenance**. A Pi process's monotonic timestamp number alone is **not portable across reboot/replay**. On resume, establish a new live-clock mapping or replay equivalent; do not assume old monotonic epoch equals the new process's. Distinguish captured acquisition event time from non-authoritative wall-clock bundle creation time.
+- Maintain standalone **ROS 2 Nav2 YAML/PGM/OccupancyGrid export/import adapters** (and ROS 1/converters where useful) with explicit **loss reports**: flattened probability/unknown image alone cannot preserve active submaps, source scans, graph constraints, calibrated clock IDs or checkpoints. Keep core bundle APIs ROS-independent.
+- Defer a single-file package as optional export/import (e.g. for distribution) and database-backed storage until measured needs arise, **without weakening the authoritative directory/manifest contract**.
+
+#### Required Docker tests and benchmark B20 (not yet executed)
+
+1. Round-trip multi-submap log odds and observed mask (including known neutral), rotated origin, signed nanosecond/clock epochs, accepted scan IDs, OD-010 freeze reasons and graph nodes/factors/uncertainties. Validate exact lossless authoritative payload identity.
+2. x86-64/aarch64 endian/portable binary golden vectors, deterministic canonical bytes, explicit size/count bounds and independently compressed zstd submaps.
+3. Required-file tamper/truncation/duplicate/missing references, SHA-256 mismatch, incompatible versions, unsupported required feature, malformed graph factor, path traversal/symlink escape, huge counts, decompression bombs and nonfinite floating data all fail closed.
+4. Optional EDT/pyramid corrupt/stale/missing/config-mismatched => authoritative map loads and OD-011 cache rebuild is requested without data loss.
+5. Power-cut/fault injection before/after file sync, generation rename, pointer sync and GC; reader never sees mixed/partial generation and can fall back to verified prior generation. Test distinct mount/unsupported filesystem handling honestly.
+6. Lazy loading of several individually compressed frozen submaps under bounded memory; graph pose updates do not rebuild unchanged local EDT; source/config hashes enforce cache identity.
+7. Distinguish `LOCALIZATION_MAP` from complete `RESUMABLE_CHECKPOINT`. Resume restores active 90/180 counters, bias/trajectory clock identity, recorder/replay cursor, graph revisions; map-only bundle MUST reject resume and restart monotonic clock alignment properly.
+8. ROS/Nav2 import/export loss report and isolated adapters (no ROS dependencies in native core). Test on Docker x86 and Pi 5 where possible; benchmark save/read p50/p95/p99, peak RSS, compression ratio, lazy first-submap access and realistic disk-full handling.
+
+**Consequences:** The initial persistent map representation, binary portability, compression, provenance, generation publication, recovery and map/checkpoint distinction are **settled**. Exact factor encoding fields, stable schema version assignments, cache selection and performance caps must be implemented/tested as a **documented version 1 schema**, not invented by automatic raw-object serialization. **OD-024** still governs periodic replay checkpoint/seek strategy, **OD-013** graph topology, and **OD-025** ROS distribution/QoS packaging. No runtime code or saved maps are yet implemented.
+
+**References:** [Zstandard format RFC 8878](https://www.rfc-editor.org/rfc/rfc8878.html); [Nav2 Map Server](https://docs.nav2.org/configuration/packages/map_server/configuring-map-server.html); [SQLite WAL (deferred alternative)](https://www.sqlite.org/wal.html).
 
 ### OD-013 — GTSAM graph topology and correlated evidence
 
@@ -1092,6 +1181,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-011 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-012 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
