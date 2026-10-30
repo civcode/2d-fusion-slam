@@ -169,6 +169,23 @@ Required cases:
 
 **Report** bias estimation error and readiness fraction, integration RPE/ATE **only with exact synthetic or independent ground truth**, yaw drift, slip detection precision/recall where labeled, covariance-vs-error consistency, missing-data coverage, and estimator time/resource cost. Each result must record kinematic model/geometry, sensor input provenance, configured bias/slip/noise parameters, algorithm revision, seed and Docker image. The ROSBOT, MIT and Cartographer datasets support **different measured-source and ground-truth claims**: a bag with only `/odom` is not automatically a pair of raw wheel encoders.
 
+### 4.4 Accepted OD-007 EDT/Ceres objective fixture and controlled ablations
+
+The initial Ceres scan-matching benchmark MUST use a **known authoritative occupancy grid**, derive a **truncated unsigned EDT from confidently occupied cells**, and match **OD-004 midpoint-deskewed, OD-005 valid-hit points** using per-beam independent Huber robustification, bilinear interpolation, an OD-006 uncertainty-weighted pose prior and explicit out-of-map boundary penalties. Use the synthetic apartment and warehouse as exact geometry/trajectory references; keep raw beams, prior and map revisions identical across variants.
+
+Required independent test conditions:
+
+1. **EDT metric:** Known single wall/point/parallel-wall grids, valid occupied confidence thresholds, Euclidean metre distances, truncation at `D_max`, empty occupied map, shifted/rotated origin and cell-centered ROS-compatible indexing. The EDT cache must identify the immutable source occupancy revision/checksum and unknown/validity mask.
+2. **Interpolation:** Bilinear values within sampled extrema, finite gradient on cell interiors, expected gradient changes at cell boundaries, no silent interpolation across unknown stencils or missing support. Compare bicubic **only as an optional later ablation**, inspecting overshoot and Pi cost.
+3. **Per-beam Huber:** Inject one extreme range outlier among clean endpoints. Assert that separate scalar Ceres `HuberLoss` residual blocks reduce **the outlier independently**, unlike a combined single-block Huber. Confirm residual `sqrt(w_i) * D / sigma_i` and loss scaling rather than double-squaring the distance.
+4. **Odometry prior:** Compare no prior, calibrated weak prior, calibrated tight prior and deliberately wrong prior. Check whitening with SE(2) Lie Log and prediction covariance, distinct LiDAR/prior costs and acceptance results. A tight prior may stabilize pose but MUST NOT falsely improve **LiDAR-only observability** or turn a wrong geometrical match into a trusted correction.
+5. **Unknown and boundary:** Place endpoints within confidently observed map, unknown interior cells and outside the rotated grid; require separate classification, **finite outward-increasing boundary gradient**, rejection of unsupported/boundary-dominated matches and no unknown-as-free/obstacle assumption.
+6. **Overlap/degeneracy:** Observe long corridor, sparse angular support, repetitive warehouse shelves, symmetric false minima, low inliers, dynamic obstacles, saturated EDT plateau and high residual. Verify gate reasons, LiDAR-only geometric Hessian eigenvalues and false-lock rates independent of odometry-prior strength.
+7. **Graph information accounting:** Store prior source wheel/gyro IDs and `Sigma_pred`, LiDAR-only score/information, posterior pose, source occupancy/EDT revision, boundary cost and acceptance. Assert that passing the prior-regularized pose to GTSAM **as an independent LiDAR-only factor** is disallowed in the integration contract; compare acceptable factor extraction strategies under OD-008/013 later.
+8. **Backend and resource boundary:** Match with a generic native `ScanMatcher` interface and private Ceres target, ensuring public C++20 headers build without Ceres and ROS. Measure p50/p95/p99 latency, convergence/reject reasons, CPU/peak RSS on x86-64 and Pi 5 when present.
+
+**Report B15:** scan midpoint reference, dataset/map/EDT/calibration/config revisions; number of valid/masked/unknown/out-of-grid/informative beams; raw and Huber LiDAR-only residual distributions; prior and boundary costs; posterior pose, geometric information eigenvalues and rejection reasons; ground-truth translation/yaw error only when true reference exists; solve iterations and latency. Record `D_max`, Huber δ, confidence threshold, `w_i`/`sigma_i` policy, prior covariance scale, boundary scale, interpolation mode and solver budget. Separate **LiDAR-only / with-prior / no-boundary** ablations; do not compare unlike datasets or conflate small total cost with correct localization.
+
 ## 5. Benchmark categories and experiments
 
 | ID | Benchmark | Inputs | Required observations |
@@ -176,7 +193,7 @@ Required cases:
 | B01 | Planar geometry and frame transforms | Synthetic geometry, known `T_base_laser` | Inverse/compose errors, rotated map-origin correctness, yaw/angle sign. |
 | B02 | Gyro and wheel prediction | Gyro/wheel streams; truth where available | Relative pose error, drift over distance/time, yaw-bias estimation. |
 | B03 | Full 2D LiDAR deskew | Beam times, trajectory, scan | Endpoint alignment error and scan-match residual for **none vs gyro-only vs SE(2)** deskew. |
-| B04 | Ceres scan-to-map | Frozen submap, deskewed scans, pose priors | Position/yaw error, convergence basin, failure rate, runtime, degeneracy. |
+| B04 | Ceres scan-to-map | Frozen authoritative occupancy map + derived OD-007 EDT, midpoint deskewed scans, odometry predictions/covariances | Pose error, Ceres robust residual and prior contributions, accepted scan overlap/degeneracy, false-locks, runtime; no invalid/missing points. |
 | B05 | Submap/offline SLAM + GTSAM | Full sequence / loop | Loop consistency, trajectory accuracy category, map quality, runtime. |
 | B06 | Frozen-map live localization | Saved map and held-out traversal | Pose drift / error, tracking dropout, confidence calibration, recovery. |
 | B07 | Global relocalization | Unknown/perturbed pose and frozen map | Initialization success, kidnapped-robot recovery, time to stable lock. |
@@ -187,6 +204,7 @@ Required cases:
 | B12 | Midpoint SE(2) trajectory and coverage (OD-004) | Exact arc trajectory, asynchronous wheel/gyro streams, nonuniform timed beams, missing samples and extrapolation cases | Midpoint pose/endpoint error; full-coverage map insertion acceptance; quality-gated 9.9/10/10.1 ms extrapolation; interpolation vs delay latency and covariance growth. |
 | B13 | OD-005 angular-seam partial scan and invalid-return safety | LD19 packet/seam fixtures, missing wedges, invalid/no-return states, motion coverage | Circular coverage and gap correctness; partial matching/insertion gates; **zero free or occupied updates from invalid/missing returns**; timeout-only recovery, no phantom beams. |
 | B14 | OD-006 minimal motion estimation and gyro bias | Exact synthetic SE(2), wheel/gyro streams, stationary calibration, slip and gaps; verified kinematics fixtures | Pose/yaw error, bias error/readiness, bias-update gating, covariance consistency, slip detection and missing-source status; Pi runtime. |
+| B15 | Accepted OD-007 EDT Ceres objective, prior and boundary safety | Known occupancy/EDT maps, midpoint scans, synthetic apartment/corridor/warehouse, controlled odom prior/outliers/unknown regions | Per-beam Huber correctness, bilinear/EDT metric/gradients, overlap and LiDAR-only observability despite strong prior, boundary correction, false-locks, provenance/latency. |
 
 Compare **LiDAR-only**, **LiDAR + wheel odometry**, and **LiDAR + wheel + gyro** wherever the dataset supports them. A `no-wheel` dataset must not be included in wheel-fusion averages. If a dataset provides only processed odometry and not raw ticks, label the experiment accordingly; don't imply independent source availability.
 
@@ -433,7 +451,7 @@ The example deliberately uses `null` for **unmeasured** fields: it is a reportin
 
 ### 11.1 Acceptance and delivery phases
 
-**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, OD-004 midpoint SE(2)/10 ms gating, OD-005 seam/invalid-return fixtures, **OD-006 stationary gyro bias, wheel slip, kinematic validity and uncertainty fixtures**, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
+**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, OD-004 midpoint SE(2)/10 ms gating, OD-005 seam/invalid-return fixtures, OD-006 gyro bias/slip/kinematics/uncertainty and **OD-007 EDT/bilinear/Huber/prior/unknown/boundary** fixtures, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
 
 **D1 — Compact public baseline:** Verify and pin the 38 MB Cartographer bag; implement horizontal-LiDAR/IMU import and standalone LiDAR–IMU smoke replay. Do not call it a full 3-sensor benchmark.
 
