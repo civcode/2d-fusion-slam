@@ -69,7 +69,7 @@ Component ownership and forbidden dependencies:
 | Module | Owned state/output | Boundary |
 | --- | --- | --- |
 | `core` | SE(2), units, timestamps, frame conventions, status, covariance types | Standard C++20 + Eigen; no Ceres/GTSAM/ROS |
-| `sensors` | LD19 parser, IMU/encoder ingest, health and raw samples | No estimator or map ownership |
+| `sensors` | LD19 parser, Pi GPIO/I²C/UART input or optional Pico native framed input, health and raw samples | No estimator/map ownership; no micro-ROS |
 | `time_sync` | Rollover, clock offset/drift, ordering and time quality | No map or solver dependency |
 | `calibration` | Versioned sensor extrinsics, wheel scales, gyro bias priors and timing offsets | Invalidates derived artifacts on change |
 | `motion` | Wheel/gyro state, local pose history, interpolation and covariance | No global-map jumps |
@@ -153,7 +153,7 @@ raw device tick + host receive time
             -> trajectory + scan assembly
 ~~~
 
-Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. **OD-001 is accepted** (signed 64-bit nanoseconds, explicit domains/epochs and ROS simulated-clock support). **OD-002/003/004** still govern sensor alignment, LD19 beam timing and interpolation tolerances.
+Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. **OD-001 is accepted** (signed 64-bit nanoseconds, explicit domains/epochs and ROS simulated-clock support). **OD-002 is also accepted:** Pi-only timestamps first, optional Pico custom acquisition/synchronization later; OD-003/004 still govern LD19 beam timing and trajectory interpolation tolerances. Specific Pi/Pico mapping parameters and the Pico transport remain to be benchmarked.
 
 ### 3.4 Clock source injection and ROS 2 `/clock` behavior
 
@@ -178,6 +178,41 @@ offline MCAP bag stamps ------------> replay adapter ----> canonical event-time 
 - **Testing:** ROS-free Catch2 tests cover ns precision, overflow, mismatched epochs, clock readiness, pause, step, backward jump, forward gap and mode switch. A dedicated ROS 2 Docker test drives `/clock` and `use_sim_time` through the real adapter; the core builds and replays without ROS.
 
 ROS 2 design basis: [Clock and Time](https://design.ros2.org/articles/clock_and_time.html).
+
+### 3.5 Accepted OD-002: Pi-first acquisition and optional Pico hardware-near timestamps
+
+**Stage A (required first):** The Raspberry Pi obtains raw LD19 UART frames, MPU6050 readings and available wheel encoder events directly. The driver captures a host-monotonic timestamp at the closest **known** acquisition boundary (IRQ, sample-ready signal, driver read start/end, packet reception), records which event it represents, and carries the source clock, timestamp quality/uncertainty and latency diagnostics. Device sample time and host receive time remain distinct. Timestamping packet completion does **not** imply that all LD19 beams were acquired at that instant.
+
+**Stage B (planned, optional):** A Raspberry Pi Pico (initial RP2040 target) acquires wheel encoder and IMU events under **custom Pico SDK firmware**, sends source-timestamped measurements to the Pi, and participates in explicit clock synchronization. The Pico does **not** run micro-ROS, DDS, ROS message serialization, or a ROS client; the host native driver does not link to micro-ROS either.
+
+~~~text
+Stage A (Pi 5 first):
+  LD19 UART / MPU6050 I2C / encoder GPIO
+    -> Pi native drivers + near-event monotonic host stamps
+    -> raw measurements + time quality + diagnostics
+    -> time_sync canonical int64 nanoseconds -> shared estimation pipeline
+
+Stage B (Pico optional):
+  MPU6050 data ready / encoder transitions
+    -> Pico timer + ISR / optional PIO-based capture
+    -> Pico 64-bit microseconds-since-boot + boot ID
+    -> framed binary USB CDC (candidate) / validated UART transport
+    -> Pi Pico driver + t1/t2/t3/t4 synchronization exchanges
+    -> affine clock mapping (offset + drift + uncertainty + epoch)
+    -> same time_sync native int64 nanosecond measurement API
+
+  LD19 remains on Pi UART unless rerouting via Pico is specifically benchmarked.
+~~~
+
+**Pico timer and PIO feasibility:** The RP2040 SDK exposes a boot-relative 64-bit hardware timer in **microseconds**, e.g. `time_us_64()`. Host conversion to signed nanoseconds is checked and retains the true microsecond measurement resolution. PIO may offer precise deterministic GPIO edge counting or UART handling, but a PIO program is **not inherently a 64-bit hardware timer capture unit**; translating PIO cycles/FIFO/IRQ events into the timer domain needs a designed and validated method. Compare ISR/timer against PIO, account for FIFO/DMA overflow, oscillator drift, GPIO pin allocation and CPU cost, and keep ISR as the fallback. **No assumed nanosecond accuracy**.
+
+**Pico-host synchronization:** Use a bidirectional sequence with host transmit `t1`, Pico receive `t2`, Pico transmit `t3` and host receive `t4` in original clocks. Estimate `t_host_ns ≈ a*t_pico_us+b` from multiple exchanges; bound asymmetry and drift, reject high-RTT outliers, record fit version/uncertainty/validity. Sequence numbers, CRC, firmware/protocol version and Pico boot/session ID identify data integrity and resets. Reboot/reconnect/new session creates a new clock epoch and invalidates the old map until resynchronized. The exact transport, fit filters and synchronization cadence remain implementation tuning choices.
+
+**Clock independence:** The Pico physical hardware clock must never pause/jump with ROS 2 `/clock`. The optional ROS adapter governs simulated event-time conversion to the OD-001 native time interface; hardware capture and clock synchronization are separate from simulation clock control. Live data remains available with no ROS installation.
+
+**Acceptance:** Before approving Stage B as superior, measure timestamp jitter, synchronization residual and drift, packet/encoder/IMU loss, reconnect behavior and end-to-end latency on real hardware. Include Dockerized host protocol tests and isolated Pico SDK firmware builds, plus opt-in hardware-in-loop tests. The firmware may use SDK-supported C/C++ independently of the host's required C++20 standard; this does not relax the native core C++20 rule.
+
+**Related:** OD-001 (accepted nanosecond time/domain/epoch), OD-002 (accepted acquisition staging), OD-003 (still open LD19 per-beam timing), OD-021 (still open buffering), OD-023 (still open recording schema). [Pico timer](https://github.com/raspberrypi/pico-sdk/blob/master/src/rp2_common/hardware_timer/include/hardware/timer.h) and [PIO API](https://www.raspberrypi.com/documentation/pico-sdk/hardware.html) document primitives, not achieved accuracy.
 
 ## 4. LiDAR assembly, wheel/gyro odometry and deskew
 
@@ -360,7 +395,7 @@ Thread/process split **OD-016**, queue limits/drop and overload policy **OD-021*
 - ROS 2 adapter maps native scan/IMU/odometry/map/pose to standard topics and owns TF/clock conversions; only one publisher per TF edge.
 - No browser, ROS or Node/JS runtime is required for the headless core.
 
-MCAP channel/schema **OD-023**, seek/checkpoint format **OD-024**, ROS distro/QoS defaults **OD-025**. **OD-001 time representation is accepted**: use signed 64-bit nanoseconds with explicit clock-domain conversion and ROS-neutral simulated-clock events.
+MCAP channel/schema **OD-023**, seek/checkpoint format **OD-024**, ROS distro/QoS defaults **OD-025**. **OD-001 time representation and OD-002 Pi-first/Pico-future acquisition are accepted**: use signed 64-bit nanoseconds with explicit clock-domain conversion and ROS-neutral simulated-clock events.
 
 ## 11. Resource budget and failure policy
 
@@ -385,7 +420,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 
 | Boundary | Required tests |
 | --- | --- |
-| Device/time | LD19 CRC/47-byte parsing, 30 s tick rollover, signed nanosecond exactness/overflow, domains/epochs, ROS simulated-clock pause/seek/time jumps, missing/late samples and uncertainty |
+| Device/time | LD19 CRC/47-byte parsing, 30 s tick rollover, signed-ns domain/epoch and ROS simulated-clock handling, Pi host near-event jitter, Pico protocol/CRC/boot IDs/sync drift, PIO-versus-ISR feasibility, missing/late samples |
 | Geometry | SE(2) composition, REP frames, rotated occupancy origin, Jacobians and extrinsics |
 | Motion/deskew | Gyro bias, wheel slip, full SE(2) ray endpoints, lever arm, gap/extrapolation behavior |
 | Ceres | Distance-field interpolation, convergence, false matches, corridor degeneracy, robust residuals |
@@ -395,7 +430,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 | Adapters | ROS-free core build; optional ROS 2 frames/scan/maps/QoS; Web Lab real backend responses |
 | Performance | Equivalent datasets on ARM64 and x86-64, capture-to-pose tail latency and resource use |
 
-Implementation priority: **P0** toolchain/geometry/synthetic fixtures -> **P1** recorder/time sync -> **P2** motion/deskew -> **P3** Ceres/submaps -> **P4** GTSAM offline mapping -> **P5** frozen-map localization/recovery -> **P6** online SLAM. Web Lab can start as a synthetic replay viewer and expand without blocking estimation development.
+Implementation priority: **P0** toolchain/geometry/synthetic fixtures -> **P1** Pi-direct recorder/time sync (optional Pico firmware after measured need) -> **P2** motion/deskew -> **P3** Ceres/submaps -> **P4** GTSAM offline mapping -> **P5** frozen-map localization/recovery -> **P6** online SLAM. Web Lab can start as a synthetic replay viewer and expand without blocking estimation development.
 
 ## 13. Decision links and references
 
