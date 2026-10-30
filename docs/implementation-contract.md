@@ -386,7 +386,7 @@ The native C++20 core MUST expose a **timestamp-addressable trajectory-provider 
 
 **Containerized verification:** Catch2 tests MUST cover pure translation, pure yaw, exact constant-curvature motion, near-zero omega, asynchronous gyro/encoder events, t_mid from nonuniform beams, full-scan coverage, off-center LiDAR, clock resets and invalid gaps. Test configured bounds at **9.9 ms, 10 ms and 10.1 ms**, including covariances and eligibility for map insertion. A mock trajectory provider MUST allow standalone deskew tests without device drivers or ROS installed; run equivalent replay/latency measurements in Docker on Pi where available. A spline implementation remains deferred.
 
-See [Architecture `4.2–4.3](architecture-specification.md) and [accepted OD-004](open-design-choices.md). This is a specification, **not a claim that the trajectory API already exists**.
+See [Architecture Sections 4.2–4.3](architecture-specification.md) and [accepted OD-004](open-design-choices.md). This is a specification, **not a claim that the trajectory API already exists**.
 
 ## 11. Change workflow and GitHub Actions policy
 
