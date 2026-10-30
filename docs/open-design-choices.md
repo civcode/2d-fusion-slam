@@ -40,7 +40,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-014 | Bounded offline refinement, selective re-deskew/remap and rollback | P1 | Mapping quality | **Accepted** (tests/tuning pending) |
 | OD-015 | 0.20 m/5°/2 s motion keyframes; independent submap anchors; optional sparse bias knots | P1 | Graph size/accuracy | **Accepted** (tuning/tests pending) |
 | OD-016 | Four processes + versioned seqpacket IPC and bounded workers | P1 | Pi resource isolation | **Accepted** (budgets/tests pending) |
-| OD-017 | Native CMake target/API decomposition | P0 | Implementation scaffold | Open |
+| OD-017 | Eight libraries, four public SDK exports, three host daemons | P0 | Implementation scaffold | **Accepted** (build/tests pending) |
 | OD-018 | Loop candidate retrieval and verification | P1 | Offline mapping | Open |
 | OD-019 | Online iSAM2 work budget/fixed lag | P3 | Onboard full SLAM | Open |
 | OD-020 | Global relocalization algorithm | P2 | Kidnapped robot | Open |
@@ -50,7 +50,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-024 | Replay checkpoints, seek and reproducibility | P1 | Benchmarks/Web Lab | Open |
 | OD-025 | ROS 2 distro, QoS and adapter interface | P3 | Nav2/RViz integration | Open |
 
-Recommended **review order**: OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009 accepted coarse recovery, OD-020/022 (global hypotheses and tracking state), then **accepted OD-016** four-process deployment, OD-019/025 (full online/ROS). Accepted OD-016 fixes process boundaries and nonblocking IPC requirements; OD-021 still defines numeric queue, backpressure and recording-durability thresholds.
+Recommended **implementation order**: accepted OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009 accepted coarse recovery, OD-020/022 (global hypotheses and tracking state), then **accepted OD-016** four-process deployment, OD-019/025 (full online/ROS). Accepted OD-016 fixes process boundaries and nonblocking IPC requirements; OD-021 still defines numeric queue, backpressure and recording-durability thresholds.
 
 ## 3. Sensor, timestamp and odometry decisions
 
@@ -1418,13 +1418,79 @@ Initially use **normal Linux scheduling (`SCHED_OTHER`)** with measured Pi 5 con
 
 **References:** [Linux unix(7) `SOCK_SEQPACKET` and `SCM_RIGHTS`](https://man7.org/linux/man-pages/man7/unix.7.html), [Linux memfd_create(2)](https://man7.org/linux/man-pages/man2/memfd_create.2.html).
 
-### OD-017 — CMake libraries, APIs and build boundaries
+### OD-017 — Eight host libraries, four exported SDK targets and three native daemons
 
-**Question:** How many initial libraries/targets and which modules are public/installable?
+**State:** **Accepted** (build/API design chosen; implementation, packaging and runtime testing pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit 8-library / 4-public / 3-executable selection  
+**Priority:** P0
 
-**Provisional preference:** `fusion_slam_core`, sensors/time/motion, mapping/frontend/backend adapters, apps, test fixtures; public native headers behind installable CMake targets with optional ROS target. Catch2 v3 and cxxopts pinned via FetchContent.
+**Decision:** Build **exactly eight initial host CMake libraries**, including **four public/installable SDK targets** and **four internal implementation targets**, plus **three thin host executables**. Export a versioned, namespaced CMake package with narrowly scoped `include/slam/` public headers. Web Lab is the **fourth OD-016 operating-system process** but has an **independent application build**, not an additional host CMake executable. The optional Pico firmware has a **separate, version-pinned Pico SDK cross-compile build**, never loaded into host CMake by default. The portable domain and API layers remain free of Ceres, GTSAM, ROS, Linux IPC, hardware drivers and platform scheduling types.
 
-**Decision gate:** C++20 Docker image builds without ROS, Catch2 tests discoverable with CTest, cxxopts help/smoke executable, no global compiler flags, no unapproved Boost. Avoid 12 empty targets before real code exists.
+#### Canonical host inventory: eight libraries
+
+| Target | Installed / public SDK? | Responsibility |
+| --- | --- | --- |
+| `slam_core` | **Yes** | OD-001 time/epoch, SE(2), covariance, timestamped sensor/trajectory types, portable domain interfaces |
+| `slam_mapping` | **Yes** | OD-010 log-odds/known masks/submaps, OD-011 immutable map snapshots and map abstractions |
+| `slam_engine` | **Yes** | High-level mapping/localization/session façade, configuration and diagnostics with private implementation |
+| `slam_storage` | **Yes** | OD-012 map bundles, portable recording and replay interfaces |
+| `slam_frontend` | **No** | OD-004/005/006 motion/deskew/scan assembly, OD-015 keyframes, submap builder orchestration, quality/coarse search |
+| `slam_match_ceres` | **No** | OD-007/008 Ceres scan matching, geometry-only Jacobian and calibrated match assessment implementation |
+| `slam_graph_gtsam` | **No** | OD-013 GTSAM Pose2 graph optimization and factor conversion/loop constraints |
+| `slam_platform_linux` | **No** | Linux LD19/Pico sensor adapters, clock synchronization, OD-016 versioned SOCK_SEQPACKET IPC |
+
+**Canonical installed names:** `slam::core`, `slam::mapping`, `slam::engine` and `slam::storage`, exported from the four raw `slam_*` targets through consistent `EXPORT_NAME` metadata. Their build-tree aliases MUST match installed imported names. The remaining four library targets are internal; their headers/targets are **not exported as supported SDK**.
+
+**Exact initial host executables:** `slam_acquisitiond` (links `slam_platform_linux` and `slam_core`); `slam_recorderd` (links `slam_storage` and `slam_platform_linux`); `slam_localizerd` (links `slam_engine`, `slam_mapping` and `slam_platform_linux`, with private backend composition). They implement three native processes. **Web Lab** builds independently as OD-016's fourth process (C++ HTTP/JSON and browser UI); **Pico firmware** uses its own SDK build. Offline replay/mapper controls initially use the SDK or selectable modes of an approved native executable; additional host executable targets require a later decision. **Initial host build total: 11 targets = eight libraries + three executables**, excluding tests and independent projects.
+
+#### Installed public include tree
+
+~~~text
+include/slam/
+  core/
+    time.hpp
+    geometry.hpp
+    sensor_data.hpp
+    trajectory.hpp
+    interfaces/
+  mapping/
+    occupancy_grid.hpp
+    submap.hpp
+    map_snapshot.hpp
+  engine/
+    slam_engine.hpp
+    configuration.hpp
+    diagnostics.hpp
+  storage/
+    map_bundle.hpp
+    recording.hpp
+~~~
+
+Only these **four `include/slam/` subtrees** are installed. Solver cost functions/factors, Linux socket/device headers, clock synchronizer implementation, concrete derived-cache algorithms, worker scheduling, private graph factors and platform IPC types remain in **noninstalled implementation headers**. The API MUST NOT expose `ceres::*`, `gtsam::*`, ROS messages, `linux/*`, `sys/socket.h`, Pico SDK, raw MCAP/Zstd implementation types or private worker classes. If Eigen appears in installed headers, declare a precise compatible **public** Eigen dependency; keep other dependencies private.
+
+#### Strict dependency direction and CMake export correctness
+
+- `slam_core` has no project dependencies and **no Ceres/GTSAM/ROS/Linux/device/IPC public or link dependencies**. `slam_mapping` depends only on `slam_core` among project libraries. `slam_storage` depends on portable `slam_core` and optionally `slam_mapping`, never optimizers/platform. `slam_engine` exposes only portable API types; its private implementation may invoke `slam_frontend`, `slam_match_ceres` and `slam_graph_gtsam` through native interfaces. No public API from any of four SDK targets depends on Linux/IPC/ROS/Ceres/GTSAM.
+- `slam_frontend` depends on core/mapping and no platform/solver classes; `slam_match_ceres` depends on native types, frontend interfaces and Ceres privately; `slam_graph_gtsam` depends on native graph/types and GTSAM privately. Arrange composition/factory injection to keep an **acyclic dependency DAG**; never make frontend ↔ match/graph implementations cyclic. `slam_platform_linux` is an outer adapter linked only by host executable composition, not by core/mapping/storage/frontend or solver domain libraries.
+- CMake `PUBLIC`, `PRIVATE` and `INTERFACE` visibility must be **tested on installed exports**, not inferred from keywords. With a **STATIC** installed `slam_engine`, a `PRIVATE` dependency on an internal static library may still leak as `$<LINK_ONLY:...>` in the exported link interface. Prefer **shared installed SDK façades with pImpl/private runtime implementation** or an equivalent packaging design that allows a standalone consumer to configure/link without needing unexported private target names; install private runtime shared objects and their required solver libraries where applicable. Runtime Ceres/GTSAM dependencies may still exist even when absent from the public CMake interface; test clean deployment and loader paths. Never claim that `PRIVATE` means a binary has no solver dependencies.
+- Use CMake ≥3.25, `cxx_std_20` target compile features, per-target include/link/compile settings, `BUILD_INTERFACE`/`INSTALL_INTERFACE`, `GNUInstallDirs`, `install(TARGETS ... EXPORT ...)`, `EXPORT_NAME`, `configure_package_config_file` and `write_basic_package_version_file`. Provide `FusionSLAMConfig.cmake`, `FusionSLAMConfigVersion.cmake` and `FusionSLAMTargets.cmake` (or consistent installed export equivalents). A clean consumer uses `find_package(FusionSLAM CONFIG REQUIRED)` and targets `slam::core`, `slam::mapping`, `slam::engine` and `slam::storage`; package config calls `find_dependency` only for real public dependencies. Declare API/ABI/version compatibility policy; generating a config-version file alone does not guarantee ABI stability.
+- Catch2 v3 and cxxopts remain pinned via FetchContent, scoped to tests and CLIs respectively. `BUILD_TESTING=OFF` must not download/link Catch2. Heavy Ceres/GTSAM and Zstd/MCAP implementations stay private; platform/solver dependencies are installed as needed for running `slam_localizerd`, not for core SDK header use. No unapproved Boost, global include directories or flags. Tests, optional tools and ROS adapters have independently selectable build options; **ROS adapters consume the public SDK and never reverse-depend** on core.
+- Host x86-64 and Pi ARM64 portable target builds require no Web Lab, actual hardware or Pico/ROS installations. Web Lab's separate build can consume versioned IPC definitions at a **non-core application boundary**. Pico firmware cross-compiles separately with no micro-ROS.
+
+#### Required Docker/CTest acceptance — B25
+
+1. Validate exact **8 production libraries, 4 exported SDK targets, 3 native host daemons**; no accidental internal-target installs/exports, and standalone Web Lab/Pico builds do not add host targets.
+2. Install in a clean prefix and build an **independent external consumer** using `find_package(FusionSLAM CONFIG REQUIRED)`, all four imported `slam::*` targets and only their installed headers. Compile, link and run; reject leaked `LINK_ONLY` internal libraries, implementation headers and any required Ceres/GTSAM/ROS/Linux socket includes.
+3. Graph dependency/visibility audit: check acyclic direction, correct `PUBLIC`/`PRIVATE`/`INTERFACE`, source interface isolation and actual runtime shared-library loader dependencies, including static/shared configurations where supported.
+4. Compile portable SDK headers in standalone tests without ROS/Ceres/GTSAM/devices/IPC. Compare x86-64 and Pi ARM64 native build/install, CMake package version and install-tree relocatability. No hidden CMake dependency on browser or Pico tooling.
+5. `BUILD_TESTING=OFF` excludes Catch2; normal Docker Catch2/CTest tests cover each library and Ceres/GTSAM adapters separately. Three CLI `--help` and invalid argument exit code checks; optional ROS separately off by default.
+6. Run OD-016 four processes using **three host daemons plus independently built Web Lab**. Check independent restart and source/clock versioned IPC without embedding platform types into portable API.
+7. Measure configure/build/install time, link/loader failures, dependency closure, installed size, public header parse cost, RAM/CPU and Pi launch latency. No GitHub Actions dispatch.
+
+**Consequences:** OD-017 settles the first host target inventory, SDK headers/package exports and dependency direction. Later extra tools, a separate graph process, single-file map container, optional ROS or Pico integration are future explicit decisions. **OD-018** loop retrieval, **OD-019** iSAM2 workload and **OD-021** numeric backpressure remain open. This is documentation only; no CMake code, installation or tests have been executed.
+
+**References:** [CMake `target_link_libraries`](https://cmake.org/cmake/help/latest/command/target_link_libraries.html), [CMake `install(EXPORT)`](https://cmake.org/cmake/help/latest/command/install.html), [CMakePackageConfigHelpers](https://cmake.org/cmake/help/latest/module/CMakePackageConfigHelpers.html).
 
 ### OD-019 — Online iSAM2 compute and graph growth
 
@@ -1516,6 +1582,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-016 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-017 are Accepted** (implementation/tests pending). **Accepted OD-017** fixes native module/target and installed SDK boundaries before implementation. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
