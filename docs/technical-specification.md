@@ -58,6 +58,7 @@ The initial version will not provide 3D SLAM, vision-based SLAM, learned feature
 | IMU | MPU6050 | Initial 200 Hz target; use yaw-rate integration, bias estimation, stationary detection, and optional tilt checks. |
 | Wheeled odometry | Encoder-based, where available | 100–200 Hz acquisition target; support differential-drive and Ackermann configurations. |
 | Main onboard compute | Raspberry Pi 5 or comparable | ARM64 Linux; front end and localization must fit a 100 ms LiDAR period. |
+| Optional timestamp coprocessor | Raspberry Pi Pico, RP2040 initially | **Future** custom Pico SDK firmware for IMU/encoder capture and Pi↔Pico clock sync; no micro-ROS; PIO only if justified by measurements. |
 | Experimental compute | DeepRacer EVO / x86 | Confirm actual odometry telemetry before enabling wheel factors; steering commands are not encoder measurements. |
 | Offline workstation | Linux x86-64 or ARM64 | Batch optimization may use more memory and computation than the onboard target. |
 
@@ -100,11 +101,17 @@ All rigid transforms must have documented source/target frame names and multipli
 
 **Accepted time representation (OD-001):** use **signed 64-bit nanoseconds** in the native C++20 timestamp and duration APIs. Every comparable timestamp carries or is associated with an explicit **clock domain and epoch**, and conversions happen at sensor, dataset, and ROS 2 boundaries. Do not use wall/system time for physical motion integration; use a stable acquisition timeline for live sensors and separately preserve host steady time for scheduling, latency and hardware timeouts.
 
-Maintain per-source clock alignment: host receive timestamp, hardware or microcontroller timestamp where available, clock-offset estimate, drift estimate, uncertainty estimate, rollover state and validity interval. A microcontroller timestamping IMU and encoder acquisition is recommended, but not mandatory. Do not compare unconverted timestamps from different clock domains or epochs.
+**Accepted acquisition staging (OD-002):** The initial implementation timestamps LD19 UART frames, MPU6050 samples and wheel encoder events **directly on the Raspberry Pi**, as close to a known sampling or receive event as practical, with a monotonic host clock. Preserve actual read/packet timing, receipt time, device ticks (if any), quality, jitter and time uncertainty; a UART packet receive time is not necessarily the LiDAR beam's acquisition time. The system MUST record and replay successfully with **no Pico connected**.
+
+Architect an optional **Raspberry Pi Pico firmware backend** for later hardware-near acquisition of IMU and wheel-encoder events. The Pico uses **custom Pico SDK C/C++ firmware**, **not micro-ROS**, DDS or ROS message serialization. A small versioned, checksummed native framing protocol (initial transport candidate USB CDC, UART optional) carries source timestamps, sample data, sequence numbers, status and Pico boot/session identity. The Pi estimates a Pico-to-host offset and drift from repeated bidirectional timestamp exchanges (host t1/t4, Pico t2/t3), including latency/asymmetry and mapping uncertainty, and converts source time into the accepted canonical signed 64-bit nanosecond timeline. On Pico reboot/reconnect, invalidate the previous clock mapping and start a new epoch.
+
+The RP2040 Pico hardware timer provides 64-bit **microseconds since boot**. Converting its ticks to nanoseconds does **not** create nanosecond precision. Pico **PIO** may improve deterministic encoder edge counting or event capture, but it does not automatically produce samples stamped with the hardware timer; the capture path must be designed, measured and compared with a simpler IRQ/timer implementation before selecting PIO. The LD19 may remain on Pi UART; its packet-to-beam timestamp model is a separate problem (OD-003). Keep Pico physical time independent of ROS 2 `/clock`, even during simulation. See [Architecture `3.5](architecture-specification.md) for source/timestamp interfaces.
+
+Maintain per-source clock alignment: host receipt and hardware/sample time where available, clock offset, drift, uncertainty, rollover, fit version, validity interval and acquisition event definition. Do not compare unconverted timestamps from different clock domains or epochs.
 
 **ROS 2 simulation compatibility:** the ROS-independent core exposes a clock-injection/time-event interface capable of consuming a controlled simulated nanosecond timeline. An optional ROS 2 adapter honors `use_sim_time` and `/clock` (`rosgraph_msgs/msg/Clock`), converting to/from ROS message timestamps exactly using integer arithmetic and checking ranges. When simulation time is uninitialized, do not publish a valid timed estimate. Pauses must not advance estimator integration; backward jumps, replay seeks, source changes and other discontinuities invalidate state/trajectory interpolation across the boundary and trigger reset or compatible checkpoint restoration. Use the independent host steady clock for CPU deadlines rather than `/clock`. A simulated timestamp need not be monotonic across epochs.
 
-Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples. The clock mapping and jump-handling algorithm remain separate design choices (**OD-002/OD-024**).
+Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples. **OD-002 selects the staged acquisition architecture, not its final measured accuracy or fit parameters**; LD19 beam interpolation (OD-003) and replay checkpoint/jump policy (OD-024) remain open.
 
 Reference: [ROS 2 Clock and Time design](https://design.ros2.org/articles/clock_and_time.html).
 
@@ -416,7 +423,7 @@ Numerical accuracy thresholds should be set only after obtaining repeatable hard
 | Online graph growth | Asynchronous backend, keyframes, submap pruning, optional fixed-lag local estimation. |
 | Offline/map-version mismatch | Version artifacts and reject mismatched calibration or coordinates. |
 
-**Open decisions:** final robot drive type; availability of measured wheel speeds/steering angle on DeepRacer; sensor acquisition hardware (Pi vs MCU); synchronization method; exact LiDAR/IMU mounting; ROS 2 integration boundary; map binary serialization; and whether global relocalization uses a custom particle filter, Beluga, or hierarchical correlative matching.
+**Open decisions:** final robot drive type; availability of measured wheel speeds/steering angle on DeepRacer; Pico transport and clock-model tuning (the Pi-first/Pico-future approach is accepted under OD-002); exact LiDAR/IMU mounting; ROS 2 integration boundary; map binary serialization; and whether global relocalization uses a custom particle filter, Beluga, or hierarchical correlative matching.
 
 ## 14. Implementation milestones
 
