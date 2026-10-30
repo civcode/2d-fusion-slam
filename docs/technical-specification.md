@@ -245,7 +245,7 @@ The deskewer depends only on the portable timestamp-addressable trajectory provi
 
 ### 6.1 Submaps and map representation
 
-Maintain probabilistic occupancy-grid submaps, with log-odds or another documented inverse-sensor model. Construct distance-to-obstacle fields for local registration. Default *experiment starting points*, not fixed product guarantees:
+Maintain probabilistic occupancy-grid submaps, with log-odds or another documented inverse-sensor model. **Accepted OD-007** fixes occupancy as authoritative and **truncated unsigned EDT as its derived, versioned matching cache**, built only from confidently occupied cells. Unknown and supported-map semantics remain explicit. Default *experiment starting points*, not fixed product guarantees:
 
 | Parameter | Initial setting |
 | --- | --- |
@@ -257,19 +257,37 @@ Maintain probabilistic occupancy-grid submaps, with log-odds or another document
 
 Only insert a scan after successful localization against the existing map; never match a scan against a submap that has already incorporated that very scan. Handle unknown cells and maximum-range returns separately from occupied returns. Keep dynamic-object suppression and map aging configurable.
 
-### 6.2 Scan-to-submap optimization
+### 6.2 Accepted OD-007 — Ceres EDT scan-to-submap optimization
 
-Let D_M(q) be an interpolated submap distance-to-obstacle field and q_i the deskewed laser points. Optimize pose xi in SE(2):
+The native **occupancy grid is the authoritative map representation**. A **truncated unsigned Euclidean distance field (EDT)** is a **derived, versioned immutable scan-matching cache**, built from a configurable confidence threshold applied to **occupied cells**. Unknown cells are **not** obstacles or evidence of free space; separately track the known/supported map mask and mask invalid interpolation stencils. Preserve the grid's translation/rotation origin, resolution, occupancy probabilities and revision. Cache metadata records source occupancy revision/checksum, confidence threshold, interpolation mode, truncation and support-mask policy (OD-010/011 still determine map update/cache mechanics).
+
+For OD-005 valid-hit beams deskewed via OD-004 to the **midpoint laser frame**, optimize the **midpoint robot pose** `T` with laser extrinsic `T_base_laser`, a pinned map-frame EDT `D`, and the OD-006 odometry prediction `T_pred` and covariance `Sigma_pred` (same frame/time/tangent convention):
 
 ~~~text
-E_lidar(xi) = sum_i rho( D_M(T(xi) * q_i)^2 / sigma_lidar^2 )
+q_i(T) = inverse(T_map_grid_or_submap) * T * T_base_laser * p_i
+D(q)   = clamp( unsigned_Euclidean_distance_to_confident_occupied(q), 0, D_max )
+r_i(T) = sqrt(w_i) / sigma_i * D(q_i(T))
+
+e_prior = Log( inverse(T_pred) * T )
+L^T L   = inverse(Sigma_pred)
+
+E_Ceres(T) = 0.5 * sum_i Huber_delta( r_i(T)^2 )
+           + 0.5 * || L * e_prior ||^2
+           + 0.5 * sum_i r_boundary_i(T)^2
 ~~~
 
-Use Ceres with smooth field interpolation, a robust loss, proper residual scaling, and bounded iterations. Implement coarse correlative search for bad initial guesses and loop-closure verification. Do not interpret a converged nonlinear optimizer as proof of a correct localization.
+- `w_i` is validated nonnegative beam-quality weight and `sigma_i > 0` is effective endpoint/map uncertainty in **metres**. `D_max` is a configurable metre-scale truncation. Huber `delta` is positive, in normalized residual units; calibrate its actual value with synthetic and real data.
+- **One scalar Ceres residual block and one `ceres::HuberLoss(delta)` per beam**. A single residual block containing all beams would robustify the *whole vector*, not each outlier. Emit **unsquared `sqrt(w_i)/sigma_i * D`**; Ceres internally squares and robustifies each block. Ceres's global factor 1/2 is conventional.
+- Implement a **separate three-component whitened SE(2) motion-prior residual** using a checked positive-definite predicted covariance and a documented tangent-space convention. The odometry prior is part of the **frontend regularized objective**, not merely initialization. Its contribution and underlying sensor provenance MUST be reported separately from LiDAR-only residuals.
+- **Out-of-grid samples:** Add a **separate, finite, differentiable or piecewise differentiable outward-increasing boundary penalty** (e.g. scaled hinge on metric outside distance) in map-local coordinates, with gradients leading back into support. Do not clamp outside coordinates to a fixed EDT edge value or treat inside-grid unknown cells as confident matches. Unknown regions are masked, not treated as zero distance/free space.
+- **Bilinear interpolation** is the initial choice. It is continuous and bounded between neighbor values, though derivatives change at cell boundaries. Explicitly validate rotated grid origins, cell-edge derivatives and unknown-neighbor masking; bicubic `BiCubicInterpolator` remains a future **optional** benchmarked alternative, as do occupancy-probability, signed-distance and feature objectives behind the same public native `ScanMatcher` interface.
+- **Ceres must remain a private implementation dependency:** shared domain-level scan/match/result/map interfaces MUST NOT contain Ceres classes, cost functions, loss functions or ROS 2 types. Avoid introducing Boost without case-by-case approval.
 
-The frontend returns optimized pose, reference submap ID, inlier/overlap statistics, residual score, convergence status, and an uncertainty/information estimate. Detect insufficient structure and ill-conditioning (such as translation along an empty corridor). Noise estimates must not be unrealistically tight because scan endpoints share a common map and may be correlated.
+**Acceptance:** Require sufficient valid observed-map overlap, enough nontruncated/spatially distributed beams, acceptable **LiDAR-only** residual statistics, successful solver termination, consistency against the predicted motion, and sufficiently constrained **LiDAR-only geometric Hessian** directions. Inspect observability **excluding** both odometry-prior and artificial boundary information; strong odometry cannot mask scan degeneracy. Reject empty occupied EDTs, unsupported/unknown-dominated scans, boundary-dominated solutions, nonfinite covariance and poor-quality corrections, with typed reasons. OD-008 determines exact thresholds and uncertainty inflation.
 
-**Information accounting:** Use wheel/gyro prediction to initialize Ceres. If independent wheel and gyro factors are also added to GTSAM, do not simply add the identical fused prediction again as an independent Ceres-derived prior/factor. Deskew also creates some residual measurement correlation that should be documented and, where necessary, modeled conservatively.
+**Backend information accounting:** The optimized pose is a **wheel/gyro-prior-regularized posterior**. If GTSAM also has wheel/gyro factors from the same samples, **do not add that posterior as an independent LiDAR factor**. Preserve separate LiDAR geometry/information, odometry prior pose/covariance/source IDs, boundary penalties and immutable map/EDT revisions; OD-008/013 still determine a statistically justifiable graph measurement extraction/conditioning policy. Do not assume subtracting prior Hessian creates an exact independent LiDAR covariance.
+
+**Test requirements:** Docker Catch2/Ceres integration tests must cover EDT Euclidean metrics, truncation and map yaw; bilinear values/derivatives/masks; one-block-per-beam Huber outliers; weight/sigma scaling, Lie Log prior whitening; out-of-grid boundary gradient; unknown and empty maps; overlap/degeneracy and strong-prior non-observability; synthetic apartment and symmetric warehouse false locks; repeatability and Pi 5 runtime. See [OD-007](open-design-choices.md) and [architecture `5](architecture-specification.md).
 
 ## 7. Graph backend (GTSAM)
 
@@ -444,7 +462,7 @@ Measure end-to-end **capture-to-pose latency**, not only Ceres solve time. Use b
 - Clock offset/drift estimation and timing uncertainty; missing or late IMU/encoder samples.
 - SE(2) arcs/near-zero angular rate, OD-006 minimal wheel/gyro integration, verified/unconfigured kinematic adapter, stationary bias calibration and bounded updates, slip disagreement with covariance growth, asynchronous measurements, timestamp-addressable coverage and laser/IMU extrinsics.
 - Synthetic moving-wall/apartment/warehouse scans proving **midpoint-referenced** rotational and translational deskew, full interpolation eligibility, 10 ms quality-gated extrapolation and rejection of 10.1 ms or uncertain/gapped scans.
-- Ceres residual gradients, convergence basin, robust outlier rejection, and degeneracy detection.
+- OD-007 Ceres unsigned EDT distance/truncation, bilinear unknown-mask interpolation/gradients, independent Huber beam blocks, SE(2) covariance-weighted odometry prior, boundary penalties, **LiDAR-only** overlap/degeneracy gating and no posterior pose double-counting.
 - GTSAM custom factor Jacobians, bias recovery, covariance scaling, loop-closure gating.
 - Map-bundle round-trip, version rejection, artifact integrity, and replay determinism.
 
@@ -478,7 +496,7 @@ Numerical accuracy thresholds should be set only after obtaining repeatable hard
 | Acceleration and wheel slip | OD-006 compares independent wheel/gyro yaw only where observable, grows covariance, reports degraded quality and rejects false bias updates from slip. |
 | Corridors / repetitive geometry | Degeneracy-aware scan matching, multiple pose hypotheses in recovery, properly scaled covariances. |
 | Moving obstacles / map changes | Robust residuals, dynamic rejection, read-only localized map with versioned remapping. |
-| Ceres result correlation with IMU deskew | Avoid duplicating motion priors; conservatively estimate front-end covariance. |
+| Ceres posterior correlation with odom and IMU deskew | Accepted OD-007 explicitly regularizes frontend with a wheel/gyro odometry prior; separate LiDAR-only evidence from posterior pose before any independent GTSAM factor; conservatively handle deskew and map correlation (OD-008/013). |
 | DeepRacer wheel telemetry availability | Verify actual hardware signals before specifying encoder factors; support Ackermann model. |
 | Online graph growth | Asynchronous backend, keyframes, submap pruning, optional fixed-lag local estimation. |
 | Offline/map-version mismatch | Version artifacts and reject mismatched calibration or coordinates. |
