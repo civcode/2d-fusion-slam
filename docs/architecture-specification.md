@@ -75,8 +75,8 @@ Component ownership and forbidden dependencies:
 | `motion` | Minimal wheel/gyro integrator, gyro bias, pose–bias uncertainty, replaceable KinematicModel, piecewise SE(2) trajectory, coverage and quality | No drivetrain assumption or global-map jumps; expose generic provider |
 | `scan_assembly` | Fixed-seam generic timed-beam grouping, partial coverage, missing sectors and return validity | No LD19 packet or ROS dependency |
 | `deskew` | Per-beam transformation into temporal midpoint laser frame, full-coverage validation and provenance | No device/ROS/optimizer dependence |
-| `mapping` | Occupancy log-odds, submap builders, frozen snapshots and fields | No direct dependence on GTSAM |
-| `frontend_ceres` | Geometric alignment, scores, degeneracy and uncertainty | No raw device or ROS I/O |
+| `mapping` | Authoritative occupancy grids and log-odds, submap builders, frozen snapshots and versioned derived EDT fields | No direct GTSAM or Ceres dependency |
+| `frontend_ceres` | Truncated EDT bilinear matcher, per-beam Huber, OD-006 whitened prior, separate boundary residuals, quality and LiDAR-only evidence | No ROS/device I/O; Ceres private behind native ScanMatcher |
 | `backend_gtsam` | Factor graph, loop factors, bias states, optimized graph revisions | No acquisition/UI ownership |
 | `localization` | Frozen-map tracking state, confidence and recovery | Read-only map |
 | `io` | MCAP/native datasets, versioned maps, conversion/report schemas | No ROS runtime requirement |
@@ -394,27 +394,89 @@ Use the **continuous odom trajectory**, not a discontinuously corrected `map` po
 
 **Validation:** Synthetic apartment/warehouse constant-curvature truth, scan temporal midpoint with nonuniform beam spacing, asynchronous IMU/encoder updates, off-center laser lever arm, missing samples, seek/time jumps, complete-coverage mapping gates, and quality-gated 9.9/10/10.1 ms extrapolation cases. Compare latency of bounded delay vs prediction on Pi.
 
-## 5. Ceres scan matcher and front-end measurement accounting
+## 5. Accepted OD-007: Ceres EDT scan matching and evidence accounting
 
-Against a frozen submap-local Euclidean distance-to-obstacle field `D_j`, a proposed LiDAR-only residual is:
+### 5.1 Authoritative occupancy and derived distance field
+
+The **authoritative spatial map** remains the native **ROS-compatible occupancy grid**, with unknown, free and occupied probabilities, resolution, origin (including rotation), and immutable revision ID. The matcher receives a **versioned truncated unsigned Euclidean distance transform (EDT)** computed from **confidently occupied** cells, not a second independent representation of the map. Threshold selection belongs to OD-010; derived-cache lifecycle, tiling and invalidation belong to OD-011.
+
+- EDT values are **metres to nearest confidently occupied cell**, truncated at configurable `D_max`. Cache metadata references the **exact source occupancy revision/checksum**, confidence threshold, grid origin/resolution, truncation, unknown-region support mask and interpolation/version settings.
+- **Unknown cells are neither occupied obstacles nor known free space**. Store a separate supported/observed validity mask; a numeric EDT value in an unknown/unsupported region does not make it a reliable scan-matching observation. Count/map-mask unsupported endpoints instead of treating unknown as zero distance.
+- All scan matches pin a coherent immutable occupancy/EDT revision. A changed map creates a **new cache revision** and never modifies a matcher worker's field in place.
+- Initial interpolation is **bilinear**, with documented grid-world transforms, masked-stencil validity, cell-boundary derivative behavior, and finite/valid interpolation domain. Consider **bicubic only after benchmark gains** outweigh overshoot/complexity and runtime costs.
+
+### 5.2 Optimization pose, residuals and priors
+
+The input to `ScanMatcher` is a **quality-accepted OD-005 AssembledScan** after **OD-004 deskew into the midpoint laser frame**, OD-006 predicted midpoint robot pose/covariance, laser extrinsic and a pinned immutable EDT. For a beam endpoint `p_i` in the midpoint laser frame, the solver varies `T = T_map_base_mid` (or the equivalent referenced submap pose), transforms `q_i = T_map_grid_or_submap^-1 * T * T_base_laser * p_i`, and samples the EDT at `q_i`.
 
 ~~~text
-r_i(x) = D_j(T_submap_base(x) * T_base_laser * p_i) / sigma
-cost   = 0.5 * sum_i robust_loss( r_i(x)^2 )
+D(q) = clamp( distance_to_nearest_confident_occupied(q), 0, D_max )
+
+r_i(T) = sqrt(w_i) / sigma_i * D(q_i(T))
+e_prior(T) = Log( T_pred^-1 * T )
+L^T L = Sigma_pred^-1
+
+E(T) = 0.5 * sum_i Huber_delta( r_i(T)^2 )
+     + 0.5 * ||L * e_prior(T)||^2
+     + 0.5 * sum_i r_boundary_i(T)^2
 ~~~
 
-**Ceres receives the unsquared distance residual**; the optimizer squares it internally. The gyro/wheel predicted pose is the **initialization and search window**, not an automatically added independent prior. Ceres uses bounded iterations/robust losses, interpolated fields and explicit outside-map/unknown-cell handling.
+`w_i` is validated nonnegative beam confidence; `sigma_i > 0` is effective endpoint/map uncertainty in metres. The Huber scale `delta > 0` is expressed in normalized residual units. The formula follows Ceres's convention of **one-half the robustified squared norm**. **Do not emit squared distances as residuals** and then allow Ceres to square them again.
 
-The matcher outputs: measurement-only score, convergence state, inlier count, overlap, reference submap/version, candidate transform, eigenvalue/condition diagnostics, conservative uncertainty and failure reason. A good residual is not a guarantee of correct global pose in a repetitive warehouse. Provide a coarse correlative fallback and use temporal/graph consistency gates.
+- **One scalar Ceres residual block per valid beam**, each with its own `ceres::HuberLoss(delta)`. Grouping all beam residuals into one block under a single Huber robustifies the **combined** norm, not each outlier.
+- Add the **3-vector, covariance-whitened SE(2) odometry prior** as a separate normally unrobustified residual block. Compute `T_pred` and `Sigma_pred` from OD-006 at the same **scan midpoint**, in the same frame and documented Lie tangent ordering; check positive-definiteness and proper covariance transformation before whitening.
+- The odometry prior is a deliberate **local search regularizer**, not merely the initial pose. It must have separately recorded contribution, validity and provenance; absent/invalid covariance cannot silently become a zero-variance anchor.
+- **Out-of-grid endpoints:** add explicit finite, outward-increasing smooth/hinge-style boundary residuals based on metric distance to the grid's supported boundary, with meaningful inward gradient. Do not clamp outside coordinates to an edge-value constant or conflate map **unknown** with out-of-grid. Make unknown-region validity policy explicit and testable. Avoid introducing unbounded costs at extreme positions.
+- Saturated `D_max` distances often have zero gradient. Reject low-information scans unless enough known, nontruncated, spatially distributed endpoints remain; a strong prior cannot substitute for actual LiDAR geometry.
 
-| Evidence | Prediction / deskew | Graph constraint | Information-accounting rule |
+### 5.3 Evidence separation and acceptance
+
+**Crucial OD-006/OD-013 compatibility:** The regularized optimized pose combines **LiDAR + a wheel/gyro odometry prior**. It is a **posterior pose**, not a statistically independent LiDAR observation. If GTSAM separately receives wheel and gyro factors from those same measurements, it MUST NOT receive that posterior pose as an independent LiDAR-only factor. Instead preserve separate **LiDAR-only geometric measurement/diagnostics**, prior provenance/covariance and the final regularized pose; graph factor strategy and correlated uncertainty are explicitly still **OD-008/OD-013**. Do not assert an exact independent LiDAR covariance merely by subtracting prior information from a posterior Hessian; deskew/map conditioning is correlated.
+
+The native **`ScanMatcher`** returns pose, convergence and failure reason; **LiDAR-only score and geometric-only information/eigenvalues**; inliers/overlap and informative/nontruncated counts; raw/robust residual quantiles; prior pose/covariance and cost; boundary/unknown/outside counts and costs; solver iterations/runtime; source scan/calibration and pinned occupancy/EDT revision; and conservative pose uncertainty (or an explicitly unavailable status).
+
+**Required quality gates before accepting a correction:**
+
+1. OD-005 valid-hit geometry/coverage, OD-004 trajectory coverage where mapping, valid time/frame/calibration and covariance.
+2. Sufficient known/observed supported-map **overlap** and spatial distribution of informative LiDAR endpoints; unknown/out-of-grid samples cannot count as valid inliers.
+3. Finite geometric residual statistics, bounded outlier fraction and rejection of **boundary-dominated** or truncation-saturated solutions.
+4. **LiDAR-only** observable SE(2) directions from geometry-only information/Hessian, with condition/eigenvalue diagnostics evaluated **without** the odometry prior and boundary term; a strong prior may stabilize a pose but does **not** make the scan informative.
+5. Convergence status plus pose jump and Mahalanobis consistency against the OD-006 prediction, with thresholds/uncertainty rules tuned in **OD-008**. A solver `SUCCESS` flag or low posterior objective is insufficient by itself.
+
+**Graph information table:**
+
+| Evidence | Frontend use | Backend use | Constraint |
 | --- | --- | --- | --- |
-| Wheel increments | Translation, predicted pose | Relative wheel factor | Do **not** additionally insert the same fused predicted pose as a separate factor |
-| Gyro rate | Yaw trajectory and deskew | Bias-aware integrated yaw factor | LiDAR deskew conditioned on gyro creates correlation; do not claim full independence |
-| LiDAR | Local geometric residual vs frozen map | Scan-to-submap constraint | Avoid self-matching and redundant insertion of the same scan |
-| Revisit scan | Candidate retrieval/verification | Robust loop factor | Verify and gate false matches and repeated evidence |
+| Wheel increments | Prediction, odometry prior and deskew | Raw wheel motion factors | The Ceres regularized posterior is **not another independent wheel measurement** |
+| Gyro rate | Bias-corrected trajectory, odometry prior and deskew | Yaw/bias factors | Propagate shared conditioning and covariance conservatively |
+| LiDAR hits | Separate geometric EDT residual | Geometric scan-to-submap / loop evidence | Separate from prior and boundary terms; avoid map self-matching |
+| Map support | Interpolation/validity and boundary residual | Immutable reference revision | Boundary penalty is **not** observed wall geometry |
 
-Raw Hessian inverse is not automatically an independent measurement covariance; map uncertainty, shared gyro conditioning, degeneracy and outliers matter. Conservative inflation or unavailable covariance should be explicit. Field/interpolation **OD-007**, covariance/gating **OD-008**, global search **OD-009**.
+### 5.4 Private Ceres implementation and replaceable frontend
+
+~~~text
+native OccupancyGrid revision (source of truth)
+     -> confidence occupied mask + supported/known mask
+     -> immutable EDT cache (revision, truncation, metadata)
+                                           |
+OD-005 AssembledScan -> OD-004 midpoint deskew -> valid hit endpoints
+OD-006 midpoint predicted pose + covariance ----------+
+                                                      v
+                            ROS/Ceres-free ScanMatcher interface
+                                                      |
+                          private Ceres EDT implementation:
+                          bilinear distance + per-hit Huber,
+                          whitened odom prior + boundary residual
+                                                      |
+                        native MatchResult (pose, separated evidence,
+                                 quality, uncertainty, revision IDs)
+                                                      |
+                        localization / map gate / OD-013 backend
+~~~
+
+Core interfaces MUST NOT expose Ceres types, solver summaries, residual blocks or ROS types. The Ceres-based implementation links Ceres privately and emits generic native results. Alternate objectives (occupancy probability, signed distance, features), different interpolators (possibly Ceres's `BiCubicInterpolator`), and search initialization may evolve without changing OD-001–OD-006 timing/trajectory interfaces or the occupancy-grid schema.
+
+**Validation:** Docker Catch2/Ceres synthetic fixtures for known Euclidean geometry, bilinear and derivative behavior at edges, masked unknowns, grid origin yaw, Ceres block layout/Huber scale, correct sqrt(weight)/sigma, SPD covariance whitening and Lie Log prior, boundary gradients, LiDAR-only observability despite a strong prior, degeneracy/false warehouse minima, residual quality/coverage gating, B15 performance and posterior/prior graph independence. OD-008, OD-010 and OD-011 still control covariance calibration, map threshold and cache design.
 
 ## 6. Occupancy grids and immutable submaps
 
@@ -431,7 +493,7 @@ accepted scan -> active occupancy builder -> frozen immutable snapshot
 
 - A scan MUST match a map that has not yet included it.
 - Document occupied/free updates, unknown handling, range truncation, log-odds clamping and dynamic rejection.
-- Each match pins one immutable map/submap revision. Optimizing global submap poses does not rewrite the submap's local raster.
+- Each match pins **an authoritative occupancy and derived EDT revision**, including known-space mask, threshold and truncation provenance. Optimizing global submap poses does not rewrite the submap's local raster or silently reuse a stale EDT cache.
 - Offline re-deskew or re-mapping creates a **new artifact**, not a silent mutation of previous outputs.
 - Live localization only reads published frozen map tiles; no map mutation or experimental Web Lab edits on the production bundle.
 - Resolution, overlap/freeze trigger **OD-010**; distance-field storage and snapshot/eviction **OD-011**.
@@ -568,7 +630,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 | Device/time | LD19 CRC/47-byte parsing, 30 s wraps, angle/speed per-beam timing, LD19↔Pi clock fit, injected jitter/offset/drift and physical delay bounds; signed-ns epochs and ROS /clock; Pi/Pico acquisition faults |
 | Geometry | SE(2) composition, REP frames, rotated occupancy origin, Jacobians and extrinsics |
 | Motion/deskew | OD-006 minimal wheel/gyro integrator, bias calibration and bounded correction, supported/unconfigured drivetrain, wheel/gyro slip with covariance growth, pose–bias uncertainty, OD-004 SE(2) arcs/midpoint/10 ms gate |
-| Ceres | Distance-field interpolation, convergence, false matches, corridor degeneracy, robust residuals |
+| Ceres | OD-007 EDT truncation, bilinear/unknown mask, per-beam Huber, odometry covariance whitening, explicit boundary gradients, LiDAR-only observability, correlation-safe graph export, false corridor minima and performance |
 | Mapping/graph | No self-matching, immutable submaps, wheel/gyro factor independence, bias factor Jacobians, loop rejection |
 | Localization | Map->odom correctness, stale/lost states, kidnapped recovery and frozen map integrity |
 | IO/replay | MCAP and map schema roundtrip, version rejection, deterministic replay, interrupted writes |
