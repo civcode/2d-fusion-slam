@@ -29,7 +29,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-003 | LD19 angle/speed reconstruction and calibrated Pi clock alignment | P1 | Deskew fidelity | **Accepted** (calibration pending) |
 | OD-004 | Midpoint scan reference and piecewise SE(2) exponential trajectory | P1 | Deskew, optimization | **Accepted** (tests pending) |
 | OD-005 | Angular-seam scan assembly, partial coverage and invalid returns | P1 | Frontend acceptance | **Accepted** (tests/tuning pending) |
-| OD-006 | Wheel/gyro predictor and kinematic models | P1 | Odometry, bias and slip | Open |
+| OD-006 | Minimal wheel/gyro integrator and replaceable kinematics | P1 | Odometry, bias and slip | **Accepted** (calibration/tests pending) |
 | OD-007 | Distance-field residual / loss design | P1 | Ceres matching | Open |
 | OD-008 | Match uncertainty and degeneracy policy | P1 | Graph, localizer quality | Open |
 | OD-009 | Coarse correlative search design | P2 | Tracking recovery | Open |
@@ -332,7 +332,7 @@ public:
 5. Extrapolation at **9.9 ms** and **10 ms** may succeed only if gates pass; **10.1 ms** MUST fail. Covariance grows, status is `EXTRAPOLATED`, and normal mapping never inserts an extrapolated scan.
 6. Compare delay-until-covered with optional bounded extrapolation for p95/p99 latency/accuracy on Pi and deterministic replay; prove that a mock/spline trajectory backend can replace the motion estimator without altering deskew code.
 
-**Consequences:** The temporal midpoint, constant body-twist SE(2) exponential, complete interpolation for map insertion, and quality-gated 10 ms maximum optional extrapolation are **settled**. The gyro/wheel fusion and covariance details (OD-006), interpolation gap threshold, queue wait policy (OD-021), and offline re-deskew iteration (OD-014) remain to be evaluated.
+**Consequences:** The temporal midpoint, constant body-twist SE(2) exponential, complete interpolation for map insertion, and quality-gated 10 ms maximum optional extrapolation are **settled**. Accepted OD-006 defines the minimal wheel/gyro integrator and bias/uncertainty policy; interpolation gap threshold, queue wait policy (OD-021), and offline re-deskew iteration (OD-014) remain to be evaluated.
 
 ### OD-005 — Angular-seam revolution assembly, partial scans and return validity
 
@@ -419,15 +419,69 @@ The **LD19 acquisition adapter** owns frame parsing, CRC, reported motor speed a
 7. Full OD-004 interpolation across the **actual observed** scan interval, including timestamp-valid slots with invalid ranges; missing time boundaries and extrapolated trajectory prevent ordinary insertion. Verify midpoint is not a mean beam time.
 8. Deterministic synthetic apartment/warehouse replay, Docker Catch2/CTest tests, Web Lab overlay of observed/missing angular sectors and quality counters, and measured Pi CPU/latency.
 
-**Consequences:** Angular-seam segmentation, honest partial scans, return validity and safe occupancy behavior, and recovery-only timeouts are **settled**. Exact coverage binning, thresholds, loss tolerance and timeout duration remain **configurable implementation/benchmark tuning**, not permission to invent missing samples. OD-003 owns per-beam time reconstruction; OD-004 owns midpoint trajectory deskew; OD-005 owns **observation grouping and scan eligibility**. OD-006 motion fusion, OD-007 scan matcher scoring and OD-010 occupancy inverse-sensor model remain open.
+**Consequences:** Angular-seam segmentation, honest partial scans, return validity and safe occupancy behavior, and recovery-only timeouts are **settled**. Exact coverage binning, thresholds, loss tolerance and timeout duration remain **configurable implementation/benchmark tuning**, not permission to invent missing samples. OD-003 owns per-beam time reconstruction; OD-004 owns midpoint trajectory deskew; OD-005 owns **observation grouping and scan eligibility**. OD-006 motion integration is accepted; OD-007 scan matcher scoring and OD-010 occupancy inverse-sensor model remain open.
 
-### OD-006 — Motion state, kinematics and estimator type
+### OD-006 — Minimal wheel/gyro integrator and replaceable kinematics
 
-**Question:** Minimal wheel + bias-corrected gyro integrator, EKF/error-state filter, or recent-state smoother? Which drive model does the first robot actually expose?
+**State:** **Accepted** (design selected; implementation, hardware verification and tests pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit choice  
+**Priority:** P1
 
-**Provisional preference:** minimal continuous SE(2) predictor with wheel translation and gyro yaw, explicit gyro bias and covariance; separate differential-drive and Ackermann adapters. **Verify the primary robot drive type and encoder/steering telemetry before implementing drive-specific factors.**
+**Decision:** Initially use a **minimal wheel-odometry and bias-corrected Z-gyroscope integrator**, *not* an EKF or recent-state smoother. Maintain planar **SE(2) pose, body twist, gyro yaw-rate bias and uncertainty**, and provide the timestamp-addressable **piecewise-constant body-twist / SE(2) exponential trajectory** specified by accepted OD-004. Use a replaceable kinematic-model interface; **do not assume differential drive** until the first robot's wheel arrangement, encoder outputs and (where applicable) steering feedback have been established. Keep both the estimator and trajectory interfaces native C++20, independent of ROS and device-specific types.
 
-**Decision gate:** synthetic wheel slip/gyro drift, actual stationary gyro calibration, encoder scale and yaw cross-check, numerical propagation tests and Pi runtime. Only add EKF/fixed lag if it demonstrably improves consistency or tracking.
+**Alternatives:** (A) minimal direct integrator — **accepted** for simplicity, determinism, debugging and onboard cost; (B) EKF/error-state filter — deferred pending accuracy and consistency evidence; (C) fixed-lag/recent-state smoothing — deferred pending a demonstrated benefit and tolerable compute budget. A fallback with missing wheel or gyro information is explicitly **degraded**, not a fabricated complete sensor fusion result.
+
+### Native motion state and interfaces
+
+| State/output | Contract |
+| --- | --- |
+| `T_odom_base(t) ∈ SE(2)` | Continuous drift-prone local pose, no global map-correction jumps |
+| `xi_body = (v_x,v_y,omega)` | Planar body twist in m/s, m/s, rad/s with measured-source validity |
+| `b_g` | Gyro Z-rate bias in rad/s, calibrated with an uncertainty and revision |
+| `P` | Pose/bias uncertainty and, if represented, twist uncertainty; explicit frame/tangent order and cross-correlations |
+| `quality` | Sensor/time coverage, bias readiness, calibrated kinematics, slip/disagreement and degraded state |
+| `trajectory` | OD-004 intervals, `Exp_SE2`, interpolation coverage, clock domain/epoch, covariance, revision |
+
+A minimal error-state formulation with `(δx,δy,δyaw,δb_g)` and **pose–gyro-bias cross-covariance** is a suitable starting point; the precise covariance discretization must be verified, not assumed. Use OD-001 acquisition nanoseconds (converted to seconds for integration), OD-002/003 timing provenance and OD-004 trajectory queries. The trajectory provider consumes **generic wheel/motion and IMU measurements**, never direct MPU6050, encoder, Pico, LD19 or ROS types.
+
+The estimator owns the mutable predictor state; deskew, Ceres, replay and ROS adapters use the stable `MotionEstimator` / `TrajectoryProvider` boundary. A later EKF or recent-state smoother MUST implement equivalent native output semantics, allowing replacement without modifying the SLAM frontend.
+
+### Kinematic-model selection (hardware evidence required)
+
+- Provide a native `KinematicModel` interface mapping **actual observed** wheel/steer telemetry into body translation, possible independent wheel yaw, quality/covariance and calibration identity.
+- Differential drive may use `ds = (ds_R + ds_L)/2` and `dtheta_w = (ds_R - ds_L)/track_width` **only after independently driven wheel arrangement and measured left/right encoder information are confirmed**, with calibrated radii, signs and track width.
+- Ackermann `omega_w = v*tan(delta)/wheelbase` is available **only** with valid wheel speed and **measured** steering angle/geometry. Commanded steering is not automatically a measurement.
+- A distinct measured-forward-odometry source may be supported when raw ticks are unavailable, with its provenance and correlations recorded. An unsupported/unverified drivetrain MUST report unconfigured/degraded status, not silently select differential drive.
+- Independent wheel-predicted yaw is optional; if unavailable, do not invent a disagreement signal.
+
+### Integration, uncertainty and slip
+
+Integrate body translation from wheel motion with yaw rate `omega_z - b_g` using **`Exp_SE2(xi_body * dt)`** over real timestamps. Use the exact constant-twist arc and stable small-angle limit. Propagate uncertainty from wheel measurement/scale, gyro noise, **gyro bias and its random walk**, timestamps, slip and kinematic mismatch. Preserve pose/bias covariance coupling (or demonstrate a conservative alternative), growing uncertainty through missing readings or unobservable heading.
+
+When wheel-derived yaw is independently available, compare gyro and wheel relative yaw over the **same aligned interval**, using an uncertainty-aware consistency test. Persistent disagreement may indicate wheel slip, steering/scale errors or gyro problems; **raise covariance, mark degraded and log diagnostics**. It MUST NOT be treated automatically as a gyro-bias correction. If wheel/gyro evidence is missing, do not fabricate translation or zero yaw; report the unsupported trajectory interval and respect OD-004 full interpolation and gated 10 ms prediction rules.
+
+### Stationary gyro-bias calibration and gated online corrections
+
+- **Initialization:** estimate `b_g` and its uncertainty from a verified **stationary sample window**. Stationarity SHOULD be cross-checked using wheel-no-motion observations, low gyro variation and accelerometer/gravity information where available, not merely a single zero-rate reading. Record sample count, noise, duration, temperature if present and calibration revision.
+- If the robot moves or the stationary condition is unproven, **do not claim a calibrated bias**. Expose uninitialized/uncertain state, increase yaw uncertainty and gate operations that require a trustworthy trajectory.
+- **Online updates:** permit small, bounded, logged bias corrections only during independently validated stationary intervals or when a separately validated observable correction with proper uncertainty is available. Apply innovation/hysteresis checks; reject apparent bias caused by wheel slip or motion. Do not retroactively jump the published odom trajectory. Reintegrating raw history after offline recalibration produces a **new versioned trajectory** (OD-014).
+- Temperature dependence and exact stationary thresholds remain empirical calibration/config choices, not hard-coded assumptions.
+
+### Information accounting and validation
+
+The fused predictor is used for **deskew and scan-matcher initialization**. If GTSAM also uses raw wheel and gyro factors, **do not insert this already-fused predicted pose as an additional independent prior**. Conditioning of LiDAR deskew on wheel/gyro creates correlation; carry conservative uncertainty and provenance under OD-008/013.
+
+Tests required inside Docker using Catch2:
+
+1. Exact SE(2) pure translation, rotation and arcs, asynchronous wheel/gyro samples, invalid clock epochs and OD-004 trajectory coverage.
+2. Differential and Ackermann **synthetic fixtures with the corresponding configured measurements**; unsupported hardware and missing steering fail explicitly.
+3. Stationary bias calibration with known drift/noise, moving startup, insufficient stationary evidence, recovery and bounded correction.
+4. Slip/encoder-fault vs gyro disagreement on the same time window; confirm uncertainty inflation and **no spurious bias learning**.
+5. Missing wheel/gyro data, growing yaw uncertainty, bias–pose covariance consistency with synthetic/Monte Carlo truth, and OD-004 interpolation/extrapolation gating.
+6. Swap a mock alternative predictor behind the same provider interface; no ROS or device headers required; measure Pi 5 latency and memory.
+
+**Consequences:** The **initial estimator architecture** is accepted; the actual drivetrain model and calibrated parameters are **still unverified hardware facts**, not silently chosen. Covariance tuning, stationary thresholds, slip gates, EKF/smoother feasibility and measured accuracy remain implementation/benchmark work.
 
 ## 4. Matching, mapping and graph decisions
 
@@ -621,6 +675,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001, OD-002, OD-003, OD-004 and OD-005 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
+**OD-001, OD-002, OD-003, OD-004, OD-005 and OD-006 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
 
-**Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite informs **OD-004, OD-006, OD-007, OD-008 and OD-009** without relying on a large public dataset.
+**Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004 and OD-006** and informs **OD-007, OD-008 and OD-009** without relying on a large public dataset.
