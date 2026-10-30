@@ -43,64 +43,61 @@
 
 All new **native host** production code and test code MUST use C++20. A 3rd-party dependency MAY use an older language standard internally, provided it does not force a lower standard or extensions on project targets. **Future Pico firmware** is a separate embedded build using the pinned Pico SDK and its compatible C/C++ compiler; seek C++20 for project-owned firmware where supported, and document a specific embedded-toolchain exception rather than changing the native C++20 requirement.
 
-## 3. Project structure and module boundaries
+## 3. Accepted OD-017 project targets and public API boundaries
 
-The implementation SHOULD evolve toward:
+The first host CMake implementation has **eight production libraries** (four installed SDK and four internal implementation) and **three native daemon executables**. Do not create empty CMake libraries for every conceptual module. **Web Lab is separately built as OD-016's fourth runtime process**, and Pico firmware is an independent optional cross-compile.
 
 ~~~text
 2d-fusion-slam/
   CMakeLists.txt
   CMakePresets.json
-  cmake/
+  cmake/                              # FusionSLAM package configuration
   docker/
-    Dockerfile
-    compose.yaml
-  include/fusion_slam/
-  src/
+  include/slam/
     core/
-    sensors/
-    time_sync/
-    calibration/
-    motion/
-    deskew/
+      time.hpp geometry.hpp sensor_data.hpp trajectory.hpp
+      interfaces/
     mapping/
-    frontend_ceres/
-    backend_gtsam/
-    localization/
-    io/
-  ros2/
-    fusion_slam_ros/  # optional ROS 2 adapter package
-  firmware/
-    pico/             # optional RP2040 custom acquisition firmware, when implemented
+      occupancy_grid.hpp submap.hpp map_snapshot.hpp
+    engine/
+      slam_engine.hpp configuration.hpp diagnostics.hpp
+    storage/
+      map_bundle.hpp recording.hpp
+  src/
+    core/             # slam_core (public)
+    mapping/          # slam_mapping (public)
+    engine/           # slam_engine (public facade, private internals)
+    storage/          # slam_storage (public)
+    frontend/         # slam_frontend (private)
+    match_ceres/      # slam_match_ceres (private)
+    graph_gtsam/      # slam_graph_gtsam (private)
+    platform_linux/   # slam_platform_linux (private)
   apps/
-    web_lab/
-      web/          # static HTML/CSS/JavaScript
-    recorder/
-    offline_mapper/
-    live_localizer/
-    online_slam/
-    replay_evaluator/
+    slam_acquisitiond/
+    slam_recorderd/
+    slam_localizerd/
+    web_lab/          # independent application build, not host target
+  firmware/pico/      # independent optional Pico SDK CMake cross-compile
+  ros2/fusion_slam_ros/ # independent optional ROS adapter
   tests/
-    unit/
-    integration/
-    regression/
-    performance/
   configs/
   docs/
-    technical-specification.md
-    implementation-contract.md
 ~~~
 
-This is a target layout, not a requirement to create empty placeholder directories.
+| Raw library | Public CMake imported name | Responsibility |
+| --- | --- | --- |
+| `slam_core` | **`slam::core`** | Time/SE(2), sensor/covariance/trajectory/portable interfaces; no ROS/Ceres/GTSAM/Linux/IPC |
+| `slam_mapping` | **`slam::mapping`** | Occupancy/submaps/immutable snapshots, depends on core |
+| `slam_engine` | **`slam::engine`** | Portable high-level engine facade and diagnostics |
+| `slam_storage` | **`slam::storage`** | Map bundles/recording/replay portable APIs |
+| `slam_frontend` | **Not installed/exported** | Motion/deskew/scan assembly/keyframes, native quality/search, submap orchestration |
+| `slam_match_ceres` | **Not installed/exported** | Private Ceres matcher/OD-008 evaluation |
+| `slam_graph_gtsam` | **Not installed/exported** | Private GTSAM backend/factors |
+| `slam_platform_linux` | **Not installed/exported** | Linux acquisition/Pico-clock/OD-016 seqpacket IPC |
 
-1. `core` owns geometry, timestamps, frame conventions, data types, and math helpers.
-2. Hardware drivers MUST expose timestamped measurements and diagnostics through small interfaces; they MUST NOT depend on Ceres or GTSAM.
-3. Estimation logic MUST NOT depend directly on ROS messages, device files, CLI parsing, or Docker. In particular, `rclcpp`, `tf2`, `sensor_msgs`, `nav_msgs`, `geometry_msgs`, and `rosidl` types and includes are prohibited from the core public API and core link interface; ROS packages belong in the optional adapter.
-4. Ceres-specific types MUST remain inside scan-matching/optimization adapters; GTSAM-specific types MUST remain inside graph adapters.
-5. Frontend inputs and outputs MUST carry explicit timestamps, coordinate frames, and meaningful validity/quality information.
-6. Applications MUST be thin orchestration layers; their CLI parsing uses cxxopts.
-7. Libraries MUST support use in offline replay without connected physical hardware.
-8. Prefer small, independently testable targets over one large executable or singleton state container.
+**Target dependency DAG:** `slam_core` has zero project libs. `slam_mapping` depends on `slam_core`, `slam_storage` on portable core/mapping if required, `slam_engine` exposes portable core/mapping/storage APIs and composes internal frontend/Ceres/GTSAM privately. `slam_frontend` uses only portable types and no Linux/device/solver dependencies; `slam_match_ceres` and `slam_graph_gtsam` depend on portable native interfaces and their own private solver libraries, **not on each other**. `slam_platform_linux` is an outer adapter for daemon executables and is NEVER pulled into the SDK or algorithm targets. Native public headers contain no `rclcpp`, `tf2`, `sensor_msgs`, `ceres::`, `gtsam::`, `sys/socket.h`, Pico SDK or private implementation data. A later ROS adapter only depends on public SDK. Domain library tests work with no sensor hardware, Web Lab, IPC daemon or ROS installation.
+
+**Three thin native host executables:** `slam_acquisitiond` links platform/core; `slam_recorderd` links storage/platform; `slam_localizerd` links engine/mapping/platform with internal backend composition as needed. Each CLI uses cxxopts and implements `--help`/invalid-input exit codes, health/checkpoint and clean shutdown. Offline operations use approved SDK/CLI modes in the baseline target count; optional tooling is independently selected/approved. The source tree is **a target layout**, not a mandate to create empty placeholder directories or library stubs.
 
 ## 4. CMake and C++20 requirements
 
@@ -120,7 +117,7 @@ include(FetchContent)
 
 Production library targets SHOULD additionally expose the appropriate `cxx_std_20` compile feature via `target_compile_features`. Compile include paths, libraries, compile definitions, and warnings MUST be declared per target, not via global directory-wide flags.
 
-- Prefer conventional library target names such as `fusion_slam_core`; use a namespaced alias such as `fusion_slam::core` for consumers.
+- **Accepted OD-017** fixes target names `slam_core`, `slam_mapping`, `slam_engine`, `slam_storage`, `slam_frontend`, `slam_match_ceres`, `slam_graph_gtsam`, `slam_platform_linux`, with installed aliases `slam::core`, `slam::mapping`, `slam::engine`, `slam::storage` only.
 - Use `PUBLIC`, `PRIVATE`, and `INTERFACE` visibility intentionally.
 - Export only headers that form a supported public API.
 - Use out-of-source build directories and Ninja where available.
@@ -144,10 +141,10 @@ if(BUILD_TESTING)
     GIT_TAG <PINNED_CATCH2_COMMIT>
   )
   FetchContent_MakeAvailable(Catch2)
-  add_executable(fusion_slam_unit_tests tests/unit/core_test.cpp)
-  target_link_libraries(fusion_slam_unit_tests
-    PRIVATE fusion_slam_core Catch2::Catch2WithMain)
-  add_test(NAME fusion_slam_unit_tests COMMAND fusion_slam_unit_tests)
+  add_executable(slam_core_tests tests/unit/core_test.cpp)
+  target_link_libraries(slam_core_tests
+    PRIVATE slam_core Catch2::Catch2WithMain)
+  add_test(NAME slam_core_tests COMMAND slam_core_tests)
 endif()
 ~~~
 
@@ -167,7 +164,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cxxopts)
 
-target_link_libraries(fusion_slam_recorder PRIVATE cxxopts::cxxopts)
+target_link_libraries(slam_recorderd PRIVATE cxxopts::cxxopts)
 ~~~
 
 Application arguments SHOULD include named input/output paths, configuration path, logging level, and a well-defined `--help`. Flags for recording, replay, localization, and online mapping SHOULD be consistent where their meanings overlap. No interactive prompts in batch/replay applications.
@@ -183,6 +180,18 @@ Application arguments SHOULD include named input/output paths, configuration pat
 - The optional Raspberry Pi Pico firmware MUST use a **version-pinned Raspberry Pi Pico SDK** and a separately provisioned cross-compiler; the SDK is not a dependency of host core libraries. **Do not include micro-ROS, ROS transports, ROS 2 message serialization, DDS, rclc, or rclcpp in Pico firmware or Pico host driver.** The Pi↔Pico transport MUST use a documented custom framed protocol, independently testable with a fake source. Pico SDK license, SDK transitive dependencies and any proposed Boost use still need dependency review.
 - Prefer an independently reusable library over adding a new external dependency for trivial utility code.
 - Third-party licenses and notices MUST be preserved.
+
+### 4.4 Accepted OD-017 installed CMake SDK package
+
+The host build MUST produce **exactly eight library targets and three native executables** before tests/independent integrations. Public/installable raw libraries are `slam_core`, `slam_mapping`, `slam_engine` and `slam_storage`, with **only four exported namespaced targets** `slam::core`, `slam::mapping`, `slam::engine` and `slam::storage`. Internal `slam_frontend`, `slam_match_ceres`, `slam_graph_gtsam` and `slam_platform_linux` MUST NOT appear as public exports. Install public headers only under `include/slam/{core,mapping,engine,storage}` and package files `FusionSLAMConfig.cmake`, `FusionSLAMConfigVersion.cmake`, `FusionSLAMTargets.cmake`. Their `EXPORT_NAME`, build aliases and imports must agree.
+
+**CMake implementation policy:** CMake ≥3.25, native C++20 per-target `target_compile_features(... PUBLIC cxx_std_20)`, `target_include_directories` with `BUILD_INTERFACE`/`INSTALL_INTERFACE`, precise `PUBLIC`/`PRIVATE`/`INTERFACE` transitive links, `GNUInstallDirs` and `CMakePackageConfigHelpers` (`configure_package_config_file`, `write_basic_package_version_file`), `install(TARGETS ... EXPORT ...)` and `install(EXPORT ... NAMESPACE slam:: ...)`. Export only genuine public dependencies (`find_dependency` where necessary), not Catch2/cxxopts or platform/ROS/Ceres/GTSAM. Define a supported package version and explicit binary ABI/compatibility policy; compiling against a matching CMake version alone is not proof of C++ ABI compatibility.
+
+**Private static-link pitfall:** An exported installed **static** `slam_engine` privately linking unexported internal static libraries can still place `$<LINK_ONLY:slam_frontend>` etc. in its imported link closure. Merely marking `PRIVATE` does not prevent this. Prefer a suitable **shared public façade with pImpl and private implementation/runtime shared dependencies** or another demonstrated packaging strategy that enables a clean consumer to configure/link/run without internal target names. Installation must deploy runtime solver dependencies as needed; a solver-free public header/package interface does **not** imply that the runtime shared library has no Ceres/GTSAM dependencies. Verify both build export and install export plus loader paths, relocation and transitive headers. Keep Linux platform/IPC code outside portable algorithm and SDK targets.
+
+**Exact three CLIs:** `slam_acquisitiond` (platform/core), `slam_recorderd` (storage/platform), `slam_localizerd` (engine/mapping/platform). Web Lab builds independently as the fourth OD-016 process; firmware Pico SDK/C++ cross-compile separately. Tests, optional ROS2 adapter and tools are independent selectable switches. `BUILD_TESTING=OFF` must skip Catch2 FetchContent; `cxxopts` links only CLIs. Heavy solver/dependency versions pinned within Docker, no unapproved Boost, no global flags.
+
+**Installed consumer acceptance:** After `cmake --install` to a **clean relocation prefix**, a separate source tree MUST configure `find_package(FusionSLAM CONFIG REQUIRED)`, include representative four public headers, link all four `slam::*` targets and execute a smoke binary. In that consumer **do not provide** internal/private headers, ROS, sensor SDKs, Linux socket headers or Ceres/GTSAM CMake packages for configure/header compilation. Verify imported target resolution, `BUILD_TESTING=OFF`, test-enabled Catch2/CTest, C++20 features, runtime private solver deployment, no dependency cycles or `LINK_ONLY` leaks, ARM64/x86-64 portability and host target count. Benchmark **B25**; no GitHub Actions dispatch.
 
 ## 5. Dependency and reproducibility policy
 
