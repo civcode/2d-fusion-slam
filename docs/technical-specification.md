@@ -312,6 +312,35 @@ H_L = sum_i alpha_i * J_i^T * J_i
 
 **Tests:** Docker Catch2 unit tests of known-rank 3×3 Jacobians, robust influence/weight distinction, PSD, normalization/frame conversion, strong prior without LiDAR rank, null-space projection/rejection, covariance floors only in observable rank-3 cases, poor time/gyro/mapping quality and consistency metrics. The native evaluator must build without Ceres; separate Ceres-linked tests verify Jacobian extraction and optional Ceres covariance comparison. See [OD-008](open-design-choices.md) and [Architecture `5.3.1](architecture-specification.md).
 
+### 6.4 Accepted OD-009 — Mode-dependent correlative initialization and BnB recovery
+
+**Purpose:** OD-007 Ceres continues to provide precise local scan-to-EDT refinement; OD-009 supplies **robust initialization and recovery** using a separate, ROS-independent correlative score on **versioned immutable occupancy-derived map pyramids**. The coarse score is independent of the Ceres EDT objective and is **not** itself an accepted pose measurement. All candidates MUST be refined under the mode-appropriate OD-007 prior and validated by **OD-008** residual, geometric observability, overlap, innovation and uncertainty gates before global correction.
+
+| Mode | Initial search range | Target CPU budget | Execution |
+| --- | --- | --- | --- |
+| Normal TRACKING | OD-006 predicted midpoint pose -> Ceres, no coarse search | **0 ms coarse** | Synchronous local Ceres only |
+| DEGRADED/UNCERTAIN | **±0.3 m X/Y and ±10° yaw** | **10–20 ms** when invoked | Bounded local correlative sampling |
+| RECOVERY | **±1.0 m X/Y and ±30° yaw** | **30–50 ms** per invocation | Multiresolution branch-and-bound |
+| GLOBAL_RELOCALIZATION | Full frozen candidate submap(s), **360° yaw** | **100–200 ms per slice** | Asynchronous, cancellable/resumable BnB |
+
+These are **unmeasured Pi 5 starting targets** around 10 Hz LD19, not guaranteed deadlines. Measure host **steady clock** (never pausable ROS simulated `/clock`) and cap evaluated candidates, CPU work, memory, queue occupancy, and cancellation separately. Report search `COMPLETE`, `PARTIAL_BUDGET`, `CANCELLED` and `INVALID`, with progress and evaluated/pruned nodes. **Incomplete search does not mean no match exists**.
+
+**Search windows:** Derive local candidate extents from the OD-006 covariance in a documented SE(2) tangent frame, clip to each mode cap and report clipping. A stale/singular predictor triggers degraded/global policy, not false certainty. Select angular steps based on map spatial resolution and useful scan range (approximate `delta_yaw <= spatial_step / representative_range` for small yaw). Treat ± windows as pose-search bounds, not sensor range bounds. Avoid sampling sparse yaw so an informative endpoint skips entire occupancy cells.
+
+**Search pyramids:** Build precomputed multiresolution **correlative-score** pyramids from **supported occupancy probability** on immutable map/submap revisions, with known/unknown masks, full map origin/yaw, score policy and source revision/checksum. These are separate from OD-007's truncated unsigned EDT cache and may have a different score objective. **Reuse** snapshot pyramids across scans, invalidate/rebuild when the underlying occupancy revision changes, and cap memory/build work. Do not let unknown/out-of-map, OD-005 invalid/missing beams or extrapolated OD-004 motion generate false support.
+
+**Branch-and-bound correctness:** When claiming exact BnB pruning, pyramid cells MUST provide **admissible upper bounds of the fine-resolution correlation score** for all child translations at each sampled rotation. A max-over-children/precomputation strategy is suitable if proven with known masks, truncation and quantization; an average score is not necessarily an upper bound. Test pruning and best candidate against exhaustive search over a small bounded discrete grid. Budget-terminated search does not inherit complete-search optimality guarantees.
+
+**Multiple hypotheses:** Keep a configurable number of **spatially distinct** top-scoring candidates, deduplicated by SE(2) separation, for repeated shelving, corner symmetry and kidnapping. Candidate scores are ranking aids, **not covariance or OD-008 acceptance**. In global recovery, perform **multiple-scan temporal confirmation** under OD-020/022 before publishing a stable map correction.
+
+**Important prior distinction:** OD-007 includes an odometry prior during normal tracking. In global recovery, a falsely tight stale odometry covariance can pull correct distant hypotheses back toward the wrong pose. Use **explicitly mode-dependent relaxed/invalid/no-prior refinement** with OD-008 state-aware innovation and multi-scan consistency, rather than imposing a tracking prior on a kidnapped robot.
+
+**Asynchronous execution and safety:** Run large searches in bounded workers with pinned immutable map/score pyramid, scan, calibration and source-clock epoch. A partial frontier can resume only with matching revisions; otherwise cancel/restart. Acquisition, recording, local odometry, normal local scan matching and ROS callbacks MUST NOT wait on a global search. While LOST/RELOCALIZING or without validated OD-008 correction, keep odom publishing, mark global pose uncertain/unavailable, and **disable map insertion**.
+
+The **native `PoseCandidateSearch`** interface returns ranked candidates, search mode, score/overlap, map/time/calibration revisions, budget/progress and status. It depends on no Ceres types, ROS messages or hardware drivers. Its adapter/coordinator calls OD-007 Ceres and OD-008 quality evaluator separately. A particle filter is not an initial requirement; OD-020 may reconsider persistent multi-hypothesis filtering after benchmark failures.
+
+**Verification:** Docker Catch2/CTest: covariance bounds, angular sampling, rotation/map origin and 360° wrap, per-scan zero coarse work when TRACKING, precomputation cache reuse/invalidation, admissible BnB bounds vs exhaustive small search, top-K distinct candidates in repeated aisles, wrong-odometry-prior recovery, OD-008 quality rejection, partial-budget/yield/cancel and no blocked acquisitions. Pi execution budgets need on-device measurement, not inferred Docker x86 times. See [accepted OD-009](open-design-choices.md), [architecture `5.5](architecture-specification.md) and [Cartographer 2D fast correlative matching](https://google-cartographer.github.io/cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.html).
+
 ## 7. Graph backend (GTSAM)
 
 Use the GTSAM **Pose2 / SE(2)** model for planar robot poses. Primary graph variables are:
@@ -363,10 +392,10 @@ The localization state machine has three states:
 | State | Behavior |
 | --- | --- |
 | TRACKING | Predict using wheel/gyro, then locally refine with Ceres. |
-| UNCERTAIN | Increase uncertainty, widen correlative search, evaluate competing candidates. |
-| LOST | Attempt global relocalization using a particle filter (AMCL/Beluga as benchmark or implementation option) or wide-area correlative search; verify consistency across multiple scans before committing. |
+| UNCERTAIN | Enable bounded OD-009 local correlation (±0.3 m/±10°, initially 10–20 ms), refine selected candidates with Ceres and require OD-008 acceptance. |
+| LOST | Schedule OD-009 asynchronous BnB recovery/global (up to 360° over frozen candidate maps), refine top distinct candidates and require OD-008 plus multi-scan confirmation; do not insert scans into map. |
 
-The initial localizer uses the **accepted OD-006 minimal local predictor with conservative prediction/measurement uncertainty**. An EKF or GTSAM recent-state smoother may replace/enhance it later **only if benchmarks justify the complexity**. A local optimizer alone does **not** solve global or kidnapped-robot localization.
+The initial localizer uses the **accepted OD-006 minimal local predictor with conservative prediction/measurement uncertainty**. An EKF or GTSAM recent-state smoother may replace/enhance it later **only if benchmarks justify the complexity**. A local optimizer alone does **not** solve global or kidnapped-robot localization. **Accepted OD-009** supplies coarse multiresolution branch-and-bound recovery; particle filtering is deferred unless OD-020 experiments show persistent multi-hypothesis tracking is required.
 
 A lost/stale pose must be explicitly signaled to downstream navigation/control; it must not silently present an old pose as current.
 
@@ -485,7 +514,7 @@ Measure end-to-end **capture-to-pose latency**, not only Ceres solve time. Use b
 - Clock offset/drift estimation and timing uncertainty; missing or late IMU/encoder samples.
 - SE(2) arcs/near-zero angular rate, OD-006 minimal wheel/gyro integration, verified/unconfigured kinematic adapter, stationary bias calibration and bounded updates, slip disagreement with covariance growth, asynchronous measurements, timestamp-addressable coverage and laser/IMU extrinsics.
 - Synthetic moving-wall/apartment/warehouse scans proving **midpoint-referenced** rotational and translational deskew, full interpolation eligibility, 10 ms quality-gated extrapolation and rejection of 10.1 ms or uncertain/gapped scans.
-- OD-007 Ceres EDT/bilinear/per-beam Huber/prior/boundary; **OD-008** robust LiDAR-only Jacobian information, normalized eigen-rank, calibrated full covariance, rank-deficient projection/rejection and independent quality gating; no posterior double counting.
+- OD-007 Ceres EDT/bilinear/per-beam Huber/prior/boundary; OD-008 LiDAR-only rank/uncertainty; **OD-009** covariance-bounded correlative search, admissible BnB bounds, multiple hypotheses, cancellation and mode budgets; no posterior double counting.
 - GTSAM custom factor Jacobians, bias recovery, covariance scaling, loop-closure gating.
 - Map-bundle round-trip, version rejection, artifact integrity, and replay determinism.
 
