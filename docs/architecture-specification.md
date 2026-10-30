@@ -72,8 +72,8 @@ Component ownership and forbidden dependencies:
 | `sensors` | LD19 parser, Pi GPIO/I²C/UART input or optional Pico native framed input, health and raw samples | No estimator/map ownership; no micro-ROS |
 | `time_sync` | Rollover, clock offset/drift, ordering and time quality | No map or solver dependency |
 | `calibration` | Versioned sensor extrinsics, wheel scales, gyro bias priors and timing offsets | Invalidates derived artifacts on change |
-| `motion` | Wheel/gyro state, local pose history, interpolation and covariance | No global-map jumps |
-| `deskew` | Per-beam SE(2) correction and provenance | No optimizer dependence |
+| `motion` | Wheel/gyro estimator, piecewise SE(2) exponential trajectory, time-interval coverage, covariance and status | No global-map jumps; expose generic provider |
+| `deskew` | Per-beam transformation into temporal midpoint laser frame, full-coverage validation and provenance | No device/ROS/optimizer dependence |
 | `mapping` | Occupancy log-odds, submap builders, frozen snapshots and fields | No direct dependence on GTSAM |
 | `frontend_ceres` | Geometric alignment, scores, degeneracy and uncertainty | No raw device or ROS I/O |
 | `backend_gtsam` | Factor graph, loop factors, bias states, optimized graph revisions | No acquisition/UI ownership |
@@ -153,7 +153,7 @@ raw device tick + host receive time
             -> trajectory + scan assembly
 ~~~
 
-Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. **OD-001 is accepted** (signed 64-bit nanoseconds, explicit domains/epochs and ROS simulated-clock support). **OD-002 and OD-003 are accepted:** Pi-only timestamps first, optional Pico later; the **LD19 adapter** reconstructs per-beam time using angles/speed and aligns its millisecond source counter to Pi monotonic time. The physical packet-reference delay is still an experimental calibration task. **OD-004** still governs deskew reference time and motion interpolation.
+Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. **OD-001 is accepted** (signed 64-bit nanoseconds, explicit domains/epochs and ROS simulated-clock support). **OD-002 and OD-003 are accepted:** Pi-only timestamps first, optional Pico later; the **LD19 adapter** reconstructs per-beam time using angles/speed and aligns its millisecond source counter to Pi monotonic time. The physical packet-reference delay is still an experimental calibration task. **Accepted OD-004** selects the temporal midpoint and SE(2) exponential interpolation with full-scan coverage; calibration quality and OD-006 fusion tuning remain open.
 
 ### 3.4 Clock source injection and ROS 2 `/clock` behavior
 
@@ -252,34 +252,85 @@ t_device_beam_i ~= t_packet_device
 
 **Validation:** Synthetic variable-speed/0°-360°/direction tests; 29,999→0 and ambiguous multiple wraps; CRC/out-of-order and reconnect faults; controlled delay/clock drift/jitter injections; physical LD19 turn/translate tests estimating/bounding reference delay; deskew comparisons with fixed-spacing baseline and Pi p95/p99 timing. Tests are Dockerized; hardware measurements must be reported separately.
 
-**Decision boundary:** OD-003 is **Accepted** (method/ownership). OD-004 remains open (scan deskew reference and trajectory interpolation); final timing calibration constants are determined experimentally.
+**Decision boundary:** OD-003 is **Accepted** (device timing method) and OD-004 is **Accepted** (midpoint frame and piecewise SE(2) trajectory); physical LD19 timing calibration remains experimental.
 
-### 4.2 Continuous local motion
+### 4.2 Accepted OD-004: continuous SE(2) trajectory
 
-Wheel travel gives local translation; gyro integration (with estimated bias) gives continuous yaw. For a differential robot:
+Build `T_odom_base(t)` from timestamped wheel increments/velocity and **bias-corrected gyro yaw rate**. OD-006 still determines the detailed fusion state, covariance and wheel/gyro update policy; it may employ different kinematics for differential and Ackermann robots. The **trajectory representation and interpolation method are settled by OD-004**.
 
-~~~text
-ds = (ds_R + ds_L)/2
-dtheta_wheel = (ds_R - ds_L)/baseline
-dtheta_gyro = sum((omega_z - bias) * dt)
-x_next = x + ds * sinc(dtheta_gyro/2) * cos(yaw + dtheta_gyro/2)
-y_next = y + ds * sinc(dtheta_gyro/2) * sin(yaw + dtheta_gyro/2)
-yaw_next = wrap(yaw + dtheta_gyro)
-~~~
-
-The exact arc formula is for a constant-curvature interval. Support an Ackermann model when actual steering measurements are available; steering commands alone are not measurements. Monitor wheel/gyro disagreement and slip. Gyro bias and wheel calibration uncertainty MUST appear in prediction uncertainty. The MPU6050 does **not** provide absolute yaw. Simple predictor versus EKF is **OD-006**.
-
-### 4.3 Full per-beam SE(2) deskew
-
-For a beam in laser coordinates at time `t_i`, deskew into the laser frame at reference time `t_ref`:
+Represent motion over each valid event-time interval `[t_k,t_{k+1}]` as a **piecewise-constant body-frame twist** `xi_k=(v_x,v_y,omega)_k` (metres/s, metres/s, radians/s). For a nonholonomic platform `v_y=0` may be assumed by the appropriate estimator. Use **time differences in seconds** from the OD-001 signed-nanosecond clock, with explicit domain and epoch checks.
 
 ~~~text
-p_laser_ref =
-    inverse(T_odom_base(t_ref) * T_base_laser)
-  * (T_odom_base(t_i) * T_base_laser) * p_laser_i
+T_odom_base(t) =
+    T_odom_base(t_k) * Exp_SE2( ((t - t_k) seconds) * hat(xi_k) )
+    for t_k <= t <= t_{k+1}
+
+T_odom_base(t_{k+1}) =
+    T_odom_base(t_k) * Exp_SE2( ((t_{k+1} - t_k) seconds) * hat(xi_k) )
 ~~~
 
-Use a **continuous odometry trajectory** within the scan, not a graph-corrected map transform that may jump. Translation, yaw and extrinsic lever arm all matter. Reference time (midpoint vs end), interpolation/extrapolation policy and offline re-deskew rules are **OD-004/014**. Raw beam data stays immutable.
+`Exp_SE2` is the **SE(2) Lie-group exponential** with exact constant-twist/constant-curvature translation and a stable near-zero angular-rate limit. **Do not interpolate Cartesian x/y and yaw independently** as a substitute. Integrate segments from the actual timestamps of asynchronous wheel/gyro updates rather than inventing a fixed sample period. Track measurement quality, gyro bias, slip, covariance and invalid gaps; never interpolate across clock epoch boundaries.
+
+For differential wheels, `ds=(ds_R+ds_L)/2` and `dtheta_wheel=(ds_R-ds_L)/baseline` are separate odometry observations, while `dtheta_gyro=integral(omega_z-bias)dt` contributes to the chosen motion estimate; the fusion model remains OD-006. Preserve a continuous **local odom** trajectory when global map optimization corrects the map frame.
+
+#### 4.2.1 Portable trajectory-provider interface
+
+The portable deskewer queries an **abstract timestamp-addressable SE(2) trajectory provider**. The acquisition/motion implementation owns construction; the deskewer has **no direct dependencies on wheel encoders, MPU6050, Pico, LD19 packet data, ROS or TF types**. A future spline implementation MUST satisfy the same query/coverage/status contract.
+
+Illustrative, not yet implemented:
+
+~~~cpp
+struct TrajectoryQuery {
+  CanonicalTime time;                    // ns, clock domain, epoch
+  bool allow_extrapolation = false;      // default: strict interpolation
+  std::int64_t max_extrapolation_ns = 10'000'000;
+};
+enum class TrajectoryStatus { INTERPOLATED, EXTRAPOLATED, UNAVAILABLE };
+struct TrajectorySample {
+  Pose2 T_odom_base;
+  Matrix3 covariance;                   // frame/tangent order documented
+  TrajectoryStatus status;
+  std::int64_t extrapolation_ns;        // zero if interpolated
+  RevisionId trajectory_revision;
+};
+class TrajectoryProvider {
+public:
+  virtual ~TrajectoryProvider() = default;
+  virtual CoverageResult coverage(CanonicalTime start, CanonicalTime end) const = 0;
+  virtual TrajectoryResult evaluate(const TrajectoryQuery&) const = 0;
+};
+~~~
+
+`coverage` must signal whether **all instants** in the requested interval are supported by valid interpolated segments and distinguish missing sensor data, gaps, epoch mismatches and not-yet-received samples. Query outputs include time/quality, covariance and trajectory revision. Implementation-specific error types will be agreed under OD-017.
+
+### 4.3 Full per-beam SE(2) deskew into the scan midpoint
+
+Define the scan's acquisition time bounds from **earliest/latest time-valid acquired beam slots**, including slots with invalid range values; only valid geometric returns contribute endpoints. For one canonical domain/epoch:
+
+~~~text
+t_start = min(timestamp of time-valid acquired beam slots)
+t_end   = max(timestamp of time-valid acquired beam slots)
+t_mid   = t_start + floor((t_end - t_start)/2)   // checked int64 nanoseconds
+~~~
+
+`t_mid` is the **temporal midpoint**, not a mean packet-arrival time, angular midpoint, or arbitrarily chosen beam timestamp. Every deskewed point `p_i` becomes:
+
+~~~text
+p_laser_mid =
+    inverse(T_odom_base(t_mid) * T_base_laser)
+  * (T_odom_base(t_i) * T_base_laser)
+  * p_laser_i
+~~~
+
+Use the **continuous odom trajectory**, not a discontinuously corrected `map` pose. Include the full wheel-translation/gyro-rotation SE(2) path and calibrated LiDAR lever arm. Downstream Ceres scan matching and scan-derived pose estimates MUST use `t_mid` and the matching midpoint frame; raw source beam timestamps remain unchanged.
+
+**Complete interpolation for normal mapping:** Before scan insertion, require a quality-valid interpolated trajectory covering `[t_start,t_end]` including every beam time and `t_mid`, in one clock epoch. **Never insert a scan requiring extrapolated poses** or a scan whose boundary timing is ambiguous, even if its numerical residual is small. Preserve partial/invalid scan diagnostics and map-eligibility reason.
+
+**Bounded, optional prediction:** Prefer a bounded delayed-processing queue while waiting for real trajectory data through `t_end`. If no valid coverage arrives within a configurable host-steady wait budget, reject/defer with diagnostics rather than predict without bounds. Only explicit live prediction, visualization or localization policies MAY permit extrapolation; default is **disabled**, maximum initial horizon is **10 ms (10,000,000 ns)** beyond either valid trajectory boundary, and covariance/sensor-age/clock-quality/gyro-bias/slip gates may require a **shorter** horizon or reject it. An extrapolated result MUST be distinctly marked `EXTRAPOLATED`, include duration/uncertainty and MUST NOT be passed to normal map insertion or silently treated as high-confidence scan evidence. Never cross time epochs, invalid gaps, or stale calibration.
+
+**Spline future extension:** The trajectory interface allows a continuous SE(2) spline alternative later, but the accepted first implementation is piecewise-constant twist and `Exp_SE2`; do not add spline dependencies or complexity speculatively. Offline re-deskew after improved bias/time calibration remains an OD-014 question.
+
+**Validation:** Synthetic apartment/warehouse constant-curvature truth, scan temporal midpoint with nonuniform beam spacing, asynchronous IMU/encoder updates, off-center laser lever arm, missing samples, seek/time jumps, complete-coverage mapping gates, and quality-gated 9.9/10/10.1 ms extrapolation cases. Compare latency of bounded delay vs prediction on Pi.
 
 ## 5. Ceres scan matcher and front-end measurement accounting
 
@@ -371,9 +422,9 @@ Loop pipeline: descriptor/candidate retrieval -> coarse match -> Ceres refine ->
 Local tracking cycle:
 
 1. Predict continuous `T_odom_base(t)` and covariance from wheel/gyro.
-2. Assemble/deskew current scan using time-indexed local trajectory.
+2. Assemble the scan and deskew every valid beam into its **temporal midpoint** frame through the portable, timestamp-addressable trajectory provider; require full interpolation for map insertion.
 3. Match against nearby **frozen** map tiles with Ceres; verify observability and quality.
-4. If accepted, produce a global pose at scan reference time and update `T_map_odom` using time-aligned local odometry.
+4. If accepted, produce a global pose at **scan midpoint time** and update `T_map_odom` using midpoint-aligned continuous local odometry.
 5. Keep local odom publishing even if global correction is late; mark global pose freshness explicitly.
 
 Tracking states:
@@ -454,7 +505,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 | --- | --- |
 | Device/time | LD19 CRC/47-byte parsing, 30 s wraps, angle/speed per-beam timing, LD19↔Pi clock fit, injected jitter/offset/drift and physical delay bounds; signed-ns epochs and ROS /clock; Pi/Pico acquisition faults |
 | Geometry | SE(2) composition, REP frames, rotated occupancy origin, Jacobians and extrinsics |
-| Motion/deskew | Gyro bias, wheel slip, full SE(2) ray endpoints, lever arm, gap/extrapolation behavior |
+| Motion/deskew | SE(2) Exp constant arcs, midpoint reference, full-scan interpolation eligibility, gyro bias/slip, lever arm, 10 ms extrapolation gating, time jumps and mock providers |
 | Ceres | Distance-field interpolation, convergence, false matches, corridor degeneracy, robust residuals |
 | Mapping/graph | No self-matching, immutable submaps, wheel/gyro factor independence, bias factor Jacobians, loop rejection |
 | Localization | Map->odom correctness, stale/lost states, kidnapped recovery and frozen map integrity |
