@@ -153,7 +153,7 @@ raw device tick + host receive time
             -> trajectory + scan assembly
 ~~~
 
-Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. **OD-001 is accepted** (signed 64-bit nanoseconds, explicit domains/epochs and ROS simulated-clock support). **OD-002 is also accepted:** Pi-only timestamps first, optional Pico custom acquisition/synchronization later; OD-003/004 still govern LD19 beam timing and trajectory interpolation tolerances. Specific Pi/Pico mapping parameters and the Pico transport remain to be benchmarked.
+Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. **OD-001 is accepted** (signed 64-bit nanoseconds, explicit domains/epochs and ROS simulated-clock support). **OD-002 and OD-003 are accepted:** Pi-only timestamps first, optional Pico later; the **LD19 adapter** reconstructs per-beam time using angles/speed and aligns its millisecond source counter to Pi monotonic time. The physical packet-reference delay is still an experimental calibration task. **OD-004** still governs deskew reference time and motion interpolation.
 
 ### 3.4 Clock source injection and ROS 2 `/clock` behavior
 
@@ -212,15 +212,46 @@ Stage B (Pico optional):
 
 **Acceptance:** Before approving Stage B as superior, measure timestamp jitter, synchronization residual and drift, packet/encoder/IMU loss, reconnect behavior and end-to-end latency on real hardware. Include Dockerized host protocol tests and isolated Pico SDK firmware builds, plus opt-in hardware-in-loop tests. The firmware may use SDK-supported C/C++ independently of the host's required C++20 standard; this does not relax the native core C++20 rule.
 
-**Related:** OD-001 (accepted nanosecond time/domain/epoch), OD-002 (accepted acquisition staging), OD-003 (still open LD19 per-beam timing), OD-021 (still open buffering), OD-023 (still open recording schema). [Pico timer](https://github.com/raspberrypi/pico-sdk/blob/master/src/rp2_common/hardware_timer/include/hardware/timer.h) and [PIO API](https://www.raspberrypi.com/documentation/pico-sdk/hardware.html) document primitives, not achieved accuracy.
+**Related:** OD-001 (accepted nanosecond time/domain/epoch), OD-002 (accepted acquisition staging), **OD-003 (accepted angle/speed timing and clock alignment, physical delay not yet calibrated)**, OD-021 (still open buffering), OD-023 (still open recording schema). [Pico timer](https://github.com/raspberrypi/pico-sdk/blob/master/src/rp2_common/hardware_timer/include/hardware/timer.h) and [PIO API](https://www.raspberrypi.com/documentation/pico-sdk/hardware.html) document primitives, not achieved accuracy.
 
 ## 4. LiDAR assembly, wheel/gyro odometry and deskew
 
-### 4.1 LD19 acquisition
+### 4.1 LD19 acquisition and accepted OD-003 beam timing
 
-Nominal UART speed 230400 baud; nominal 47-byte packet with 12 beams and CRC. Pipeline: frame search -> CRC/length -> range/intensity and unwrapped angles -> device/host timing -> per-beam timestamp estimate -> revolution assembly.
+**LD19-specific timing logic lives entirely in the acquisition adapter**, not in the generic SLAM estimator. The 47-byte CRC-validated UART packet contains 12 samples, start/end angles (0.01° units), reported motor angular speed (degrees/s), and a millisecond counter wrapping at about 30 seconds.
 
-Do not assume packets arrive at uniform intervals, the reported packet timestamp labels a known first/last beam, or every revolution contains exactly 450 beams. Store full source packets and separate beam-time **quality**. Scan seam, missing packets, partial revolutions and range filtering are **OD-003/005**.
+~~~text
+LD19 UART (230400 baud) + Pi-monotonic receive observation
+    -> frame sync, CRC/length and packet decoding
+    -> angle unwrap / rotation direction / reported angular speed
+    -> per-beam relative acquisition-time reconstruction
+    -> device millisecond tick unwrap + epoch/reset detection
+    -> robust device-to-Pi affine clock alignment (offset + drift)
+    -> calibrated/bounded packet-reference delay + timing uncertainty
+    -> ordered native TimedScan:
+       canonical int64-ns beam stamps + clock-domain/epoch + quality
+    -> generic deskew, recorder, mapping/localization and Web Lab
+~~~
+
+For `N` beam slots (normally 12), interpolate the unwrapped packet sweep angle then estimate time offset from a **physical reference angle/event** using the packet's signed motor speed:
+
+~~~text
+theta_i = theta_start + i/(N-1) * (theta_end - theta_start)
+delta_t_i_ref = (theta_i - theta_ref) / omega_signed
+t_device_beam_i ~= t_packet_device + delta_t_i_ref + delta_reference
+~~~
+
+`theta_ref` and `delta_reference` are **unknown initially**: the manual describes a packet timestamp but does **not** prove it refers to the first/last beam or UART transmission completion. Use measured/bounded delay; quality flags and systematic timing uncertainty MUST remain available before calibration. Cross-check angle-derived duration against speed, adjacent packet timestamps, and scan continuity. Reject/flag near-zero speeds, implausible angles and invalid motor estimates.
+
+**Unwrap and alignment:** Retain raw 16-bit millisecond ticks and original UART bytes. Handle nominal 30-second rollover, CRC corruption, reordering and sensor reset with separate source epochs. Gaps that may hide multiple wraps make an absolute counter count ambiguous: invalidate/relock rather than guess. Timestamp the documented Pi UART receive event (first byte, last byte, packet completion or read completion), retain its meaning, and fit `t_host_rx_ns ≈ a * t_device_ns + b + d_rx` from several valid observations. Track slope/drift, residuals, window, uncertainty and fit revision.
+
+**One-way timing limitation:** `b` (clock epoch offset) and constant `d_rx` (sensor processing + UART/host receive delay) are **not separately identifiable** from one-way packet arrival samples. An arrival-time regression gives a combined offset. The physical packet-to-beam delay must be measured or bounded with controlled motion/reference experiments; neither a PIO capture nor a precise UART receive timestamp alone proves beam acquisition time. Explicitly model device 1 ms resolution, UART serialization, variable OS buffering, oscillator drift and shared per-packet bias.
+
+**Output contract:** The adapter produces a generic ordered `TimedScan` with per-beam canonical nanosecond acquisition estimates, timestamp status (`estimated`/`calibrated`/`uncertain`/`invalid`), per-beam or shared uncertainty, source epoch, clock fit and calibration revision IDs. Preserve all raw data and allow offline re-timestamping/re-deskew. Never silently substitute nominal scan rate or mark unknown absolute delay as exact.
+
+**Validation:** Synthetic variable-speed/0°-360°/direction tests; 29,999→0 and ambiguous multiple wraps; CRC/out-of-order and reconnect faults; controlled delay/clock drift/jitter injections; physical LD19 turn/translate tests estimating/bounding reference delay; deskew comparisons with fixed-spacing baseline and Pi p95/p99 timing. Tests are Dockerized; hardware measurements must be reported separately.
+
+**Decision boundary:** OD-003 is **Accepted** (method/ownership). OD-004 remains open (scan deskew reference and trajectory interpolation); final timing calibration constants are determined experimentally.
 
 ### 4.2 Continuous local motion
 
@@ -395,7 +426,7 @@ Thread/process split **OD-016**, queue limits/drop and overload policy **OD-021*
 - ROS 2 adapter maps native scan/IMU/odometry/map/pose to standard topics and owns TF/clock conversions; only one publisher per TF edge.
 - No browser, ROS or Node/JS runtime is required for the headless core.
 
-MCAP channel/schema **OD-023**, seek/checkpoint format **OD-024**, ROS distro/QoS defaults **OD-025**. **OD-001 time representation and OD-002 Pi-first/Pico-future acquisition are accepted**: use signed 64-bit nanoseconds with explicit clock-domain conversion and ROS-neutral simulated-clock events.
+MCAP channel/schema **OD-023**, seek/checkpoint format **OD-024**, ROS distro/QoS defaults **OD-025**. **OD-001 signed-ns time, OD-002 Pi-first/Pico-future acquisition, and OD-003 LD19 beam timing/clock alignment are accepted**: use signed 64-bit nanoseconds with explicit clock-domain conversion and ROS-neutral simulated-clock events.
 
 ## 11. Resource budget and failure policy
 
@@ -420,7 +451,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 
 | Boundary | Required tests |
 | --- | --- |
-| Device/time | LD19 CRC/47-byte parsing, 30 s tick rollover, signed-ns domain/epoch and ROS simulated-clock handling, Pi host near-event jitter, Pico protocol/CRC/boot IDs/sync drift, PIO-versus-ISR feasibility, missing/late samples |
+| Device/time | LD19 CRC/47-byte parsing, 30 s wraps, angle/speed per-beam timing, LD19↔Pi clock fit, injected jitter/offset/drift and physical delay bounds; signed-ns epochs and ROS /clock; Pi/Pico acquisition faults |
 | Geometry | SE(2) composition, REP frames, rotated occupancy origin, Jacobians and extrinsics |
 | Motion/deskew | Gyro bias, wheel slip, full SE(2) ray endpoints, lever arm, gap/extrapolation behavior |
 | Ceres | Distance-field interpolation, convergence, false matches, corridor degeneracy, robust residuals |
