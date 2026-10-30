@@ -116,7 +116,9 @@ Required test presets:
 4. **Ambiguity:** repeating warehouse aisles, corridor degeneracy, false loop candidate, kidnapping/relocalization.
 5. **Faults:** missing IMU packet, timestamp wrap, corrupted LiDAR packet, time offset, outliers/dynamic obstacles.
 
-LD19 **raw 47-byte packet parsing** MUST have its own deterministic protocol fixture tests (CRC, timestamp rollover, angular convention). Generating ideal `LaserScan`-like beams alone **does not** validate the real LD19 packet timestamp semantics. Real robot captures remain necessary for transport/timing characterization.
+LD19 **raw 47-byte packet parsing** MUST have its own deterministic protocol fixture tests (CRC, timestamp rollover, angular convention). Under **accepted OD-003**, add a synthetic packet/transport generator with known **angle/speed-derived beam acquisition times**, an independent configurable **packet-reference delay**, modulo-30-second source ticks, a distinct host-monotonic receive clock, injected drift/latency/jitter and variable motor speed. Verify relative timing against exact simulated truth and report **clock alignment combined-offset estimates**, not an invented independent physical-delay estimate. Generating ideal `LaserScan`-like beams alone **does not** validate the real LD19 timing behavior.
+
+The real LD19 physical packet-reference event remains unverified: test an actual sensor across controlled rotations/translations, host buffering and device restarts to **determine or bound** the acquisition-to-reported-timestamp delay before treating absolute timestamps as calibrated. Preserve original source bytes/ticks, Pi receive times, timing quality, model parameters and calibration revision in each prepared dataset.
 
 Small canonical fixture files MAY be committed when redistribution is allowed and their total size remains practical; keep full generated data out of Git.
 
@@ -134,6 +136,7 @@ Small canonical fixture files MAY be committed when redistribution is allowed an
 | B08 | Runtime/portability | Same exact dataset+config on ARM64 and x86-64 | p50/p95/p99 latency, throughput, CPU/RAM/thermal, missed deadlines. |
 | B09 | Fault tolerance | Dropped points/IMU, timing jumps, wheel slip, dynamics | State transitions, reported uncertainty, graceful recovery and invalid-data rejection. |
 | B10 | Benchmark comparison | Multiple deterministic configs | Reproducible side-by-side Web Lab views and machine-readable reports. |
+| B11 | LD19 timing reconstruction and alignment (OD-003) | Synthetic device packets + host receive jitter/clock drift; real LD19 capture | Relative per-beam error, clock slope/combined offset, jitter/uncertainty coverage, unknown physical-delay bound, wrap/reset recovery and deskew impact. |
 
 Compare **LiDAR-only**, **LiDAR + wheel odometry**, and **LiDAR + wheel + gyro** wherever the dataset supports them. A `no-wheel` dataset must not be included in wheel-fusion averages. If a dataset provides only processed odometry and not raw ticks, label the experiment accordingly; don't imply independent source availability.
 
@@ -149,7 +152,7 @@ Collect a short, deliberate indoor dataset from the project's actual platform us
 - Optional manually marked fiducial/reference checkpoints or external measurement. Do not claim exact global ground truth without an independent measurement system.
 - A second traversal (same map) to test live localization on **held-out data** and deliberately moved obstacles or a kidnapped-robot scenario.
 
-Use this dataset to validate the LD19 packet-to-beam time model, 30-second timestamp wrap, host buffering effects, MPU6050 bias/noise, mounting extrinsics, and the Pi 5 acquisition-to-pose pipeline. The exact sensor hardware is not faithfully represented by the public datasets.
+Use this dataset to validate the **accepted OD-003** angle/speed beam model, 30-second timestamp wrap, LD19-to-Pi drift and receive-time combined offset, **experimentally measured or bounded physical packet-reference delay**, host UART buffering, MPU6050 bias/noise, mounting extrinsics, and the Pi 5 acquisition-to-pose pipeline. The exact sensor hardware is not faithfully represented by the public datasets.
 
 Robot-specific recordings MUST be stored outside Git by default. Record any privacy-sensitive capture details before sharing publicly.
 
@@ -390,7 +393,7 @@ The example deliberately uses `null` for **unmeasured** fields: it is a reportin
 
 **D4 — Independent accuracy:** Select **one** IILABS sequence/sensor subset with OptiTrack truth, verify actual storage footprint, frames, timing and calibration; add quantitative held-out validation.
 
-**D5 — Own hardware:** Record LD19 + MPU6050 + encoder datasets with the project's own recorder. Test raw packet timing and live latency in the deployment Docker runtime.
+**D5 — Own hardware:** Record LD19 + MPU6050 + encoder datasets with the project's own recorder. Characterize the packet-reference physical delay and time-source uncertainty; verify OD-003 clock alignment, beam timing, rollover and real capture-to-pose latency in the deployment Docker runtime.
 
 The synthetic fixtures are mandatory for development; external/public downloads are **opt-in and never a prerequisite for normal unit tests**. If real-data access is unavailable, that milestone is reported as pending rather than substituting invented samples.
 
