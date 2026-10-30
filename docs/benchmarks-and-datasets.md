@@ -205,6 +205,27 @@ Build **benchmark B16** on the versioned OD-007 authoritative occupancy/EDT maps
 
 **Report B16:** source map/calibration/clock/EDT/software revisions, beam counts and observed-map overlap, LiDAR-only robust residual and Jacobian information, `H_L` and normalized eigenspectrum/rank, observable and null directions, convergence and innovation, full-rank calibrated covariance **or** observable-only uncertainty, acceptance/projection/rejection rationale, independent reference truth class, confidence coverage/false-lock rate and per-stage CPU/latency. Compare unweighted/raw, robust-only, robust+calibrated, and ablated observability gates using identical inputs. Explicitly differentiate **exact synthetic**, **independent measured ground truth**, **LiDAR-derived reference** and **unavailable truth**; only the first two can establish absolute uncertainty calibration.
 
+### 4.6 Accepted OD-009 correlative-search and multi-resolution BnB fixtures
+
+**Benchmark B17** uses the small exact-truth synthetic apartment and repetitive warehouse with **immutable occupancy-derived correlation score pyramids**, OD-004 midpoint-deskewed/OD-005 quality-accepted scans, OD-006 covariance hypotheses, OD-007 Ceres refinement and OD-008 quality/rank gating. Search is a **candidate generator**; measure actual accepted global pose rather than equating the highest coarse score with truth.
+
+**Test matrix:**
+
+1. **Normal healthy tracking:** OD-006 correct/high-confidence prediction -> direct Ceres with **zero coarse-search work** (no search-tree build/scan-time search); verify localization performance and the 10 Hz scan path.
+2. **Degraded search:** Position offsets near **±0.3 m**, yaw near **±10°**, 10–20 ms proposed Pi search budget; vary covariance eigenstructure, clip windows, and record clipping/failures when truth is outside the cap.
+3. **Recovery search:** Offsets near **±1.0 m**, yaw **±30°**, 30–50 ms proposed per-invocation budget; compare complete/partial multiresolution BnB and OD-007 refined poses against ground truth.
+4. **Global kidnapped robot:** Full eligible frozen submap(s) and **360°** yaw, asynchronous **100–200 ms processing slices** with resumable/cancelled/incomplete progress. Measure total processing time to true stable relock and number of slices; a per-slice budget does **not** imply full-map completion in that time.
+5. **Admissible pruning:** Small exact synthetic grids with known/support-mask regions, multiple map origins including yaw and repeated shelves. Compare upper bounds, candidate scores and best completed BnB result **against exhaustive discrete fine-resolution search**; test unknown/outside cases and score quantization. An inadmissible heuristic cannot claim exhaustive branch-and-bound correctness.
+6. **Angular discretization:** Derive yaw increments from grid resolution and valid beam range. Sweep short/long beam scenes and angle seams; ensure candidate sampling is fine enough to find true peaks without excessive candidate count.
+7. **Multiple hypotheses:** Ambiguous warehouse aisles, apartment symmetry and open corridor. Keep spatially separated top-K candidates (nonmaximum suppression); measure recall@K, distinct peaks, false-lock rate and multi-scan confirmation, not just rank-1 coarse score.
+8. **Prior and OD-008 gates:** Deliberately **wrong, overconfident** OD-006 prior at a distant true pose; compare stale tracking-prior Ceres vs mode-relaxed/no-prior recovery refinement. High coarse correlation or low posterior cost MUST NOT bypass OD-008 overlap/residual/observability, state-aware innovation or OD-020/022 multi-scan relock.
+9. **Resource and concurrency:** Feed deterministic **10 Hz** input/OD-006 integration while async BnB runs; vary CPU load/map size/pyramid depth/cache reuse and verify no sensor acquisition or recording blockage. Measure p50/p95/p99 scan-path latency, CPU/RAM/thermal, per-slice budget overshoot, node expansions/pruning, queue lag, cancellation latency, stale map revision handling and no map insertion while LOST.
+10. **Map/version consistency:** Compare immutable pyramids built for occupancy versions A/B; reuse version A across identical scans, invalidate when authoritative map/unknown-mask changes, and confirm candidates cannot mix occupancy/EDT/clock/calibration revisions.
+
+**Comparison and metrics:** OD-007 direct-Ceres-only, bounded local correlation + Ceres, full multiresolution BnB + Ceres and optional future persistent-particle baseline under OD-020, **using identical sensor/map splits**. Report search mode/window/covariance, angular step, map/pyramid revisions, search nodes/candidate coverage, bound admissibility, complete/partial/cancel state, candidate count and recall@K, Ceres/OD-008 acceptance, true location error only with **exact synthetic or independent measured truth**, time to robust relock, map insertion suppression and full CPU/latency cost.
+
+**Measured performance required before fixing defaults:** Proposed 0/10–20/30–50/100–200 ms budgets are **initial Pi 5 targets only**; collect on-device benchmark results and classify any unmet timing targets honestly. No external large dataset is needed for B17's correctness fixture. Keep all automated tests inside Docker and no GitHub Actions execution.
+
 ## 5. Benchmark categories and experiments
 
 | ID | Benchmark | Inputs | Required observations |
@@ -215,7 +236,7 @@ Build **benchmark B16** on the versioned OD-007 authoritative occupancy/EDT maps
 | B04 | Ceres scan-to-map | Frozen authoritative occupancy map + derived OD-007 EDT, midpoint deskewed scans, odometry predictions/covariances | Pose error, Ceres robust residual and prior contributions, accepted scan overlap/degeneracy, false-locks, runtime; no invalid/missing points. |
 | B05 | Submap/offline SLAM + GTSAM | Full sequence / loop | Loop consistency, trajectory accuracy category, map quality, runtime. |
 | B06 | Frozen-map live localization | Saved map and held-out traversal | Pose drift / error, tracking dropout, confidence calibration, recovery. |
-| B07 | Global relocalization | Unknown/perturbed pose and frozen map | Initialization success, kidnapped-robot recovery, time to stable lock. |
+| B07 | Global relocalization | Unknown/perturbed pose and frozen map, OD-009 multi-resolution BnB candidates | Initialization success, kidnapped-robot recovery, OD-008 validated false-lock/observability, multi-scan confirmation and time to stable lock. |
 | B08 | Runtime/portability | Same exact dataset+config on ARM64 and x86-64 | p50/p95/p99 latency, throughput, CPU/RAM/thermal, missed deadlines. |
 | B09 | Fault tolerance | Dropped points/IMU, timing jumps, wheel slip, dynamics | State transitions, reported uncertainty, graceful recovery and invalid-data rejection. |
 | B10 | Benchmark comparison | Multiple deterministic configs | Reproducible side-by-side Web Lab views and machine-readable reports. |
@@ -225,6 +246,7 @@ Build **benchmark B16** on the versioned OD-007 authoritative occupancy/EDT maps
 | B14 | OD-006 minimal motion estimation and gyro bias | Exact synthetic SE(2), wheel/gyro streams, stationary calibration, slip and gaps; verified kinematics fixtures | Pose/yaw error, bias error/readiness, bias-update gating, covariance consistency, slip detection and missing-source status; Pi runtime. |
 | B15 | Accepted OD-007 EDT Ceres objective, prior and boundary safety | Known occupancy/EDT maps, midpoint scans, synthetic apartment/corridor/warehouse, controlled odom prior/outliers/unknown regions | Per-beam Huber correctness, bilinear/EDT metric/gradients, overlap and LiDAR-only observability despite strong prior, boundary correction, false-locks, provenance/latency. |
 | B16 | Accepted OD-008 robust LiDAR-only rank, calibrated covariance and quality gate | Rank-0/1/2/3 Jacobian fixtures, corridor/corner/warehouse midpoint scans, held-out independent truth, degraded sensors | PSD/normalized eigendirections, true rank, calibration/coverage, projected/rejected degenerate poses, false accepts, uncertainty status and runtime. |
+| B17 | OD-009 covariance-aware correlative search and async BnB recovery | Synthetic apartment/repetitive warehouse, frozen occupancy pyramids, perturbed/corrupted odom, kidnapped robot | Complete vs partial BnB correctness, bound pruning, candidates recall@K, OD-007/008 accepted accuracy/false-lock, time to relock, Pi per-slice budgets and no capture blocking. |
 
 Compare **LiDAR-only**, **LiDAR + wheel odometry**, and **LiDAR + wheel + gyro** wherever the dataset supports them. A `no-wheel` dataset must not be included in wheel-fusion averages. If a dataset provides only processed odometry and not raw ticks, label the experiment accordingly; don't imply independent source availability.
 
@@ -472,7 +494,7 @@ The example deliberately uses `null` for **unmeasured** fields: it is a reportin
 
 ### 11.1 Acceptance and delivery phases
 
-**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, OD-004 midpoint SE(2)/10 ms gating, OD-005 seam/invalid-return fixtures, OD-006 gyro bias/slip/kinematics/uncertainty and **OD-007 EDT/bilinear/Huber/prior/unknown/boundary** fixtures, **OD-008 rank-deficiency/robust-information/held-out covariance fixtures**, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
+**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, OD-004 midpoint SE(2)/10 ms gating, OD-005 seam/invalid-return fixtures, OD-006 gyro bias/slip/kinematics/uncertainty and **OD-007 EDT/bilinear/Huber/prior/unknown/boundary** fixtures, **OD-008 rank-deficiency/robust-information/held-out covariance fixtures**, **OD-009 BnB admissibility, wrong-odometry global recovery and budget/cancellation fixtures**, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
 
 **D1 — Compact public baseline:** Verify and pin the 38 MB Cartographer bag; implement horizontal-LiDAR/IMU import and standalone LiDAR–IMU smoke replay. Do not call it a full 3-sensor benchmark.
 
