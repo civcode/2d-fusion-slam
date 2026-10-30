@@ -39,7 +39,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-013 | Keyframe+submap Pose2 graph; fused odom and correlation-safe factors | P1 | Backend accuracy | **Accepted** (implementation/tests pending) |
 | OD-014 | Bounded offline refinement, selective re-deskew/remap and rollback | P1 | Mapping quality | **Accepted** (tests/tuning pending) |
 | OD-015 | 0.20 m/5°/2 s motion keyframes; independent submap anchors; optional sparse bias knots | P1 | Graph size/accuracy | **Accepted** (tuning/tests pending) |
-| OD-016 | Process/thread layout | P1 | Pi resource isolation | Open |
+| OD-016 | Four processes + versioned seqpacket IPC and bounded workers | P1 | Pi resource isolation | **Accepted** (budgets/tests pending) |
 | OD-017 | Native CMake target/API decomposition | P0 | Implementation scaffold | Open |
 | OD-018 | Loop candidate retrieval and verification | P1 | Offline mapping | Open |
 | OD-019 | Online iSAM2 work budget/fixed lag | P3 | Onboard full SLAM | Open |
@@ -50,7 +50,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-024 | Replay checkpoints, seek and reproducibility | P1 | Benchmarks/Web Lab | Open |
 | OD-025 | ROS 2 distro, QoS and adapter interface | P3 | Nav2/RViz integration | Open |
 
-Recommended **review order**: OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009 accepted coarse recovery, OD-020/022 (global hypotheses and tracking state), then OD-016/019/025 (full online/deployment). Some concurrency questions in OD-016/021 must be settled earlier if they block recorder implementation.
+Recommended **review order**: OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009 accepted coarse recovery, OD-020/022 (global hypotheses and tracking state), then **accepted OD-016** four-process deployment, OD-019/025 (full online/ROS). Accepted OD-016 fixes process boundaries and nonblocking IPC requirements; OD-021 still defines numeric queue, backpressure and recording-durability thresholds.
 
 ## 3. Sensor, timestamp and odometry decisions
 
@@ -1332,13 +1332,91 @@ Native C++20 `KeyframeSelector`, `KeyframePolicy`, `KeyframeDecision`, `SubmapAn
 
 ## 5. Runtime, integration and localization decisions
 
-### OD-016 — Processes and threads
+### OD-016 — Four-process hybrid deployment with bounded workers and versioned Unix IPC
 
-**Question:** One process with bounded worker threads, or separate acquisition, recorder, localizer, graph and Web Lab processes connected through native IPC?
+**State:** **Accepted** (topology and transport chosen; worker counts, queue caps, OS profiles and implementation pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit choice of four separately managed processes  
+**Priority:** P1
 
-**Provisional preference:** small native process with bounded distinct workers for first recorder/replay; keep interfaces usable across processes when required by robustness. Web Lab should be opt-in and unable to stall acquisition.
+**Decision:** Deploy **four independently managed Linux processes** on the Pi 5: **`acquisition`, `recorder`, `slam` (localizer + graph), and `web_lab`**. Communicate using **versioned native AF_UNIX SOCK_SEQPACKET Unix domain sockets** with explicit sequence, time/epoch, source/session and size metadata. Keep the OD-006 predictor, OD-004/005 scan processing and OD-007 Ceres matching in the SLAM process's short, bounded high-priority path; run OD-013 GTSAM graph optimization, OD-011 map-cache construction and OD-012 persistence on **separate bounded lower-priority worker queues** (disk writes are the recorder's responsibility for raw MCAP). Publish graph corrections and immutable map snapshots by version-checked atomic handoff. Acquisition must **never wait indefinitely for** recorder, SLAM, graph, persistence, or Web Lab. Preserve a loss-detectable raw route and explicit degraded/failure policy. Large immutable transfers may later use sealed Linux `memfd_create` buffers with `SCM_RIGHTS` file-descriptor passing after profiling. No IPC/ROS/Linux scheduling types enter portable core interfaces.
 
-**Decision gate:** Raspberry Pi 5 CPU scheduling, crash/isolation behavior, memory copies, queue backlog, serial device permissions and Docker Compose complexity. Do not pretend C++ thread safety is guaranteed by Docker isolation.
+**Alternatives:** (A) one multithreaded process — limited prototype/test harness, not initial production topology; (B) **four-process hybrid — accepted**; (C) five processes splitting GTSAM graph from SLAM — deferred until blocking/crash/CPU measurements require it; (D) DDS/ROS or external broker as mandatory native transport — rejected, with optional ROS2 adapter remaining separate.
+
+#### Process ownership, channels and lifecycle
+
+| Process | Owns | Explicitly does not own |
+| --- | --- | --- |
+| **`acquisition`** (highest latency priority) | Exclusive LD19 UART, MPU6050 I²C, wheel/Pico hardware handles; packet CRC/OD-003 beam timing, OD-001/002 clock/sync source identity, bounded nonblocking event fan-out | Ceres/GTSAM, disk encoding/fsync, Web UI, map building |
+| **`recorder`** (high data-integrity priority) | Ordered raw events **before lossy scan processing**, packet gaps, source epochs, sync calibration/config changes, OD-023 MCAP writer, durable segment/manifest completion and incomplete-session flag | Sensor device I/O and SLAM optimizers |
+| **`slam`** (localization path prioritized) | OD-005 assembly, OD-004/006 trajectory/deskew/odom, OD-007/008 frontend, OD-010/011 mapping/cache, OD-009 recovery, OD-013 graph and OD-012 map bundle workers; versioned corrections | Raw sensor device ownership, directly mutating recorder/session |
+| **`web_lab`** (lowest) | Browser-facing HTTP/WebSocket/JSON UI (as implemented), bounded telemetry polling/updates, validated asynchronous user commands and config requests | Sensor hardware, direct map mutation, high-priority SLAM scheduling |
+
+~~~text
+LD19 / IMU / encoders / optional Pico
+             |
+       ACQUISITION (one owner of sensor FDs and source clocks)
+          /                                     \
+  ordered seqpacket RAW                    seqpacket SENSOR
+  with sequence/epoch                      bounded nonblocking
+         |                                        |
+     RECORDER                                 SLAM process
+  raw MCAP, durability             ingest/odometry -> deskew -> Ceres localizer
+  gaps + completeness                         |               |
+                                             map worker    graph worker
+                                             snapshot       batch GTSAM
+                                               \              /
+                                            versioned atomic handoff
+                                                     |
+                                             rate-limited snapshot
+                                                     |
+                                                  WEB LAB
+                                        validated async commands -> SLAM
+~~~
+
+**Only the acquisition process reads physical sensor file descriptors**. Raw source event IDs must be consistent across recorder and SLAM fan-out. Fan-out paths are separately buffered and separately metered: SLAM overload does not silently truncate raw recordings; recorder overload is explicitly **`LOSS_DETECTED` / `INCOMPLETE`** or a controlled **STOP_RECORDING**, never asserted lossless. The acquisition process cannot guarantee loss-free recording if disk/recorder throughput is inadequate; it must expose backpressure/dropped counts and not block hardware timestamp capture indefinitely.
+
+**IPC contract:** On Raspberry Pi Linux, use `AF_UNIX` `SOCK_SEQPACKET` with independently established peer connections and message boundaries/in-order delivery **within a connection**. This does **not** guarantee delivery across process crashes, reconnection, full kernel send buffers or disk failure. Every native message includes version/feature negotiation and a bounded envelope: protocol magic, major/minor, payload type/length, source/producer process ID, **run/clock-generation and boot/session identity**, per-source monotonically increasing sequence, canonical event time **with domain+epoch**, optional receive host steady stamp, calibration/config revision, quality/gap flags and optional acknowledgment/correlation ID. Reject unknown required features, oversized/truncated (`MSG_TRUNC`) or invalid payloads. Do not serialize native C++/Eigen/GTSAM/ROS object layouts. Transport schemas are versioned independently of OD-023 MCAP and OD-012 map payloads; converters retain provenance.
+
+**Per-channel behavior:** Acquisition→Recorder: ordered raw sensor/sync/config/gap events, bounded independent sender buffer, **per-source gaps surfaced and persisted**. Sender enqueue/receive success is **not durable recorder acceptance**; distinguish `ENQUEUED`, `WRITTEN` and `DURABLE` acknowledgments/checkpoint boundaries if implemented. Acquisition→SLAM: timestamped bounded stream, explicit drop/cancel/degraded-state handling, no invented IMU/scan continuity. SLAM graph: in-process single-owner bounded queue; optimization jobs consume immutable OD-011/013 graph/map snapshots and stale versions are **discarded or explicitly reconciled** before atomic pose correction. SLAM→Web Lab: low-rate **latest-state** telemetry, coalesce or discard obsolete display frames; Web Lab→SLAM: authenticated/authorized, validated, request-ID/ack/error commands with explicit asynchronous config/clock revision transition and no direct sensor/graph write access.
+
+**Security/isolation:** Use socket-path permissions and peer credential verification (`SO_PEERCRED` on Linux, if deployed), bounded decode limits and unique owned lifecycle endpoints; never trust arbitrary local clients or Web Lab commands. Separate process users/container mount/device permissions where practical. The Web UI's network access and commands must not implicitly expose unprotected sensor or configuration control; authentication/bind scope are configurable. Monitor per-process health, crashes, boot IDs, restart attempts and IPC peer/session changes. A restarted SLAM must **not** reuse an old graph/clock generation without validation; a restarted acquisition creates a **new acquisition session/epoch** and records a discontinuity. Recorder restarts create a **new segment/gap or verified continuation** and preserve incomplete-session status. Recovery is explicit; do not hide lost samples by reusing timestamps or sequence numbers.
+
+#### Scheduling, memory and backpressure
+
+| SLAM worker | Initial policy | Failure mode |
+| --- | --- | --- |
+| IPC ingestion + OD-006 trajectory updates | Short high-priority nonblocking tasks; bounded time-ordered buffers | Stale/late/overflow -> explicit gaps and degraded odom/pose confidence |
+| OD-005 scan assembly/OD-004 deskew | Bounded sequential work with OD-004 timing/coverage gate | Drop/reject obsolete scans with diagnostic |
+| OD-007 Ceres local matching | Dedicated bounded worker, per-scan deadline | Late results rejected, OD-008 status degraded; odom continues |
+| OD-013 batch graph / future OD-019 iSAM2 | Separate lower-priority bounded job queue; coalesce superseded requests | Graph lag logged, latest valid map pose kept |
+| OD-011 EDT/OD-009 pyramids | Budgeted immutable snapshot-build worker | Older coherent snapshots subject to staleness gate |
+| OD-012 map save / optional OD-014 offline work | Low-priority budgeted job or separately managed offline CLI; atomic generation | Disk/work queue failure reported, no acquisition coupling |
+| Snapshot/graph publication | Tiny version-checked atomic handoff | Reject obsolete/partial versions, never block capture |
+| Web Lab | Separate process, rate-limited latest-state | Display frames dropped, never raw sensor backpressure |
+
+Initially use **normal Linux scheduling (`SCHED_OTHER`)** with measured Pi 5 contention and CPU/thermal data. Only consider priority-boost/`SCHED_FIFO` for acquisition after explicit starvation/latency validation, with bounded processing, privilege limits and watchdogs; poorly configured real-time threads can starve disk/other processes. **Fixed named workers and bounded queues**: no unbounded task/thread creation or recursing callback loops. Thread safety is not guaranteed by containers or process isolation; validate mutex/snapshot ownership.
+
+**Queues/backpressure:** Specify a per-channel max count **and bytes**, event-time lateness/horizon, sender-queue enqueue timeout/`EAGAIN` policy, worker max in-flight tasks, stale-result rejection, and process memory cap. OD-021 remains open for the exact numeric limits/drop ordering/durability thresholds; **the requirement to have limits and diagnostics is decided now**. Acquisition must use nonblocking writes or a short bounded wait with explicit failure, **never unlimited blocking**. Prioritize raw preservation when possible but never claim lossless data when a bounded raw buffer overflows; mark recording `INCOMPLETE` and initiate configured stop/degrade. SLAM can lose stale visualization/low-quality scans while keeping clock/gap events, with OD-022 localization quality gates. Web Lab uses last-value wins. All loss policies count source sequences and **never synthesize absent beams, gyro samples or timestamps**.
+
+**Large snapshots:** `memfd_create` + `SCM_RIGHTS` is **optional Linux IPC adapter only**, not part of the baseline portable map API. If enabled, pass immutable or sealed shared memory handles with explicit length, content hash, map/graph revision and ownership/lifetime handshake; account for pinned bytes, FD limits and truncation, reject mutable/reused buffers. Optimize **only after copying/IPC costs are measured**; ordinary bounded seqpacket messages remain default for control/sensor traffic. Use `memfd` only where suitable Linux support/sealing is validated, not as a requirement for other platforms.
+
+**Deployment strategy:** Stage I must launch, health-check and independently restart **all four** processes (systemd or Docker Compose can supervise; deployment choice remains configurable), with clean shutdown order that drains/stops recorder safely and preserves manifest completeness. Tests may instantiate modules in one process or run offline replay **without IPC**, but the Pi deployment target is the four-process hybrid. Splitting GTSAM into a fifth process or moving large maps into shared memory are **future measured optimizations**, not default. OD-017 decides CMake target decomposition, OD-021 quantitative queues and durability, OD-023 channel payload/MCAP schema, OD-025 optional ROS adapter QoS; none changes this accepted process boundary.
+
+**Required validation / benchmark B24:**
+
+1. Four processes independently launch, crash, restart and reconnect; acquisition ID/epoch/sequence continuity and change events, recorder incomplete segments and stale graph corrections tested.
+2. `SOCK_SEQPACKET` ordering/boundaries/version negotiation, bounded message sizes, truncation/`EAGAIN`/peer close, and explicit sequence gaps under injected loss.
+3. Fake recorder slow/disk full and SLAM worker stalls: acquisition sensor timestamp jitter and raw stream order remain bounded/observable; recorder declares `INCOMPLETE` or stops, never lossless after overflow.
+4. OD-011 snapshot pinning, OD-013 graph pose revision, optimization timeouts/stale graph results with no pose jump in `odom->base_link`.
+5. Graph and map save run concurrently with ~10 Hz LD19, ~200 Hz IMU and encoder data under constrained Pi CPU/RAM; monitor p50/p95/p99 capture-to-pose, queue lag, thermal throttling and FD count.
+6. Web Lab slow/disconnected clients, malformed/unauthorized commands and telemetry backpressure never affect acquisition or SLAM correction deadlines.
+7. Optional `memfd` fd passing, read-only sealing/version/length checks and pin/evict lifecycle vs copying overhead, only when enabled.
+8. Containerized Catch2 and multi-process fault integration tests run manually/local (Docker), not GitHub Actions.
+
+**Consequences:** Four-process ownership, `SOCK_SEQPACKET` native versioned IPC, bounded worker isolation, nonblocking acquisition, version-checked graph correction and explicit recorded loss diagnostics are accepted. **OD-021** still chooses numeric queue capacity and detailed per-stream loss/durability policies, and OD-023 the MCAP channel schema. No Pi 5 schedulability or lossless-recording guarantee has been measured or established.
+
+**References:** [Linux unix(7) `SOCK_SEQPACKET` and `SCM_RIGHTS`](https://man7.org/linux/man-pages/man7/unix.7.html), [Linux memfd_create(2)](https://man7.org/linux/man-pages/man2/memfd_create.2.html).
 
 ### OD-017 — CMake libraries, APIs and build boundaries
 
@@ -1438,6 +1516,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-015 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-016 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
