@@ -84,6 +84,22 @@ The LD19 uses ~230400-baud UART packets of **47 bytes** (header, version/count, 
 
 This adapter's implementation and its LD19-specific timing calibration belong at the **sensor acquisition boundary**. Neither the portable C++20 SLAM core nor the optional ROS 2 interface may contain LD19-specific packet timing calculations. See [accepted OD-003](open-design-choices.md) and [Architecture §4.1](architecture-specification.md).
 
+### 3.2 Accepted OD-005 — Partial revolutions, angular coverage and return safety
+
+After validated LD19 packet decoding and **OD-003 individual beam timestamp reconstruction**, group generic observed beam slots into scans at **crossings of a fixed configurable angular seam**, using unwrapped angles and the validated rotation direction. A packet may straddle the seam; split between its observed beam slots without duplicating or fabricating readings. Do not assume a fixed number of points, constant rotation speed or a UART packet boundary.
+
+- Support **partial scans** at start/stop, after packet loss, and during acquisition recovery. Preserve actual canonical acquisition times, start/end angular status, observed beam order, angular support, missing-sector intervals, largest gap, coverage fraction, source clock/epoch, intensity and validity metadata, packet errors, complete/partial flag and termination reason.
+- Coverage MUST be computed **circularly against 360°** with a documented angular support model (bins or intervals); simple min/max angular spread is not sufficient. Missing sectors must remain missing, not filled with artificial range values or timestamps. If an outage can hide multiple angular seam crossings, invalidate/relock rather than invent turns.
+- Classify each observed return as `VALID_HIT`, explicitly documented `VALID_NO_RETURN`, or `INVALID_RETURN`. A missing slot/sector is `MISSING` metadata and not a measurement. Keep geometry validity separate from timestamp validity: a time-valid invalid-range slot can contribute to **OD-004 midpoint time bounds** but never to geometric endpoints.
+- **Only valid hits** may create occupied endpoints and freespace along the measured ray up to that hit. **Invalid and missing measurements MUST NOT clear cells.** A valid, device-documented no-return MAY clear a bounded ray only with an explicit calibrated sensor policy and enabled configuration. Undocumented zero, saturated, malformed and out-of-range measurements are **invalid by default**, not automatic max-range clear rays.
+- Provide independent, configurable **scan-matching** and **map-insertion** quality gates using observed angular coverage, largest gap, spatial hit distribution/count, packet/time continuity, alignment uncertainty and pose quality. A partial scan MAY pass either gate when sufficient real data exists. Report the measured values and reasons for rejection; no fixed universal thresholds are claimed before benchmarking.
+- For **normal mapping**, apply these gates and require **OD-004 interpolated motion coverage over the entire actual scan time interval**, including valid acquisition times of invalid-range slots. No extrapolated or clock-incoherent scan is inserted. Do not match a scan against a map containing itself.
+- **Time-based scan segmentation is prohibited in normal operation.** A host-steady watchdog timeout MAY flush/abort and mark an incomplete scan for **stalled UART, disconnect, reset or shutdown recovery only**; such records must be explicitly marked partial/timeout and cannot masquerade as complete revolutions.
+
+The **LD19 adapter** exclusively owns packet framing, CRC, device-angle and clock handling. The **portable scan assembler** consumes generic timed beams and gap events, and exposes quality-assessed `AssembledScan` records to the deskewer/front end. Neither portable algorithm code nor ROS 2 integration requires LD19 packet structures. For nonuniform partial data, do not fabricate uniform `sensor_msgs/LaserScan` fields; a correctly described point-cloud or native timed-scan representation is preferable.
+
+See [accepted OD-005](open-design-choices.md), [Architecture `4.1.1](architecture-specification.md) and [OD-004 midpoint deskew](open-design-choices.md).
+
 ## 4. Coordinates, clocks, and calibration
 
 ### 4.1 Frames
@@ -204,7 +220,7 @@ p_laser_mid =
 
 This must handle full translation and rotation, including the LiDAR-to-base extrinsic lever arm. Deskew is a derived view of the immutable raw observations; recalibration or offline trajectory/bias corrections can trigger re-deskew and new map revisions (OD-014).
 
-**Full interpolation is mandatory for ordinary map insertion:** every timestamp-valid beam and the scan midpoint must be covered by valid **interpolated** trajectory segments across `[t_start,t_end]` with no unsupported sensor gap or clock-epoch change. If the motion history has not reached `t_end`, **prefer bounded delayed scan processing** to waiting forever or forecasting future motion. Incomplete coverage, invalid boundary timing or any extrapolated point prevents normal occupancy insertion; report the reason, and retain the raw scan.
+**Full interpolation is mandatory for ordinary map insertion:** the OD-005 quality/insertion gate must pass for the assembled scan (including partial scans); then every timestamp-valid observed beam and the scan midpoint must be covered by valid **interpolated** trajectory segments across `[t_start,t_end]` with no unsupported sensor gap or clock-epoch change. If the motion history has not reached `t_end`, **prefer bounded delayed scan processing** to waiting forever or forecasting future motion. Incomplete coverage, invalid boundary timing or any extrapolated point prevents normal occupancy insertion; report the reason, and retain the raw scan.
 
 **Optional bounded extrapolation:** Explicit latency-sensitive localization/prediction or diagnostics MAY request extrapolation; the default is **disabled**. Initial maximum horizon is **10 ms (10,000,000 ns)** beyond the earliest/latest trusted trajectory boundary. This is an upper bound subject to covariance, gyro/encoder freshness, slip/bias, source timestamp uncertainty and clock/calibration quality gates. Never extrapolate across a discontinuity. Return distinct `INTERPOLATED`, `EXTRAPOLATED` or `UNAVAILABLE` status with horizon and uncertainty. An extrapolated pose MUST NOT silently become valid map-insertion evidence. Choose buffering/quality thresholds by benchmark, not assumed device performance.
 
@@ -339,8 +355,9 @@ Keep interfaces implementation-independent:
 
 ~~~text
 SensorSample -> TimestampAligner -> MotionPredictor -> TrajectoryProvider
-LidarPacket  -> LD19 Time Adapter -> TimedScan -> ScanAssembler
-TimedScan + TrajectoryProvider + T_base_laser -> MidpointDeskewer
+LidarPacket -> LD19 Time Adapter -> observed TimedBeam + gap events
+TimedBeam + gap events -> fixed-seam ScanAssembler -> AssembledScan + coverage + return status
+AssembledScan + TrajectoryProvider + T_base_laser -> MidpointDeskewer + eligibility
 DeskewedScan + MapView + PosePrior -> ScanMatcher -> MatchResult
 MatchResult + WheelDelta + GyroDelta -> FactorGraphBackend
 RecordedDataset -> OfflineMapper -> MapBundle
@@ -408,7 +425,7 @@ Measure end-to-end **capture-to-pose latency**, not only Ceres solve time. Use b
 
 ### 12.1 Unit and integration tests
 
-- LD19 frame parsing, CRC errors, truncated packets, 30-second timestamp rollover, angle/speed beam-time reconstruction, device-to-host offset/drift, physical-delay calibration/uncertainty, angle wrapping, and serial resynchronization.
+- LD19 frame parsing, CRC errors, truncated packets, 30-second timestamp rollover, angle/speed beam-time reconstruction and clock fit; OD-005 seam-straddling packets, variable speed, circular angular coverage, partial scans, missing sectors, invalid vs validated no-return map clearing, recovery-only watchdog and serial resynchronization.
 - Clock offset/drift estimation and timing uncertainty; missing or late IMU/encoder samples.
 - SE(2) composition/inverse, exponential constant-twist arcs, near-zero angular-rate stability, Jacobians, asynchronous wheel/gyro knots, timestamp-addressable coverage and laser/IMU extrinsics.
 - Synthetic moving-wall/apartment/warehouse scans proving **midpoint-referenced** rotational and translational deskew, full interpolation eligibility, 10 ms quality-gated extrapolation and rejection of 10.1 ms or uncertain/gapped scans.
