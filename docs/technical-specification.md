@@ -467,10 +467,37 @@ Run initial **GTSAM batch LM/Gauss–Newton** on an offline worker, not sensor a
 4. Match scans in Ceres, build overlapping submaps, and create graph constraints.
 5. Detect and geometrically verify loop closures.
 6. Admit OD-013 provenance-checked fused motion/local LiDAR/loop factors and optimize keyframe+submap poses globally with GTSAM batch optimization.
-7. Re-deskew and rebuild selected submaps when bias/trajectory corrections are material; iterate with convergence criteria.
-8. Export a versioned map plus evaluation report.
+7. Apply **accepted OD-014** selective offline re-deskew and affected-submap reconstruction, only after quality/observability tests; start with one-pass R0 and permit at most three additional candidate iterations.
+8. Publish only validated immutable OD-012 generation(s) and quality/iteration reports, preserving previous accepted outputs for rollback.
 
 Offline replay must support deterministic scan selection, configurable processing rate, and the ability to compare parameter changes against the same raw data.
+
+### 8.1.1 Accepted OD-014 — Bounded offline outer refinement
+
+**Initial delivery is a one-pass mapper (`R0`)** using an immutable recording: OD-002/003 event-time reconstruction, OD-006 wheel/gyro trajectory with OD-004 full midpoint SE(2) deskew, OD-005 scan filtering, OD-007/008 matching, OD-010 submap insertion, OD-011 coherent caches and OD-013 batch keyframe/submap graph. Later support **at most 3 additional outer candidate iterations (`R1`, `R2`, `R3`)**, not an indefinite full-map loop. Runtime Pi sensor processing and live odometry do not depend on this feature.
+
+**Selective change detection and update matrix:**
+
+| Proposed correction | Re-deskew? | Reinsert occupancy rays? |
+| --- | --- | --- |
+| Rigid global GTSAM submap pose change | **No** | **No**, graph poses/global indexes only |
+| Same rigid transform of every scan and local submap frame | **No** | **No** if `T_submap_scan` is unchanged |
+| Scan midpoint pose relative to submap changes | **Only if within-scan motion also changes** | **Yes when material** |
+| Intra-scan trajectory or calibrated gyro bias changes | **Yes when material** | **Yes** for affected member submaps |
+| Validated OD-002/003 clock offset/drift/beam timing changes | **Yes when material** | **Yes** when resulting local beam geometry changes |
+| Geometry unchanged within configurable tolerance | Generally no | Generally no; still assess quality/validity |
+
+**Geometry threshold:** Compute maximum **submap-local Euclidean endpoint displacement**, comparing accepted and candidate beam geometry for all valid scans (or a defensibly conservative bound). Begin at **half of OD-010's 5 cm cell = 0.025 m**, with no claim of optimality; account for yaw error times beam range, laser extrinsics, OD-004 relative twist and OD-003 beam timestamps. Check **both** OD-010 membership submaps. Global loop-correction magnitude alone is not a remap signal. Relative scan pose may move rays even if within-scan deskew is unchanged: remap without pointless re-deskew. If clock epoch or time interpolation fails, a scan becomes invalid regardless of geometric threshold.
+
+**Constrained calibration:** Only update OD-006 gyro bias when stationary/independent observations resolve bias from slip and noise; only update OD-002/003 clock offset/drift when timing is **observable** and physical LD19 timestamp delay remains respected/uncertain. Apply bounded changes/uncertainty and record clock domain/epoch/session. Do **not** tune time parameters solely to reduce LiDAR residuals on the same repeatedly rebuilt map or claim knowledge of the LD19 timestamp physical event.
+
+**Rebuilding:** Construct affected local occupancy grids anew from the **original immutable raw packets, beam times, valid-hit/missing-return classifications and unchanged accepted scan IDs where appropriate**, preserving OD-010 one-cell-per-insertion hit precedence and known/unknown masks. Do not raster-warp accepted frozen maps or add log odds twice. Recompute OD-011 derived EDT/pyramid from the **new occupancy source revision**, then re-evaluate **all impacted OD-007/008 match constraints and OD-013 factors**, including loop candidates. **Replace** old factor IDs, never append duplicated information; apply OD-013 source membership, scan self-match and cross-correlation rules to each candidate. A globally rigid correction only changes `S_j`/graph pose revision, so its local raster/EDT/pyramid remain unchanged.
+
+**Convergence, acceptance and rollback:** Each candidate has a full coherent map/graph/calibration/trajectory version and explicit dependency provenance. Check configurable **relative graph objective improvement on genuinely comparable factor sets**, pose-change tolerance, OD-008 geometry/residual/observable-rank and covariance consistency, loop support, and **held-out** scans/independent truth if available. A lower in-sample cost on a self-rebuilt map is **not** sufficient; do not compare total costs across different factor sets as though they have equal evidence. Reject a candidate for regression, false loop, nonfinite data, unobservable bias/time step, inconsistent cache/factor references or resource/budget violation. On rejection **retain the last accepted immutable generation** and stop or report; early stop when converged/no material local change; hard cap after 3 additional candidate iterations.
+
+**Raw input and persistence:** OD-012 `LOCALIZATION_MAP` is insufficient for rerunning original deskew from scratch: retain **raw MCAP/packet acquisitions, encoder/IMU events, source-to-canonical time mappings, calibration provenance and input hashes** separately. Publish only validated candidates into **new immutable OD-012 map generations**, atomically changing `CURRENT` with recovery/rollback of prior version. Stable scan IDs, eligibility and submap membership are maintained wherever possible; any changes require reasoned new version IDs. Deterministic replay inputs, seeds, calibration, source hashes and dependency chains are included in iteration metadata; OD-024 later sets efficient replay seek/checkpoint behavior.
+
+**Portable interface:** A ROS-/GTSAM-/Ceres-independent native `OfflineRefinementCoordinator` orchestrates model-neutral trajectory, map-builder, scan matcher, graph and artifact adapters. Ceres and GTSAM stay inside OD-007/013 targets. Tests in Docker Catch2 and **B22** cover pure rigid graph deformation with **zero** rebuilds, midpoint-only remap, high-yaw gyro/time re-deskew, half-cell bound, overlapping map membership, stale factor/cache deletion, recovery from aborted candidate generation, independent-truth quality gating and bounded iteration count. Profile selective/full rebuilding wall time, CPU/RAM and precision; avoid GitHub Actions.
 
 ### 8.2 Mode B — Live localization in a previously built map (second priority)
 
