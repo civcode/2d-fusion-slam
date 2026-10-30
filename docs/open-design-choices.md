@@ -31,7 +31,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-005 | Angular-seam scan assembly, partial coverage and invalid returns | P1 | Frontend acceptance | **Accepted** (tests/tuning pending) |
 | OD-006 | Minimal wheel/gyro integrator and replaceable kinematics | P1 | Odometry, bias and slip | **Accepted** (calibration/tests pending) |
 | OD-007 | Truncated unsigned EDT, bilinear, per-beam Huber and odom prior | P1 | Ceres matching | **Accepted** (implementation/benchmarks pending) |
-| OD-008 | Match uncertainty and degeneracy policy | P1 | Graph, localizer quality | Open |
+| OD-008 | Robust LiDAR-only information, rank gates and covariance calibration | P1 | Graph, localizer quality | **Accepted** (tests/calibration pending) |
 | OD-009 | Coarse correlative search design | P2 | Tracking recovery | Open |
 | OD-010 | Occupancy submap construction and thresholds | P1 | Mapping and graph | Open |
 | OD-011 | Distance-field cache / immutable map snapshots | P1 | Map/matcher memory | Open |
@@ -583,15 +583,90 @@ OD-006 midpoint pose/covariance ---------------------+
 
 **Technical references:** [Ceres residual/loss conventions](https://ceres-solver.readthedocs.io/latest/nnls_modeling.html), [Ceres loss function API](https://github.com/ceres-solver/ceres-solver/blob/master/include/ceres/loss_function.h), [Ceres model FAQs](https://ceres-solver.readthedocs.io/latest/modeling_faqs.html).
 
-### OD-008 — Scan-match covariance, quality and degeneracy
+### OD-008 — Robust LiDAR-only information, rank-aware gating and calibrated covariance
 
-**Question:** How are information/covariance, observable directions and rejection thresholds derived from scan matching?
+**State:** **Accepted** (architecture selected; implementation/calibration/tests pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection  
+**Priority:** P1
 
-**Options:** raw Hessian approximation, inflated robustified Hessian with condition gating, bootstrapped/resampled local fits, or empirical covariance calibration on held-out data.
+**Decision:** Derive **LiDAR-only robust Gauss–Newton information** from the individual normalized beam residuals of accepted OD-007. **Exclude the OD-007 odometry prior and artificial map-boundary residuals**; assess physically normalized SE(2) eigenstructure, observability rank and degeneracy. For fully observable matches, estimate covariance from information and apply **held-out-data-calibrated inflation and positive-semidefinite floors**. For rank-deficient matches, preserve only genuinely observable subspaces; **project/suppress unsupported corrections or reject the match**. A distinct **ROS-/Ceres-independent quality/uncertainty component** judges convergence, overlap, residuals, observability, innovation and acquisition uncertainty. A future bootstrap is optional for **offline validation**, not an initial online dependency.
 
-**Provisional preference:** report overlap/inliers/residual plus Hessian spectral diagnostics; conservative covariance inflation, mark underconstrained cases invalid. Do not equate convergence or a tiny Hessian inverse with true independent certainty.
+**Alternatives considered:** (A) plain Hessian inverse — rejected as overconfident with outliers, unknown map error and sensor correlation; (B) robust LiDAR-only weighted information plus eigen-rank gating and calibration — **accepted**; (C) Ceres covariance directly — diagnostic cross-check only, not a calibrated SLAM covariance; (D) scan-resampling/bootstrapping — deferred optional offline check.
 
-**Decision gate:** warehouse corridor degeneracy, yaw ambiguity, outlier-heavy scenes, synthetic true-error-vs-reported-covariance consistency and effect of conditioned gyro deskew. Explicitly evaluate dependence on the reference submap.
+#### LiDAR-only information (distinct beam confidence versus robust influence)
+
+Use the **OD-007 normalized per-beam scalar residual** `r_i(T)=sqrt(w_i^beam)/sigma_i*D(q_i(T))` at the converged pose, with native 1×3 SE(2) tangent Jacobian `J_i=∂r_i/∂delta_xi` and **independent per-beam Huber** derivative `alpha_i=rho_delta'(r_i²)`.
+
+~~~text
+H_L = sum_i alpha_i * J_i^T * J_i
+alpha_i = rho_delta'(r_i^2),  0 <= alpha_i <= 1
+H_L = H_L^T >= 0   // symmetric positive semidefinite
+~~~
+
+`w_i^beam` already appears **inside** `r_i` and `J_i`; **do not multiply it again** as `alpha_i`. Only include valid-hit, map-supported, finite, useful LiDAR geometric Jacobians; count/exclude unknown, out-of-grid, invalid/missing returns, saturated zero-gradient EDT samples and invalid Jacobians. **Never include** odom-prior residual blocks, boundary penalties or graph priors. This PSD *robust-influence Gauss–Newton approximation* deliberately omits `rho''` robust curvature: it is **not necessarily identical** to the solver's robustified effective Hessian. Evaluate and test the actual nonrobustified LiDAR Jacobians in Ceres's SE(2) tangent convention, applying `rho'` explicitly and checking Ceres manifold conversions/`Problem::Evaluate` loss settings.
+
+#### Physically normalized observability and rank
+
+Translation metres and yaw radians require a **recorded, configurable physical normalization**. Define `delta_xi=S*z`, e.g. `S=diag(s_x [m],s_y [m],s_yaw [rad])`. Then:
+
+~~~text
+H_norm = S^T * H_L * S = V * diag(lambda_1,lambda_2,lambda_3) * V^T
+d_j = S * V[:,j]      // observable/weak directions in physical tangent
+rank = count(lambda_j passing absolute AND relative information gates)
+P_obs = V_obs * V_obs^T
+P_null = I - P_obs
+~~~
+
+Report `S`, tangent frame/perturbation convention, eigenvalues, condition number, rank (0–3) and observable/null bases. **Unscaled mixed-unit eigenvalue ratios are not sufficient**. A strongly weighted motion prior MUST NOT improve the **LiDAR-only** rank. Account for near-threshold eigenvalue uncertainty, negative numerical eigenvalues and non-finite inputs; true material negative eigenvalues indicate bad information calculation.
+
+#### Covariance and rank deficiency
+
+For **rank 3** with credible normalized noise and acceptable condition number, initialize:
+
+~~~text
+Sigma_raw ≈ H_L^-1
+Sigma_match = K * Sigma_raw * K^T + Sigma_floor
+~~~
+
+`K` is a **documented empirically calibrated inflation transform**; `Sigma_floor` is an **empirically calibrated PSD model-error floor**. Symmetrize and check finite PSD/SPD behavior, frame transformation and covariance calibration revision. This is an **approximation**, not exact independence: correlated beams, gyro/wheel-conditioned deskew, occupancy/EDT map uncertainty, variable timing and shared geometric structure may cause optimistic precision.
+
+For **rank < 3**, **DO NOT** publish a pseudo-inverse as a valid full 3×3 pose covariance: its null-direction zero variances would falsely imply perfect certainty. Provide **observable-subspace information/covariance**, an explicit null-space basis, and `FULL_COVARIANCE` / `OBSERVABLE_SUBSPACE` / `UNAVAILABLE` status. Null-direction uncertainty is **unavailable/unbounded**, never made confidently finite by `Sigma_floor`. Either (1) **project the candidate correction** relative to OD-006 predicted pose into the **normalized observable subspace**, leaving unsupported components unchanged, then recheck acceptance; or (2) reject and keep odometry-only tracking marked uncertain/lost as appropriate. Projection is **not required** where nonlinear coupling or poor evidence makes rejection safer. The OD-013 backend may accept a rank-aware constraint only with an appropriate factor type; never feed this as an ordinary full-rank LiDAR measurement.
+
+#### Separated acceptance and empirical calibration
+
+A native **MatchQualityEvaluator** takes geometric/Jacobian diagnostics **from** the private Ceres adapter, but does not depend on Ceres, ROS, LD19, MPU6050 or Pico. It checks all of:
+
+1. Successful solver termination, finite parameters/Jacobians, coherent map/EDT/calibration and clock revisions.
+2. OD-005 hit count, angular distribution, valid **observed-map overlap**, informative/truncation-free residuals, unknown/boundary exclusions.
+3. LiDAR-only normalized raw and Huber-robust residual quality, outlier fraction and boundary-dominated solution.
+4. **LiDAR-only** normalized eigenvalues/rank/conditioning, independent of the prior.
+5. OD-006 prediction-to-match **SE(2) innovation** and uncertainty-aware consistency, conservatively accounting for **shared wheel/gyro-conditioned deskew** (do not automatically assume independent covariance sums).
+6. OD-003 beam-time uncertainty, gyro bias/slip, missing wheel/IMU samples, OD-004 trajectory coverage, stale clock/model and computational budget.
+
+Return `ACCEPT_FULL`, `ACCEPT_PROJECTED`, `REJECT` or `UNAVAILABLE` with typed reasons; the exact public enumerators are chosen under OD-017. An accepted match exposes corrected pose, information rank, **observable directions and null directions**, full calibrated covariance **only if rank 3**, quality and provenance. A rejected match still exposes diagnostics. A strongly constrained posterior pose **does not justify** a LiDAR geometry constraint when rank is low.
+
+Calibrate `K`, `Sigma_floor`, rank/condition and acceptance/innovation thresholds on **held-out** synthetic truth and datasets with **independent reference** after confirming map-building/training/evaluation splits. Scenarios MUST cover corridors, corners, open rooms, partial scans, repeated warehouse aisles, varying speed, degraded encoders/IMU, clock uncertainty and wrong odometry prior. Quantify consistency/coverage, NEES when a defensible full covariance and independent truth exist, false accept/reject, rank classification and runtime. **Never** claim absolute-error calibration from a LiDAR-derived self-reference. Bootstrap/resampling may be an **offline sanity check** accounting for correlated beams; do not assume they are i.i.d.
+
+#### Architecture and checks
+
+~~~text
+OD-007 private Ceres ScanMatcher
+   -> converged pose + separate LiDAR-only r_i/J_i/Huber influences
+   -> prior/boundary/solver/overlap and data-quality diagnostics
+   -> native MatchQualityEvaluator (Ceres/ROS independent)
+   -> PSD H_L -> physical normalization -> rank / directions
+   -> calibrated full-rank Sigma OR observable-only subspace / reject
+   -> MatchResult {pose, outcome, rank, bases, uncertainty status,
+                    LiDAR score, prior provenance, calibration/revisions}
+   -> localization / Web Lab / guarded OD-013 graph adapter
+~~~
+
+Docker Catch2/CTest MUST verify analytical PSD Hessians with beam weights counted **once**, Huber outliers and `rho''` distinction, SE(2) tangent Jacobians vs numeric derivatives, normalization/rank under frame changes, rank-1/rank-2/rank-3 cases, a corridor with strong odometry prior still LiDAR-degenerate, no nullspace false covariance, projected corrections and reject fallback, covariance PSD/floor/inflation, clock/slip/partial-scan gating, source/prior/EDT provenance, held-out calibration accuracy and optional Ceres covariance comparison. Quality evaluator unit tests build **without Ceres and ROS**; numerical Ceres adapter tests link Ceres privately.
+
+**Consequences:** This adopts **robust LiDAR-only PSD information, normalized observability, subspace-aware degeneracy, empirical covariance calibration and a separate quality module**. Exact normalization scales, thresholds, inflation/floor parameters, projection acceptance and fit quality are **not fixed or calibrated yet**; OD-013 correlated graph factor construction remains open. ROS adapter outputs must never translate unknown null-direction uncertainty into fake small finite pose covariance.
+
+**References:** [Ceres covariance documentation](https://ceres-solver.readthedocs.io/latest/nnls_covariance.html) and [Ceres robust-loss conventions](https://ceres-solver.readthedocs.io/latest/nnls_modeling.html).
 
 ### OD-009 — Coarse search for poor initial pose
 
@@ -765,6 +840,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001, OD-002, OD-003, OD-004, OD-005, OD-006 and OD-007 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; evaluate its LiDAR-only observability and regularized-pose correlation before accepting OD-008/013 covariance or graph topology. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-008 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
