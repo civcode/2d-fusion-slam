@@ -317,7 +317,7 @@ Tests MUST use **Catch2** and be registered with **CTest**. All test execution, 
 
 | Category | Must cover | Dependencies |
 | --- | --- | --- |
-| Unit | SE(2) exponential/midpoint/coverage, 10 ms extrapolation, LD19 CRC/timing, OD-005 seam-based partial scans, missing angular wedges, safe invalid/no-return rays, gyro/kinematics and CLI validation | Synthetic/no hardware |
+| Unit | SE(2) exponential/midpoint/coverage, OD-006 bias initialization/correction and covariance/slip, verified/unconfigured kinematic adapters, 10 ms extrapolation, LD19 CRC/timing, OD-005 partial scans and invalid-return safety | Synthetic/no hardware |
 | Integration | Ceres scan matching, GTSAM factor Jacobians, map serialization, sensor-stream synchronization | Docker image libs |
 | Optional ROS 2 integration | ROS ↔ native message conversions, TF authority and frame conventions, map-file interoperability, ROS time and QoS, Nav2/RViz smoke tests | Dedicated ROS 2 Docker test image |
 | Regression | Deterministic offline replay, stable outputs, previously fixed bugs | Versioned datasets |
@@ -405,6 +405,22 @@ The native C++20 core MUST expose a **timestamp-addressable trajectory-provider 
 
 See [Architecture Sections 4.2–4.3](architecture-specification.md) and [accepted OD-004](open-design-choices.md). This is a specification, **not a claim that the trajectory API already exists**.
 
+### 10.2 Accepted OD-006 — Minimal wheel/gyro estimator implementation
+
+The **first native C++20 motion estimator** MUST integrate **measured wheel translation and bias-corrected gyro Z yaw rate** using accepted OD-004 piecewise-constant body twist/SE(2) exponential. It MUST NOT require an EKF, fixed-lag smoother or any ROS types to produce local odometry.
+
+- **State and interface:** Provide SE(2) odometry pose, body twist (with units and source validity), gyro bias with uncertainty, pose/bias covariance (including cross-correlation or a tested conservative equivalent), time domain/epoch, calibration revision and tracking/quality diagnostics. Implement the **sensor-neutral MotionEstimator/TrajectoryProvider** APIs; no MPU6050, encoder, Pico or LD19 types in core headers.
+- **Kinematic models:** Select a replaceable, explicitly configured native wheel/steer model. Differential drive is NOT the default until actual left/right drive geometry and encoder readings are verified; Ackermann requires **measured** steering and wheel telemetry. A model MUST reject incompatible/missing sensor inputs rather than silently assume a wheel arrangement or use steering commands as measurements.
+- **Bias initialization:** A stationary sample interval, validated through available wheel motion evidence and gyro variability (optionally accelerometer), is required to calibrate gyro Z bias and its variance. Store quality, calibration version, sample count, duration and optional temperature. Startup motion or insufficient stationary evidence MUST produce an **uncalibrated/degraded** status, not a trusted zero bias.
+- **Online bias:** Permit only bounded, logged, covariance-aware corrections within verified stationary windows or independently justified observable updates. Disagreement between wheel yaw and gyro yaw is **not itself** gyro-bias ground truth. Never silently modify earlier published local odom; offline reruns create new trajectory revisions.
+- **Slip and uncertainty:** When independently measured wheel yaw is available, compare it with gyro integrated yaw over matching timestamps with uncertainty/innovation gates. Suspicious disagreement inflates covariance and lowers quality. If not available, the check reports `UNAVAILABLE`. Propagate wheel noise/scale, gyro noise/bias random walk, acquisition uncertainty and lost samples; no fabricated zero motion on missing inputs.
+- **Graph independence:** Do not add fused wheel/gyro predicted odometry as a second independent GTSAM factor beside wheel and gyro factors derived from the same data. Record the measurement provenance.
+- **Future variants:** The EKF, error-state model and recent-state smoother remain optional later implementations of the **same native trajectory interface** and must not require rewriting deskew, mapping, ROS adapters, recorder or Web Lab.
+
+**Docker/Catch2 acceptance tests:** Known-bias SE(2) curves and asynchronous samples; differential/Ackermann models with valid hardware-style measurements; unsupported drivetrain and missing steering; stationary calibration vs moving startup; accepted/rejected bounded bias corrections; injected slip, wheel scale errors, missing independent wheel yaw and covariance growth; Monte Carlo calibration of pose/bias uncertainty; clock gap/epoch reset; no OD-004 map insertion with extrapolated/incomplete trajectory; mock alternative trajectory implementation and Pi 5 CPU/latency measurements.
+
+**Implementation checkpoint:** Add these requirements to C2 motion/deskew work; hardware drive model, bias thresholds and process noise are **not fixed** by this contract. See [OD-006](open-design-choices.md) and [architecture `4.2.2](architecture-specification.md).
+
 ## 11. Change workflow and GitHub Actions policy
 
 - Use small logical commits. After a meaningful implementation step or before long/risky validation, commit and push to the working feature branch.
@@ -439,7 +455,7 @@ A **documentation-only change** need not create fake code or run unavailable app
 | C1-P — Optional Pico hardware-near acquisition | Custom Pico SDK firmware, native framed Pi driver, time sync, measured IRQ/PIO alternatives | Firmware cross-built in Docker, protocol/clock tests pass in Docker, hardware measurements justify deployment, no micro-ROS. |
 | C1-W — Web Lab foundation | Browser Canvas view, local C++ HTTP/JSON API, map/scan view, dataset timeline, status/metrics, Compose service | Real backend data is rendered; headless/API and geometry tests pass in containers; no JavaScript SLAM implementation. |
 | C1-R — ROS-compatible native geometry | REP-103/105 framing, OccupancyGrid-style indexing/origin, rotated map import/export fixtures | No ROS install required for core geometry/PGM-YAML round-trip Catch2 tests. |
-| C2 — Motion/deskew | Wheel/gyro estimator, yaw bias, piecewise-constant body-twist SE(2) exponential, timestamped trajectory provider, midpoint deskew | Complete-interpolation mapping gate, 10 ms bounded/gated extrapolation and synthetic arc/lever-arm tests pass in Docker. |
+| C2 — Motion/deskew | **OD-006 minimal wheel/gyro integrator**, stationary gyro bias, replaceable verified kinematics and uncertainty; OD-004 SE(2) trajectory, midpoint deskew | Docker Catch2 proves startup stationary bias, rejected online bias under slip, covariance growth, unsupported kinematics, full-interval deskew and 10 ms gating. |
 | C3 — Ceres frontend | Grid/submap representation, distance field, scan matcher | Synthetic alignment and degeneracy tests pass; time budget benchmarked on Pi 5. |
 | C4 — GTSAM offline mapper | Bias/wheel/LiDAR graph constraints, loops, batch optimization, map bundle | Offline replay produces evaluated, versioned map. |
 | C5 — Live localizer | Read-only map loader, Ceres tracking, localization state machine/recovery | Containerized onboard tracking and loss recovery demonstrated. |
@@ -502,7 +518,7 @@ The Web Lab MUST support the following workflows incrementally:
 | **Pose and geometry** | Wheel/gyro prediction, scan-match pose, optimized trajectory, map-to-odom correction, optional uncertainty ellipses | First release / C3 |
 | **Mapping inspection** | Occupancy/unknown/free cells, active/frozen submaps, scan-to-submap associations, loop-closure links | C3–C4 |
 | **Localization inspection** | TRACKING/UNCERTAIN/LOST, match score, covariance/degeneracy, recovery candidates, age of last good fix | C5 |
-| **Solver diagnostics** | Ceres iteration counts, residual distributions, inlier/overlap ratio; GTSAM factors, bias estimates, graph errors | C3–C5 |
+| **Solver diagnostics** | Ceres residual/inliers, GTSAM factors, **OD-006 gyro bias estimate/uncertainty, stationary status and wheel/gyro disagreement**, graph errors | C2–C5 |
 | **Experiments** | Algorithm toggles (e.g., deskew variants), seed, solver budget, scenario parameters; compare saved runs | C2–C5 |
 | **Live monitor** | Timestamped pose/scan snapshots, packet loss, clock offset, FIFO/queue age, CPU and latency | C5–C6 |
 
