@@ -178,6 +178,21 @@ Here `xi_k = (v_x, v_y, omega)` is expressed in the robot body frame and rates a
 
 The provider MUST report whether a time or interval is **fully interpolatable**, extrapolated or unavailable. Consumers only query poses, coverage and uncertainty; they MUST NOT directly depend on LD19, MPU6050, Pico, encoders or ROS message types. A continuous SE(2) spline MAY later implement the same interface, but is not part of the initial algorithm.
 
+### 5.1.1 Accepted OD-006 — Minimal motion estimator, bias and kinematics
+
+**Initial estimator:** Use **measured wheel-derived translation plus bias-corrected gyro Z-rate**, maintaining a native state containing `T_odom_base ∈ SE(2)`, body twist `(v_x,v_y,omega)`, gyro yaw-rate bias `b_g` and **uncertainty**. A pose+bias error state `(δx,δy,δyaw,δb_g)` with 4×4 covariance including **pose–bias cross terms** is a suitable first model; verify covariance propagation and frame/tangent conventions. Bias evolves according to a calibrated noise/random-walk model. Integrate using the accepted OD-004 **piecewise-constant body twist and SE(2) exponential**, at actual asynchronous acquisition times.
+
+- **Replaceable kinematics:** A generic native kinematic interface converts observed encoder/wheel/steering measurements into body translation, optional independent wheel yaw, quality and covariance. **Only use differential drive after verifying the real robot has independently driven/measured left/right wheels.** Ackermann requires valid **measured steering feedback**, not merely a steering command. When drivetrain or telemetry is unknown, report `UNCONFIGURED`/`DEGRADED` rather than secretly assuming a model. Preserve the provenance of raw wheel readings versus wheel-derived or already-fused odometry.
+- **Stationary startup gyro calibration:** Estimate mean/robust Z-rate bias, variance and readiness from a verified stationary sample window, cross-checking wheel no-motion, gyro stability and accelerometer/gravity cues where available. Log duration, samples, timestamp, temperature if available and calibration revision. If stationary confidence fails, mark bias uninitialized/uncertain, grow yaw covariance and gate affected uses.
+- **Carefully gated online correction:** Update the bias only when an independently confirmed stationary period or separately justified observable correction provides evidence. Use bounded rate/magnitude, consistency/hysteresis checks and covariance updates. Do **not** train gyro bias from wheel slip or gyro/wheel disagreement alone, and do not retroactively jump published local odometry; corrected offline reintegration produces a new versioned trajectory.
+- **Wheel/gyro consistency:** Only if the kinematic model supplies **independent wheel yaw**, compare that yaw with bias-corrected gyro yaw over the **same aligned interval**, using uncertainty-aware thresholds. Slip, encoder faults or calibration errors must **increase uncertainty**, flag degraded state and be logged. Do not invent wheel yaw for unavailable sensors.
+- **Missing data:** Absent wheel travel or gyro rate is not a measured zero; expose invalid/degraded trajectory coverage and propagate uncertainty. Respect OD-004 full interpolation for normal map insertion and optional 10 ms quality-gated prediction.
+- **Independence and future replacement:** The estimator implements the ROS-free `MotionEstimator`/`TrajectoryProvider` interface without exposing MPU6050, Pico, encoder, LD19 or ROS types. EKF/error-state filtering and recent-state smoothing are deferred alternatives behind the **same API**, to be adopted only if benchmarks demonstrate value.
+
+**Graph measurement accounting:** The fused predictor is used for Ceres initialization and beam deskew; it MUST NOT also enter GTSAM as a statistically independent prior if its source wheel/gyro measurements already contribute factors. Preserve provenance and conservatively handle deskew-conditioned LiDAR correlations.
+
+**Verification:** Docker Catch2 tests for stationary/moving bias calibration, bounded bias updates, supported/unconfigured kinematics, wheel slip, missing sensors, covariance growth/cross-correlation, exact SE(2) arcs, replay resets and an interchangeable mock trajectory provider. Calibrated sensor/noise thresholds and actual robot drive layout remain unverified.
+
 ### 5.2 Yaw-only gyroscope preintegration
 
 Start with a planar yaw integrator rather than full 3D position/velocity IMU preintegration:
@@ -310,7 +325,7 @@ The localization state machine has three states:
 | UNCERTAIN | Increase uncertainty, widen correlative search, evaluate competing candidates. |
 | LOST | Attempt global relocalization using a particle filter (AMCL/Beluga as benchmark or implementation option) or wide-area correlative search; verify consistency across multiple scans before committing. |
 
-The initial localizer can use an EKF-style covariance update or simpler conservative prediction/measurement covariances; GTSAM fixed-lag smoothing may be added if experiments show benefit. A local optimizer alone does **not** solve global or kidnapped-robot localization.
+The initial localizer uses the **accepted OD-006 minimal local predictor with conservative prediction/measurement uncertainty**. An EKF or GTSAM recent-state smoother may replace/enhance it later **only if benchmarks justify the complexity**. A local optimizer alone does **not** solve global or kidnapped-robot localization.
 
 A lost/stale pose must be explicitly signaled to downstream navigation/control; it must not silently present an old pose as current.
 
@@ -427,7 +442,7 @@ Measure end-to-end **capture-to-pose latency**, not only Ceres solve time. Use b
 
 - LD19 frame parsing, CRC errors, truncated packets, 30-second timestamp rollover, angle/speed beam-time reconstruction and clock fit; OD-005 seam-straddling packets, variable speed, circular angular coverage, partial scans, missing sectors, invalid vs validated no-return map clearing, recovery-only watchdog and serial resynchronization.
 - Clock offset/drift estimation and timing uncertainty; missing or late IMU/encoder samples.
-- SE(2) composition/inverse, exponential constant-twist arcs, near-zero angular-rate stability, Jacobians, asynchronous wheel/gyro knots, timestamp-addressable coverage and laser/IMU extrinsics.
+- SE(2) arcs/near-zero angular rate, OD-006 minimal wheel/gyro integration, verified/unconfigured kinematic adapter, stationary bias calibration and bounded updates, slip disagreement with covariance growth, asynchronous measurements, timestamp-addressable coverage and laser/IMU extrinsics.
 - Synthetic moving-wall/apartment/warehouse scans proving **midpoint-referenced** rotational and translational deskew, full interpolation eligibility, 10 ms quality-gated extrapolation and rejection of 10.1 ms or uncertain/gapped scans.
 - Ceres residual gradients, convergence basin, robust outlier rejection, and degeneracy detection.
 - GTSAM custom factor Jacobians, bias recovery, covariance scaling, loop-closure gating.
@@ -459,8 +474,8 @@ Numerical accuracy thresholds should be set only after obtaining repeatable hard
 | Issue | Risk / planned response |
 | --- | --- |
 | LD19 beam timing not fully hardware-synchronized | Accepted OD-003 angle/speed reconstruction and affine clock alignment; experimentally determine or bound physical packet timestamp delay. Do not claim sub-ms precision without evidence. |
-| MPU6050 gyro bias and temperature drift | Stationary startup calibration, graph bias estimation, noise characterization, optional temperature model. |
-| Acceleration and wheel slip | Conservative wheel noise, gyro disagreement monitoring, robust LiDAR constraints. |
+| MPU6050 gyro bias and temperature drift | Accepted OD-006 stationary startup calibration, conservative bias uncertainty and gated online correction; optional temperature characterization and graph bias refinement. |
+| Acceleration and wheel slip | OD-006 compares independent wheel/gyro yaw only where observable, grows covariance, reports degraded quality and rejects false bias updates from slip. |
 | Corridors / repetitive geometry | Degeneracy-aware scan matching, multiple pose hypotheses in recovery, properly scaled covariances. |
 | Moving obstacles / map changes | Robust residuals, dynamic rejection, read-only localized map with versioned remapping. |
 | Ceres result correlation with IMU deskew | Avoid duplicating motion priors; conservatively estimate front-end covariance. |
@@ -473,7 +488,7 @@ Numerical accuracy thresholds should be set only after obtaining repeatable hard
 ## 14. Implementation milestones
 
 1. **Foundation:** portable build, sensor schemas, clocks, raw recorder, deterministic replay, test harness.
-2. **Motion and deskew:** gyro bias calibration, encoder/gyro continuous SE(2), LiDAR point timing, full deskew.
+2. **Motion and deskew:** accepted OD-006 minimal wheel/gyro integrator, stationary bias calibration, verified replaceable kinematics and uncertainty; OD-004 continuous SE(2) midpoint deskew.
 3. **Ceres frontend:** occupancy grids, distance fields, scan-to-submap matching, residual diagnostics.
 4. **Offline GTSAM mapping:** wheel/gyro/LiDAR factors, submap graph, loop closure, batch refinement and versioned export.
 5. **Live fixed-map localization:** Pi 5 tracking, state machine, global relocalization, map->odom correction, baselines.
