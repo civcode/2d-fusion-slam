@@ -38,9 +38,10 @@
 | ROS 2 integration | Optional separately built adapter; **no ROS 2 headers, types or linked dependencies in the core**. |
 | Debugging / visualization | **Web Lab**: framework-free HTML/CSS/JavaScript and Canvas; small local C++ HTTP/JSON adapter; no algorithms duplicated in JavaScript. |
 | Boost libraries | **No implicit adoption**; every proposed Boost component and use case requires prior discussion, comparison against alternatives, and explicit approval. |
+| Pico acquisition | **Optional future** bare-metal Raspberry Pi Pico firmware, custom Pico SDK; no micro-ROS, DDS or ROS types; Pi-only drivers are the required starting point. |
 | GitHub Actions | No workflows required by default; **never run Actions** without explicit authorization. |
 
-All new production code and test code MUST use C++20. A 3rd-party dependency MAY use an older language standard internally, provided it does not force a lower standard or extensions on project targets.
+All new **native host** production code and test code MUST use C++20. A 3rd-party dependency MAY use an older language standard internally, provided it does not force a lower standard or extensions on project targets. **Future Pico firmware** is a separate embedded build using the pinned Pico SDK and its compatible C/C++ compiler; seek C++20 for project-owned firmware where supported, and document a specific embedded-toolchain exception rather than changing the native C++20 requirement.
 
 ## 3. Project structure and module boundaries
 
@@ -69,6 +70,8 @@ The implementation SHOULD evolve toward:
     io/
   ros2/
     fusion_slam_ros/  # optional ROS 2 adapter package
+  firmware/
+    pico/             # optional RP2040 custom acquisition firmware, when implemented
   apps/
     web_lab/
       web/          # static HTML/CSS/JavaScript
@@ -177,6 +180,7 @@ Application arguments SHOULD include named input/output paths, configuration pat
 - **Boost is exception-gated, not an implicit foundation:** before adding a direct Boost include, target, `find_package(Boost ...)`, source use, or new Boost-dependent convenience wrapper, the specific Boost component and its use case MUST be discussed and **explicitly approved case by case**. A decision for one component or module does not approve other Boost components or usages. Proposals MUST assess C++20 standard-library and existing-dependency alternatives, necessity, licensing, version, portability, image/compile-size impact, transitive linkage, and long-term maintenance.
 - An otherwise approved dependency or ROS 2 adapter that brings in Boost **transitively** MUST have that dependency and its impact disclosed and evaluated; do not quietly introduce Boost through FetchContent, packages, Docker images, or adapter headers. Incidental upstream transitive Boost dependencies are not automatically banned, but they MUST be visible and reviewed before adoption. If Boost is not essential, prefer a Boost-free solution.
 - For Web Lab networking, **Boost.Asio or Boost.Beast MUST NOT be added by default**. Their use requires the same explicit per-case evaluation. Do not add Boost speculatively for future networking needs.
+- The optional Raspberry Pi Pico firmware MUST use a **version-pinned Raspberry Pi Pico SDK** and a separately provisioned cross-compiler; the SDK is not a dependency of host core libraries. **Do not include micro-ROS, ROS transports, ROS 2 message serialization, DDS, rclc, or rclcpp in Pico firmware or Pico host driver.** The Pi↔Pico transport MUST use a documented custom framed protocol, independently testable with a fake source. Pico SDK license, SDK transitive dependencies and any proposed Boost use still need dependency review.
 - Prefer an independently reusable library over adding a new external dependency for trivial utility code.
 - Third-party licenses and notices MUST be preserved.
 
@@ -212,6 +216,7 @@ The initial container implementation MUST provide:
 | `online-slam` | Full mapping mode, created when the corresponding application exists. |
 | `web-lab` | Opt-in local visualization and replay/diagnostic API served by a C++ adapter, with explicitly mapped loopback-only host port. |
 | `ros2-adapter` / `ros2-test` | Opt-in ROS 2 integration and tests with a dedicated Docker image; the default core images MUST stay ROS-free. |
+| `pico-firmware-build` / `pico-protocol-test` | **Future opt-in** Dockerized Pico SDK cross-build, protocol and time-sync host simulation; firmware executes bare-metal **on the Pico**, not inside Docker. |
 
 A multi-stage `docker/Dockerfile` with `dev` / `test` / `runtime` stages, and a `docker/compose.yaml` or root-level `compose.yaml`, SHOULD be the standard. Services may share an image when it avoids redundant dependencies. A top-level Makefile or helper script MAY wrap Docker commands, but MUST NOT bypass Docker.
 
@@ -257,6 +262,20 @@ docker compose -f docker/compose.yaml run --rm \
 - Release images MUST identify their target architecture and dependency/toolchain versions.
 - If the DeepRacer lacks true encoder observations, its sensor adapter MUST make this limitation explicit rather than fabricating odometry.
 
+### 6.5 Pico acquisition firmware and host protocol (optional)
+
+**OD-002 is accepted:** implement Pi-host timestamping for LD19, MPU6050 and encoders **first**. The core MUST remain fully functional without a Pico. A later Pico source is a swappable timestamped-measurement acquisition adapter, not a replacement SLAM implementation.
+
+- Firmware MUST be **custom Pico SDK firmware**, with no micro-ROS, DDS, ROS 2 message types or ROS middleware. The Pi native driver similarly MUST NOT require micro-ROS.
+- Use a simple framed binary protocol, versioned and length-bounded, containing at least sequence number, source timestamp and units, Pico boot/session ID, event type, sensor values, status/validity and integrity check. **USB CDC is the initial transport candidate, not an already approved physical interface.** UART is an alternative; reject malformed, missing, duplicate and out-of-order frames.
+- Use the RP2040's boot-relative microsecond hardware timer for source timestamping and convert into canonical 64-bit nanoseconds with overflow checks on the host. This **does not** imply sub-microsecond accuracy.
+- Implement Pi↔Pico two-way time-sync messaging with host send/receive and Pico receive/transmit timestamps; estimate offset, drift, round-trip delay/asymmetry and uncertainty, and invalidate the mapping across Pico resets or stale sync. The exact estimator/cadence is subject to real-device calibration.
+- **PIO is optional and evidence-driven.** Use it for edge counting or deterministic capture only after demonstrating a clock-anchored timestamping scheme and a benefit over IRQ/timer capture. PIO does not automatically read the hardware timer.
+- Cross-build firmware **inside a Docker toolchain**, and test the protocol, sync math, restart/reconnect and mock acquisition inside Docker. The firmware itself necessarily executes on the **physical microcontroller** (bare metal); that is the one runtime exception to the Docker-on-Linux rule. Opt-in hardware-in-loop tests use Docker on the Pi/host to communicate with actual firmware.
+- Do not make the native host image, ordinary Catch2 suite or offline replay depend on Pico SDK, connected hardware, Pico firmware flashing, or micro-ROS. Firmware flashing and MCU operation require explicit user action and are not performed by GitHub Actions.
+
+See [Architecture `3.5](architecture-specification.md) and [Accepted OD-002](open-design-choices.md) for clock-domain and test semantics.
+
 ## 7. Testing contract
 
 Tests MUST use **Catch2** and be registered with **CTest**. All test execution, including sanitizer runs and offline replay regression suites, MUST happen within Docker.
@@ -271,6 +290,7 @@ Tests MUST use **Catch2** and be registered with **CTest**. All test execution, 
 | Regression | Deterministic offline replay, stable outputs, previously fixed bugs | Versioned datasets |
 | Performance | Per-scan latency, CPU, memory, cache allocations, Pi thermal behavior | Measured on target hardware |
 | Hardware-in-loop | UART acquisition, timing offsets, loss/reconnection, wheel/IMU integration | Opt-in device-access container |
+| Optional Pico firmware/protocol | Pico cross-build, framed-protocol CRC/versioning, boot-ID changes, clock-sync offset/drift uncertainty, PIO vs IRQ feasibility | Docker cross-build and mock-host tests; opt-in physical Pico test |
 
 Tests MUST be deterministic unless they are explicitly marked stochastic, and random seeds MUST be configurable and logged. Hardware-in-loop tests MUST NOT block the normal hardware-free test suite.
 
@@ -365,7 +385,8 @@ A **documentation-only change** need not create fake code or run unavailable app
 | Checkpoint | Deliverables | Acceptance |
 | --- | --- | --- |
 | C0 — Toolchain scaffold | CMake C++20, FetchContent Catch2/cxxopts, Docker stages and Compose, minimal executable + tests | Fresh-container build/test and runtime smoke check work without host C++ dependencies. |
-| C1 — Recorder/replay | LD19 parser, timestamp schema, MCAP writer/reader, cxxopts CLIs | Synthetic packet suite and deterministic replay pass in test container. |
+| C1 — Recorder/replay | LD19 parser, timestamp schema, MCAP writer/reader, cxxopts CLIs; **Pi-only timestamp capture** | Synthetic packet suite and deterministic replay pass in test container; no Pico required. |
+| C1-P — Optional Pico hardware-near acquisition | Custom Pico SDK firmware, native framed Pi driver, time sync, measured IRQ/PIO alternatives | Firmware cross-built in Docker, protocol/clock tests pass in Docker, hardware measurements justify deployment, no micro-ROS. |
 | C1-W — Web Lab foundation | Browser Canvas view, local C++ HTTP/JSON API, map/scan view, dataset timeline, status/metrics, Compose service | Real backend data is rendered; headless/API and geometry tests pass in containers; no JavaScript SLAM implementation. |
 | C1-R — ROS-compatible native geometry | REP-103/105 framing, OccupancyGrid-style indexing/origin, rotated map import/export fixtures | No ROS install required for core geometry/PGM-YAML round-trip Catch2 tests. |
 | C2 — Motion/deskew | Wheel/gyro estimator, yaw bias, continuous SE(2) interpolation, full scan deskew | Numerical and synthetic moving-scan tests pass. |
