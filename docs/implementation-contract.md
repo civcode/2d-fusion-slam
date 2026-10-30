@@ -300,7 +300,7 @@ Tests MUST use **Catch2** and be registered with **CTest**. All test execution, 
 
 | Category | Must cover | Dependencies |
 | --- | --- | --- |
-| Unit | SE(2), math, timestamps, LD19 CRC/frames plus angle/speed beam timing and source-clock drift, gyro integration, kinematics, CLI validation | Synthetic/no hardware |
+| Unit | SE(2) exponential and provider coverage, midpoint scan/deskew, 10 ms extrapolation gating, timestamps, LD19 CRC/beam timing, gyro integration, kinematics, CLI validation | Synthetic/no hardware |
 | Integration | Ceres scan matching, GTSAM factor Jacobians, map serialization, sensor-stream synchronization | Docker image libs |
 | Optional ROS 2 integration | ROS ↔ native message conversions, TF authority and frame conventions, map-file interoperability, ROS time and QoS, Nav2/RViz smoke tests | Dedicated ROS 2 Docker test image |
 | Regression | Deterministic offline replay, stable outputs, previously fixed bugs | Versioned datasets |
@@ -371,6 +371,23 @@ Tests that cannot run in the current environment MUST be identified explicitly a
 - Mathematical assumptions and units MUST be documented near nontrivial algorithms; references belong in source comments or docs.
 - Functions that perform I/O or alter global state MUST be separated from deterministic math where practical.
 
+### 10.1 Accepted OD-004: portable SE(2) trajectory and deskew boundary
+
+The native C++20 core MUST expose a **timestamp-addressable trajectory-provider abstraction** returning `T_odom_base(t)` with covariance, trajectory revision, interpolation coverage, and explicit status. The first implementation MUST use **piecewise-constant body-frame twist integrated with `Exp_SE2`** from timestamped wheel and bias-corrected gyro measurements. Implement a numerically stable small-angular-rate branch; do not replace the Lie-group exponential with independent linear x/y/yaw interpolation. A future SE(2) spline MAY implement the same interface only when justified by benchmarks.
+
+- The **motion estimator** owns synchronized sensor fusion, body-twist segments and trajectory history. **Deskew, Ceres, maps, replay, Web Lab and ROS adapters** depend on a generic trajectory/query contract, **never** on MPU6050, wheel encoder, Pico, LD19 packet structures or ROS types.
+- The **LD19 adapter** (accepted OD-003) owns per-beam reconstructed timestamps; the **deskewer** (accepted OD-004) queries poses at these timestamps and transforms every geometric beam into the laser frame at the **temporal midpoint of the scan's acquisition window**.
+- A complete scan's midpoint is `t_start + floor((t_end - t_start)/2)`, with checked signed-nanosecond arithmetic and an explicit clock domain and epoch. Use timestamp-valid acquired beam slots to determine bounds, even if their range values are rejected as geometry; do not use packet arrival midpoint or scan angle midpoint.
+- **Normal mapping requires full quality-valid interpolation over the complete scan interval.** A normal map-insertion call MUST reject/hold scans with missing motion, ambiguous acquisition boundaries, unresolved clock epoch changes or any extrapolated beam. Prefer bounded delayed scan processing until wheel/gyro data covers the scan end.
+- **Extrapolation is opt-in and disabled for ordinary map insertion**. Its initial configurable maximum is **10,000,000 ns (10 ms)** outside the valid trajectory boundary; reduce/reject based on propagated uncertainty, wheel/IMU freshness, bias/slip and timestamp calibration. Return distinct `INTERPOLATED`, `EXTRAPOLATED` and `UNAVAILABLE` status, actual horizon and covariance. Never treat a 10 ms cap as a guaranteed prediction quality threshold.
+- Invalid sensor intervals, trajectory clock mismatch, stale calibration and backwards `/clock` transitions MUST invalidate trajectory queries; deterministic replay seek resets state or uses a compatible checkpoint.
+- A raw ROS 2 `sensor_msgs/LaserScan` still stamps its **first beam** according to message semantics; the midpoint is a **derived deskew reference**. The optional ROS adapter MUST NOT falsely publish a midpoint-stamped deskewed cloud as if it were a raw uniform-angle `LaserScan`. Use a properly stamped diagnostic point cloud or explicit deskewed-scan schema when appropriate.
+- External data recording and test fixtures MUST retain beam acquisition times, scan midpoint, coverage/quality indicators and the reference trajectory/calibration revisions; never rewrite raw source timestamps during map processing.
+
+**Containerized verification:** Catch2 tests MUST cover pure translation, pure yaw, exact constant-curvature motion, near-zero omega, asynchronous gyro/encoder events, t_mid from nonuniform beams, full-scan coverage, off-center LiDAR, clock resets and invalid gaps. Test configured bounds at **9.9 ms, 10 ms and 10.1 ms**, including covariances and eligibility for map insertion. A mock trajectory provider MUST allow standalone deskew tests without device drivers or ROS installed; run equivalent replay/latency measurements in Docker on Pi where available. A spline implementation remains deferred.
+
+See [Architecture `4.2–4.3](architecture-specification.md) and [accepted OD-004](open-design-choices.md). This is a specification, **not a claim that the trajectory API already exists**.
+
 ## 11. Change workflow and GitHub Actions policy
 
 - Use small logical commits. After a meaningful implementation step or before long/risky validation, commit and push to the working feature branch.
@@ -405,7 +422,7 @@ A **documentation-only change** need not create fake code or run unavailable app
 | C1-P — Optional Pico hardware-near acquisition | Custom Pico SDK firmware, native framed Pi driver, time sync, measured IRQ/PIO alternatives | Firmware cross-built in Docker, protocol/clock tests pass in Docker, hardware measurements justify deployment, no micro-ROS. |
 | C1-W — Web Lab foundation | Browser Canvas view, local C++ HTTP/JSON API, map/scan view, dataset timeline, status/metrics, Compose service | Real backend data is rendered; headless/API and geometry tests pass in containers; no JavaScript SLAM implementation. |
 | C1-R — ROS-compatible native geometry | REP-103/105 framing, OccupancyGrid-style indexing/origin, rotated map import/export fixtures | No ROS install required for core geometry/PGM-YAML round-trip Catch2 tests. |
-| C2 — Motion/deskew | Wheel/gyro estimator, yaw bias, continuous SE(2) interpolation, full scan deskew | Numerical and synthetic moving-scan tests pass. |
+| C2 — Motion/deskew | Wheel/gyro estimator, yaw bias, piecewise-constant body-twist SE(2) exponential, timestamped trajectory provider, midpoint deskew | Complete-interpolation mapping gate, 10 ms bounded/gated extrapolation and synthetic arc/lever-arm tests pass in Docker. |
 | C3 — Ceres frontend | Grid/submap representation, distance field, scan matcher | Synthetic alignment and degeneracy tests pass; time budget benchmarked on Pi 5. |
 | C4 — GTSAM offline mapper | Bias/wheel/LiDAR graph constraints, loops, batch optimization, map bundle | Offline replay produces evaluated, versioned map. |
 | C5 — Live localizer | Read-only map loader, Ceres tracking, localization state machine/recovery | Containerized onboard tracking and loss recovery demonstrated. |
@@ -464,7 +481,7 @@ The Web Lab MUST support the following workflows incrementally:
 | Workflow | Visible data and controls | Intended phase |
 | --- | --- | --- |
 | **Offline replay** | Dataset/session selection, play/pause, step by scan, seek by timestamp, playback rate, scan index, deterministic rerun | First Web Lab release |
-| **Scan debugging** | Raw vs deskewed LiDAR beams, reference timestamp, beam acquisition spread, invalid/outlier points, timing gaps | First release |
+| **Scan debugging** | Raw vs midpoint-deskewed LiDAR beams, midpoint/scan acquisition interval, per-beam acquisition spread, INTERPOLATED/EXTRAPOLATED/UNAVAILABLE status, invalid points and timing gaps | First release |
 | **Pose and geometry** | Wheel/gyro prediction, scan-match pose, optimized trajectory, map-to-odom correction, optional uncertainty ellipses | First release / C3 |
 | **Mapping inspection** | Occupancy/unknown/free cells, active/frozen submaps, scan-to-submap associations, loop-closure links | C3–C4 |
 | **Localization inspection** | TRACKING/UNCERTAIN/LOST, match score, covariance/degeneracy, recovery candidates, age of last good fix | C5 |
