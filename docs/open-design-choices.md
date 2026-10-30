@@ -28,7 +28,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-002 | Pi host timestamps now; Pico custom firmware + sync later | P1 | Live acquisition, replay | **Accepted** (implementation/tests pending) |
 | OD-003 | LD19 angle/speed reconstruction and calibrated Pi clock alignment | P1 | Deskew fidelity | **Accepted** (calibration pending) |
 | OD-004 | Midpoint scan reference and piecewise SE(2) exponential trajectory | P1 | Deskew, optimization | **Accepted** (tests pending) |
-| OD-005 | Partial scans, filtering and assembly policy | P1 | Frontend acceptance | Open |
+| OD-005 | Angular-seam scan assembly, partial coverage and invalid returns | P1 | Frontend acceptance | **Accepted** (tests/tuning pending) |
 | OD-006 | Wheel/gyro predictor and kinematic models | P1 | Odometry, bias and slip | Open |
 | OD-007 | Distance-field residual / loss design | P1 | Ceres matching | Open |
 | OD-008 | Match uncertainty and degeneracy policy | P1 | Graph, localizer quality | Open |
@@ -334,15 +334,92 @@ public:
 
 **Consequences:** The temporal midpoint, constant body-twist SE(2) exponential, complete interpolation for map insertion, and quality-gated 10 ms maximum optional extrapolation are **settled**. The gyro/wheel fusion and covariance details (OD-006), interpolation gap threshold, queue wait policy (OD-021), and offline re-deskew iteration (OD-014) remain to be evaluated.
 
-### OD-005 — Scan assembly and invalid returns
+### OD-005 — Angular-seam revolution assembly, partial scans and return validity
 
-**Question:** When is an LD19 revolution complete, how are partial scans, angle seams, intensity, invalid range and missing packets handled?
+**State:** **Accepted** (architecture chosen; implementation, threshold tuning and tests pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection of seam-based assembly, partial-scan support and validity gates  
+**Priority:** P1
 
-**Options:** strict full revolution, partial scan with coverage metadata, or fixed angle/time windows.
+**Decision:** Assemble **LD19 revolutions by crossings of a fixed, configured angular seam** using **unwrapped, time-ordered beam angles** and the known sensor rotation direction. **Partial scans are supported** as honest observations carrying explicit **angular coverage, missing-sector, acquisition-time and return-quality metadata**; do **not** synthesize missing beams, ranges or timestamps. Reject malformed LD19 packets at the adapter boundary. Never convert invalid/unknown/missing measurements into free-space map updates. Apply configurable and independently recorded **matching and map-insertion quality gates**. **Timeouts are for stalled/disrupted acquisition recovery only**, not the primary segmentation rule. Keep device decoding in the LD19 adapter; the portable core handles generic timed beam/scan records without ROS dependencies.
 
-**Provisional preference:** angle-wrap revolution assembly with a partial-scan quality field; matching may reject low coverage, recording never drops valid raw source packets.
+**Alternatives:** (A) only complete 360° revolutions — rejected because packet loss would discard otherwise useful partial observations; (B) **fixed angular seam with partial scans and quality flags — accepted**; (C) fixed wall-time / arbitrary sample-count segmentation — rejected as normal scan segmentation because motor speed varies and it can change scan geometry/deskew reference unpredictably.
 
-**Decision gate:** unit fixtures for 0/360 wrap, variable motor speed, duplicate beams, 12-beam packet truncation, CRC failure, inverse angular direction, sparse coverage; measure lost update rate and residual quality.
+### Revolution boundaries and angle unwrapping
+
+1. Decode and CRC-check LD19 packets **before** passing point observations to a scan assembler. Follow **accepted OD-003** for signed sweep direction, unwrapped packet/beam angles and canonical signed-64-bit-nanosecond acquisition timestamps. Preserve original packet/beam order; the assembler must not assume exactly 450 points or a fixed 100 ms duration.
+2. Select a **fixed configurable seam angle**, with a sensible initial example of 0° in the normalized laser angular convention. Express the crossing using an unwrapped **rotation-phase coordinate** that increases in the verified rotation direction. A boundary is a crossing of `seam + k·2π` (or the equivalent 360° phase), **not** a UART packet boundary or a timer event.
+3. On an observed, credible seam crossing, close the preceding revolution and start the next. A packet may straddle the seam: **partition its decoded beams at the crossing**, preserving each beam's actual angle, time, intensity and validity. Do not duplicate the seam beam or invent a synthetic point exactly on the seam.
+4. A session may start or stop partway through a revolution. These are **partial scans** with their actual angular/time intervals and explicit start/end reasons; do not mark them complete. Handle reversals, resets, angle discontinuities, multiple potential seam crossings inside missing data, and epoch changes with resynchronization/partial-quality flags rather than silently inferring complete revolutions.
+5. A large angle jump might span the chosen seam **without observable beam support**. Preserve the gap and a **seam-confidence** indicator; if the revolution assignment is ambiguous (e.g., unknown number of turns), terminate/discard the affected assembly with a clear reason and re-lock on subsequent trustworthy crossings. No fabricated revolutions.
+
+### Beam representation and missing-sector metadata
+
+The generic **ROS-free** assembled scan should provide:
+
+- Canonical acquisition timestamps for each **observed beam slot**, original order, angle, optional range/intensity, return classification and timing quality; carry clock-domain/epoch and calibration/model IDs from OD-001/003.
+- Explicit **scan acquisition interval** (`t_start`, `t_end`), angular seam/rotation direction, start/end boundary status, complete/partial status and assembly termination reason.
+- **Coverage metadata** measured against the **full configured 360° angular domain**, not merely the min/max observed angle spread: observed angular support (possibly represented by configurable bins or intervals), **missing-sector intervals**, largest angular gap, total coverage fraction and sample/valid-return counts. Coverage resolution and the support model must be specified, tested and consistent across datasets.
+- Separate counters for CRC-rejected packets, lost/gapped beam slots when detectable, angle/time discontinuities, invalid ranges, explicit valid no-return/max-range measurements and accepted obstacle hits. Do not represent unobserved sectors as beams with range=0 or range=max.
+
+**Crucial distinction:** An **observed but invalid range** is not a missing beam. It may retain a valid *acquisition timestamp* needed for OD-004 temporal scan bounds even though it contributes no endpoint or free-space ray. A **missing packet/sector** has no trustworthy measurement/time for those nonexistent beams. Do not interpolate synthetic timestamps across unknown sectors for either matching or mapping.
+
+### Return classifications and safe occupancy integration
+
+Use a typed return classification, at minimum:
+
+| Return | Meaning | Scan matching | Occupancy update |
+| --- | --- | --- | --- |
+| `VALID_HIT` | Finite, calibrated in-range obstacle measurement | Candidate beam if other quality gates pass | **Free cells strictly before observed hit; occupied cell at endpoint**, using validated ray model |
+| `VALID_NO_RETURN` | Device explicitly signals a trusted no-hit / max-range ray with documented semantics | Usually no obstacle endpoint | **Optional** free-space update only through an explicitly validated bounded ray and configured max usable range |
+| `INVALID_RETURN` | Corrupt/saturated/zero/out-of-range/unsupported value without trustworthy no-hit semantics | Exclude | **No free-space and no occupied update** |
+| `MISSING` | No observed beam (packet lost/sector absent) | No sample | **No update**; metadata only |
+
+The first implementation MUST **conservatively treat undocumented zero-range, out-of-range and missing points as invalid**, not reinterpret them as max-range clear readings. Intensity is retained (with explicit missing/invalid status) and MAY assist filtering, but must not silently change occupancy semantics. Never raytrace through missing sectors or assume that an invalid hit proves empty space.
+
+A valid hit still requires correct calibration, pose quality and deskew coverage before occupancy insertion. A valid no-return may be used for freespace **only if sensor meaning is documented and configuration explicitly allows it**; otherwise do not update anything.
+
+### Scan-quality gates and timeouts
+
+- Use separate **scan-matching eligibility** and **map-insertion eligibility** decisions. Both must inspect **measured angular coverage**, largest uncovered sector, minimum number/distribution of `VALID_HIT` returns, valid timestamp fraction, packet/time/angle continuity, quality of clock alignment, and motion trajectory coverage. Expose typed rejection reasons and actual measurements.
+- Coverage/quality thresholds MUST be configurable, versioned and included in diagnostics/benchmark reports. **Do not hardcode or claim universal numerical threshold values** until synthetic and real LD19 tests establish suitable bounds. A valid partial scan MAY be used for matching and mapping if it passes its respective gates.
+- **Accepted OD-004 still applies to partial scans:** midpoint is the temporal midpoint of the **observed, time-valid scan slots**, and **normal map insertion requires valid interpolated trajectory coverage for that entire actual acquisition interval**. It does **not** require imaginary poses for unobserved beams; it MUST reject extrapolated poses, ambiguous timing boundaries and untrusted gaps in the actual interval.
+- Timeouts (configurable, measured on **host steady time**) only detect stopped motor, failed/blocked UART stream, missing data or incomplete assembly at shutdown. They MAY flush/abort the current scan as a **partial, explicitly timed-out** diagnostic record and reset segmentation. They MUST NOT cut scans at a periodic wall-time interval during normal acquisition or synthesize a seam timestamp.
+- Only insert an accepted scan **after** matching against a map that does not already contain it. No dropped/corrupt measurement may create a free-space map update by side effect.
+
+### Proposed module split
+
+~~~text
+Pi UART + LD19 packet CRC/decoder + OD-003 angle/time adapter
+     -> generic ordered TimedBeam records (+ packet-loss diagnostics)
+     -> angular-seam ScanAssembler (no LD19 packet fields required)
+     -> AssembledScan {beams, coverage, gaps, quality, time window}
+             |                   |
+             |             diagnostics / raw MCAP / Web Lab
+             v
+       ScanEligibility checks
+             |
+     OD-004 midpoint deskew with trajectory provider
+             |
+       post-deskew quality verification
+           /             \
+       Ceres match    accepted map insertion
+~~~
+
+The **LD19 acquisition adapter** owns frame parsing, CRC, reported motor speed and device-specific time reconstruction. The **portable scan assembler** consumes generic timed beam samples plus rotation/seam metadata and optional gap notifications. The estimator, deskew, occupancy and ROS 2 adapters MUST NOT parse LD19 packet layouts, import LD19-specific types or fabricate absent beams. A ROS `LaserScan` export must respect its regular-angle/time assumptions; if nonuniform partial scans cannot be faithfully represented, use a point cloud or explicit scan schema instead.
+
+### Validation and acceptance (tests not yet run)
+
+1. Variable RPM, clockwise/raw versus CCW/native angle conventions, 0° seam and nonzero configured seams, multiple revolutions, beam-on-seam, and **one packet straddling a boundary** with no duplicated/dropped valid beam.
+2. Starting/stopping mid-revolution, packet loss crossing the seam, gaps with missing sectors, reordering, direction reversal, clock epoch reset, and gaps spanning **multiple** possible revolutions. No phantom points, scans or inferred timestamps.
+3. Correct circular coverage computation (missing wedges vs min/max angular span), count consistency and return classification when all, none or only some beam ranges are valid.
+4. CRC corruption, truncated 47-byte packet, invalid range/intensity, missing packet, and trustworthy versus untrustworthy max-range/no-return semantics; **zero invalid-return free-space updates**.
+5. Matching/insertion gates for full and partial scans, low coverage, narrow field-of-view hits, poor timing, discontinuities and sparse valid-hit geometry. Reject with structured reasons and maintain raw-recording continuity.
+6. Timeout under a stalled stream causes labeled partial flush/recovery; steady nominal revolutions are segmented **only by seam crossings**, never by the timeout interval.
+7. Full OD-004 interpolation across the **actual observed** scan interval, including timestamp-valid slots with invalid ranges; missing time boundaries and extrapolated trajectory prevent ordinary insertion. Verify midpoint is not a mean beam time.
+8. Deterministic synthetic apartment/warehouse replay, Docker Catch2/CTest tests, Web Lab overlay of observed/missing angular sectors and quality counters, and measured Pi CPU/latency.
+
+**Consequences:** Angular-seam segmentation, honest partial scans, return validity and safe occupancy behavior, and recovery-only timeouts are **settled**. Exact coverage binning, thresholds, loss tolerance and timeout duration remain **configurable implementation/benchmark tuning**, not permission to invent missing samples. OD-003 owns per-beam time reconstruction; OD-004 owns midpoint trajectory deskew; OD-005 owns **observation grouping and scan eligibility**. OD-006 motion fusion, OD-007 scan matcher scoring and OD-010 occupancy inverse-sensor model remain open.
 
 ### OD-006 — Motion state, kinematics and estimator type
 
@@ -544,6 +621,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001, OD-002, OD-003 and OD-004 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve remaining recording choices (OD-005, OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
+**OD-001, OD-002, OD-003, OD-004 and OD-005 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). Only after collecting correctness evidence should we lock the Ceres residual/submap/graph decisions, rather than selecting complex algorithms merely for their sophistication.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite informs **OD-004, OD-006, OD-007, OD-008 and OD-009** without relying on a large public dataset.
