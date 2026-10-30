@@ -20,7 +20,7 @@ Architectural invariants:
 
 1. **One ROS-free C++20 core** supplies geometry, sensors, estimator and map algorithms. Neither ROS messages, HTTP, Docker nor cxxopts enter the core algorithm APIs.
 2. Use **REP-103/REP-105** units and frames natively. The optional ROS 2 adapter owns message conversion, TF, QoS, rosbag2 and lifecycle concerns.
-3. **Measurement acquisition time** drives estimation; transport receipt time is retained separately, not treated as the same clock.
+3. **Measurement acquisition time** drives estimation; transport receipt time is retained separately, not treated as the same clock. **OD-001 is Accepted:** canonical time uses signed 64-bit nanoseconds and explicit clock-domain/epoch conversion. The simulator's ROS 2 `/clock` may pause or jump; it is not a continuous wall or steady clock.
 4. **`odom -> base_link` stays continuous** through global optimization. Map corrections modify `map -> odom`, with one TF authority per edge.
 5. Raw measurements are immutable; map, calibration, dataset, replay, solver and benchmark outputs carry provenance and version IDs.
 6. Frontend prediction is **not an independent graph measurement** if derived from the same wheel/IMU streams already represented by factors.
@@ -102,18 +102,25 @@ Native occupancy grid follows ROS semantics: cell index `j * width + i`, origin 
 
 ### 3.2 Typed native contracts (illustrative, not source code)
 
+**Accepted OD-001:** use a signed `std::int64_t` **nanosecond count**, with **explicit domain and epoch identity**. Production acquisition time is monotonic *within an epoch*; the ROS simulation/replay clock is controllable and may jump. Keep raw device ticks and host receive/steady timestamps separate from aligned acquisition time.
+
 ~~~cpp
-using TimeNs = std::int64_t;  // canonical monotonic acquisition domain
+using TimeNs = std::int64_t;  // nanoseconds; no implicit Unix epoch
+struct CanonicalTime {
+  TimeNs ns;
+  ClockDomainId domain;         // normalized steady/run vs ROS simulation timeline
+  TimeEpochId epoch;            // invalidates comparisons after discontinuities
+};
 struct Timestamp {
-  TimeNs acquisition_ns;
-  TimeNs receive_ns;
-  ClockDomainId source_clock;
+  CanonicalTime acquisition;    // mapped physical/simulation acquisition time
+  SourceClockStamp original;    // unmodified sensor tick / bag / ROS stamp
+  HostSteadyStamp receive;      // diagnostic / timeout clock, separate domain
   TimeQuality quality;          // exact/reconstructed/uncertain/invalid
   double sigma_seconds;         // or explicit unavailable
 };
 struct TimedBeam {
   double range_m, angle_rad, intensity;
-  TimeNs acquisition_ns;
+  CanonicalTime acquisition;
   bool valid;
 };
 struct PoseEstimate {
@@ -134,7 +141,7 @@ struct MatchResult {
 };
 ~~~
 
-Use explicit physical units, coordinate-frame labels and data validity. Define pose-covariance tangent order and left/right perturbation convention. A raw device tick, host monotonic nanosecond and ROS time are **different clock domains** until related by a calibrated mapping. The canonical domain has no automatic Unix epoch.
+Use explicit physical units, coordinate-frame labels and data validity. Define pose-covariance tangent order and left/right perturbation convention. A raw device tick, host monotonic nanosecond and ROS time are **different clock domains** until related by an explicit, versioned mapping. Nanosecond arithmetic is checked for overflow; subtraction/comparison across unrelated domains or epoch IDs is an error. A native nanosecond counter has no automatic Unix epoch.
 
 ### 3.3 Clock alignment
 
@@ -146,7 +153,31 @@ raw device tick + host receive time
             -> trajectory + scan assembly
 ~~~
 
-Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. Replay seek/backward time jump requires state reset/checkpoint reconstruction. **OD-001/002/003/004** cover timestamp unit/API details, synchronization, LD19 beam timing and interpolation tolerances.
+Preserve raw timestamps, arrival times, device clock IDs, alignment version and error estimates. Validate 30-second LD19 clock rollover, dropped packets and anomalous gaps. Never silently extrapolate IMU/wheel motion through long gaps. **OD-001 is accepted** (signed 64-bit nanoseconds, explicit domains/epochs and ROS simulated-clock support). **OD-002/003/004** still govern sensor alignment, LD19 beam timing and interpolation tolerances.
+
+### 3.4 Clock source injection and ROS 2 `/clock` behavior
+
+The core MUST accept an **injected, ROS-neutral time source** or equivalent typed `ClockReading` / `ClockEvent` interface, with an initialized/ready flag, active clock domain, epoch and nanosecond value. The optional `fusion_slam_ros` adapter owns subscription to `rosgraph_msgs/msg/Clock` on `/clock`, `use_sim_time` configuration, conversion to/from `builtin_interfaces/msg/Time`, and ROS time-jump notifications. No ROS headers or clock types enter the core.
+
+~~~text
+live sensors / host steady timestamp -- explicit conversion --> canonical acquisition ns
+ROS 2 use_sim_time + /clock ---------> ROS adapter -------> native clock source/events
+offline MCAP bag stamps ------------> replay adapter ----> canonical event-time source
+                                                    |
+                                          timestamped estimation core
+                                                    |
+                      separate host steady clock -> deadlines, timeouts, CPU metrics
+~~~
+
+- **Live mode:** canonical acquisition time must be monotonic inside one acquisition epoch. Host steady time handles hardware timeouts and benchmark latency. Do not use wall-clock adjustments to integrate motion.
+- **Simulation/replay mode:** active `/clock` supplies the authoritative **simulation event time** when `use_sim_time` is enabled. A zero/uninitialized ROS clock is *not* a valid current time; gate time-dependent outputs until it is ready. Message acquisition stamps must be mapped to that same simulation timeline; never assume equality with hardware-host steady time.
+- **Pause:** do not advance estimator integration or sleep/deadline budgets based on an unchanged simulation clock. Explicit replay steps may process distinct event timestamps. Rendering may still refresh using independent host steady time.
+- **Backward jump, seek, clock-source switch or reset:** increment/change time epoch, broadcast typed discontinuity event, invalidate cross-epoch interpolation and clear/rebuild estimator time history, scan assembler, reorder buffers and relevant caches; the ROS adapter also resets invalid TF state. Restore from a compatible replay checkpoint only when explicitly supported.
+- **Forward jump:** distinguish ordinary accelerated simulation from a true discontinuity using a documented event/gap policy; never integrate across an unsupported long gap. Exact thresholds and seek checkpoint strategy remain **OD-002/OD-024**.
+- **Conversions:** ROS seconds/nanosecond stamps are converted **integer-exactly with bounds/normalization checks**; an out-of-range timestamp fails explicitly. Preserve original ROS stamps and mapping provenance; avoid converting via floating-point seconds.
+- **Testing:** ROS-free Catch2 tests cover ns precision, overflow, mismatched epochs, clock readiness, pause, step, backward jump, forward gap and mode switch. A dedicated ROS 2 Docker test drives `/clock` and `use_sim_time` through the real adapter; the core builds and replays without ROS.
+
+ROS 2 design basis: [Clock and Time](https://design.ros2.org/articles/clock_and_time.html).
 
 ## 4. LiDAR assembly, wheel/gyro odometry and deskew
 
@@ -329,7 +360,7 @@ Thread/process split **OD-016**, queue limits/drop and overload policy **OD-021*
 - ROS 2 adapter maps native scan/IMU/odometry/map/pose to standard topics and owns TF/clock conversions; only one publisher per TF edge.
 - No browser, ROS or Node/JS runtime is required for the headless core.
 
-MCAP channel/schema **OD-023**, seek/checkpoint format **OD-024**, ROS distro/QoS defaults **OD-025**.
+MCAP channel/schema **OD-023**, seek/checkpoint format **OD-024**, ROS distro/QoS defaults **OD-025**. **OD-001 time representation is accepted**: use signed 64-bit nanoseconds with explicit clock-domain conversion and ROS-neutral simulated-clock events.
 
 ## 11. Resource budget and failure policy
 
@@ -354,7 +385,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 
 | Boundary | Required tests |
 | --- | --- |
-| Device/time | LD19 CRC/47-byte parsing, 30 s tick rollover, time offsets, missing/late samples and uncertainty |
+| Device/time | LD19 CRC/47-byte parsing, 30 s tick rollover, signed nanosecond exactness/overflow, domains/epochs, ROS simulated-clock pause/seek/time jumps, missing/late samples and uncertainty |
 | Geometry | SE(2) composition, REP frames, rotated occupancy origin, Jacobians and extrinsics |
 | Motion/deskew | Gyro bias, wheel slip, full SE(2) ray endpoints, lever arm, gap/extrapolation behavior |
 | Ceres | Distance-field interpolation, convergence, false matches, corridor degeneracy, robust residuals |
