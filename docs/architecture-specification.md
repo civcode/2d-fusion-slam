@@ -73,6 +73,7 @@ Component ownership and forbidden dependencies:
 | `time_sync` | Rollover, clock offset/drift, ordering and time quality | No map or solver dependency |
 | `calibration` | Versioned sensor extrinsics, wheel scales, gyro bias priors and timing offsets | Invalidates derived artifacts on change |
 | `motion` | Wheel/gyro estimator, piecewise SE(2) exponential trajectory, time-interval coverage, covariance and status | No global-map jumps; expose generic provider |
+| `scan_assembly` | Fixed-seam generic timed-beam grouping, partial coverage, missing sectors and return validity | No LD19 packet or ROS dependency |
 | `deskew` | Per-beam transformation into temporal midpoint laser frame, full-coverage validation and provenance | No device/ROS/optimizer dependence |
 | `mapping` | Occupancy log-odds, submap builders, frozen snapshots and fields | No direct dependence on GTSAM |
 | `frontend_ceres` | Geometric alignment, scores, degeneracy and uncertainty | No raw device or ROS I/O |
@@ -254,6 +255,39 @@ t_device_beam_i ~= t_packet_device
 
 **Decision boundary:** OD-003 is **Accepted** (device timing method) and OD-004 is **Accepted** (midpoint frame and piecewise SE(2) trajectory); physical LD19 timing calibration remains experimental.
 
+### 4.1.1 Accepted OD-005: seam-based partial-scan assembly
+
+OD-003 LD19 adapter decodes CRC-validated packets and emits **generic time-ordered observed beam slots** with angle, intensity, range classification, clock quality and reconstructed beam time. The portable **ScanAssembler** groups them by **fixed configurable angular seam crossings** (0° as initial example), after normalizing the verified rotation direction and unwrapping beam angles. It does not segment normal scans by packet boundaries or elapsed wall time. If a packet straddles the seam, partition its **observed beam slots** between revolutions; do not invent, drop or duplicate samples.
+
+~~~text
+LD19 adapter (CRC + OD-003 beam timing) -> observed TimedBeam + gap events
+   -> fixed-seam ScanAssembler -> AssembledScan {
+        observed beams and time interval; partial/complete and seam status;
+        circular angular coverage; missing sectors/largest gap;
+        range/intensity status; timestamps and quality; termination reason }
+   -> scan-matching eligibility -> OD-004 midpoint deskew -> Ceres
+   -> map-insertion eligibility -> safe occupancy updates
+~~~
+
+Coverage is computed as **observed support on a circular 360° angular domain**, not just the span between min/max observed angles. Retain covered/missing angular intervals, largest missing sector, coverage fraction, complete/partial flags, beam counts, packet loss, valid-hit count, time gaps, seam confidence and configuration revision. Start/end mid-revolution or missing sectors are honest **partial scans**. Ambiguous direction changes, multiple potential unseen seam crossings, or device resets require resynchronization rather than fabricated revolutions. Coverage support granularity and quality thresholds are configurable, not universally preset.
+
+| Return | Meaning | Mapping effect |
+| --- | --- | --- |
+| `VALID_HIT` | Trustworthy observed obstacle | Free cells **before** hit; occupied endpoint, after all gates |
+| `VALID_NO_RETURN` | Sensor-documented trustworthy no-hit/max-range | **Optional** bounded free ray only when explicitly enabled |
+| `INVALID_RETURN` | Zero/corrupt/saturated/unsupported value without trusted no-hit semantics | **No free or occupied update** |
+| `MISSING` | No observation in lost packet or uncovered sector | **No ray or update**; only coverage metadata |
+
+Observed beams with invalid ranges may still have valid **acquisition timestamps** and contribute to OD-004 scan time bounds, while contributing **no geometry or clearing**. Missing beams have **no invented timestamps**. Intensity and its validity remain recorded.
+
+Apply separate, configurable **matching and insertion** quality gates: circular angular coverage, largest gap, spatial support/count of valid hits, source-clock quality, angle/time consistency, and pose reliability. A partial scan MAY pass a gate if its real support is sufficient. Normal map insertion additionally requires OD-004 **full interpolation across the actual observed scan interval**, including time-valid invalid-range slots. No extrapolated scan is inserted. Reject with reason and preserve raw data; match against a map that does not already contain that scan.
+
+**Timeouts are recovery-only:** Host-steady watchdogs may mark a stalled/disconnected/shutdown scan partial and flush/abort it, then re-lock at the next trusted seam. A timeout is **not** a normal revolution segmentation mechanism.
+
+This assembler belongs to portable C++20 code and consumes **generic timed beams and gap diagnostics**, not LD19-specific packet fields, Pico/IMU/encoder data or ROS types. ROS adapters must not falsely represent arbitrary partial/nonuniform beam times as a regular `LaserScan`. The Web Lab can display missing sectors, coverage and rejection reasons.
+
+Test in Docker with Catch2: packet spanning seam, seam phase, both directions, missing gaps/multiple possible turns, partial first/last scans, invalid returns versus validated no-return, clearing safety, full-interval midpoint trajectory coverage, stalled-source timeout, and exact circular coverage on synthetic apartment/warehouse scans.
+
 ### 4.2 Accepted OD-004: continuous SE(2) trajectory
 
 Build `T_odom_base(t)` from timestamped wheel increments/velocity and **bias-corrected gyro yaw rate**. OD-006 still determines the detailed fusion state, covariance and wheel/gyro update policy; it may employ different kinematics for differential and Ackermann robots. The **trajectory representation and interpolation method are settled by OD-004**.
@@ -324,7 +358,7 @@ p_laser_mid =
 
 Use the **continuous odom trajectory**, not a discontinuously corrected `map` pose. Include the full wheel-translation/gyro-rotation SE(2) path and calibrated LiDAR lever arm. Downstream Ceres scan matching and scan-derived pose estimates MUST use `t_mid` and the matching midpoint frame; raw source beam timestamps remain unchanged.
 
-**Complete interpolation for normal mapping:** Before scan insertion, require a quality-valid interpolated trajectory covering `[t_start,t_end]` including every beam time and `t_mid`, in one clock epoch. **Never insert a scan requiring extrapolated poses** or a scan whose boundary timing is ambiguous, even if its numerical residual is small. Preserve partial/invalid scan diagnostics and map-eligibility reason.
+**Complete interpolation for normal mapping:** After the OD-005 matching/insertion quality gates, before scan insertion require a quality-valid interpolated trajectory covering `[t_start,t_end]` including every beam time and `t_mid`, in one clock epoch. **Never insert a scan requiring extrapolated poses** or a scan whose boundary timing is ambiguous, even if its numerical residual is small. Preserve partial/invalid scan diagnostics and map-eligibility reason.
 
 **Bounded, optional prediction:** Prefer a bounded delayed-processing queue while waiting for real trajectory data through `t_end`. If no valid coverage arrives within a configurable host-steady wait budget, reject/defer with diagnostics rather than predict without bounds. Only explicit live prediction, visualization or localization policies MAY permit extrapolation; default is **disabled**, maximum initial horizon is **10 ms (10,000,000 ns)** beyond either valid trajectory boundary, and covariance/sensor-age/clock-quality/gyro-bias/slip gates may require a **shorter** horizon or reject it. An extrapolated result MUST be distinctly marked `EXTRAPOLATED`, include duration/uncertainty and MUST NOT be passed to normal map insertion or silently treated as high-confidence scan evidence. Never cross time epochs, invalid gaps, or stale calibration.
 
