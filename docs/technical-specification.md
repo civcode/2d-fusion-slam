@@ -98,11 +98,15 @@ All rigid transforms must have documented source/target frame names and multipli
 
 ### 4.2 Time synchronization
 
-Use signed 64-bit monotonic timestamps (nanoseconds or microseconds, specified in the implementation API). Never use wall-clock time to integrate motion.
+**Accepted time representation (OD-001):** use **signed 64-bit nanoseconds** in the native C++20 timestamp and duration APIs. Every comparable timestamp carries or is associated with an explicit **clock domain and epoch**, and conversions happen at sensor, dataset, and ROS 2 boundaries. Do not use wall/system time for physical motion integration; use a stable acquisition timeline for live sensors and separately preserve host steady time for scheduling, latency and hardware timeouts.
 
-Maintain per-source clock alignment: host receive timestamp, hardware or microcontroller timestamp where available, clock-offset estimate, drift estimate, uncertainty estimate, and rollover state. A microcontroller timestamping IMU and encoder acquisition is recommended, but not mandatory.
+Maintain per-source clock alignment: host receive timestamp, hardware or microcontroller timestamp where available, clock-offset estimate, drift estimate, uncertainty estimate, rollover state and validity interval. A microcontroller timestamping IMU and encoder acquisition is recommended, but not mandatory. Do not compare unconverted timestamps from different clock domains or epochs.
 
-Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples.
+**ROS 2 simulation compatibility:** the ROS-independent core exposes a clock-injection/time-event interface capable of consuming a controlled simulated nanosecond timeline. An optional ROS 2 adapter honors `use_sim_time` and `/clock` (`rosgraph_msgs/msg/Clock`), converting to/from ROS message timestamps exactly using integer arithmetic and checking ranges. When simulation time is uninitialized, do not publish a valid timed estimate. Pauses must not advance estimator integration; backward jumps, replay seeks, source changes and other discontinuities invalidate state/trajectory interpolation across the boundary and trigger reset or compatible checkpoint restoration. Use the independent host steady clock for CPU deadlines rather than `/clock`. A simulated timestamp need not be monotonic across epochs.
+
+Time calibration must account for UART buffering, LiDAR packet timestamp convention, encoder interrupt/sample latency, IMU output/filter latency, and data-ready/FIFO semantics. Reject or flag unsupported interpolation across missing IMU samples. The clock mapping and jump-handling algorithm remain separate design choices (**OD-002/OD-024**).
+
+Reference: [ROS 2 Clock and Time design](https://design.ros2.org/articles/clock_and_time.html).
 
 ### 4.3 Required calibration
 
