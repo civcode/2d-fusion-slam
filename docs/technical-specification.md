@@ -243,23 +243,51 @@ The deskewer depends only on the portable timestamp-addressable trajectory provi
 
 ## 6. Shared geometric frontend (Ceres)
 
-### 6.1 Submaps and map representation
+### 6.1 Accepted OD-010 — 5 cm log-odds occupancy and overlapping submaps
 
-Maintain probabilistic occupancy-grid submaps, with log-odds or another documented inverse-sensor model. **Accepted OD-007** fixes occupancy as authoritative and **truncated unsigned EDT as its derived, versioned matching cache**, built only from confidently occupied cells. Unknown and supported-map semantics remain explicit. Default *experiment starting points*, not fixed product guarantees:
+**Map authority:** Use **0.05 m** cells (5 cm) with **explicit observed/unknown flags and log-odds probabilities**, in bounded local SE(2) grids with origin position **and yaw**. An observed cell may return to `p≈0.50`; it MUST NOT become indistinguishable from an untouched **unknown** cell. **OD-007 EDT and OD-009 correlation pyramids are derived versioned caches**, never substitutes for the occupancy grid.
 
-| Parameter | Initial setting |
-| --- | --- |
-| Occupancy-grid resolution | 0.05 m |
-| Submap duration | 30–100 scans, configurable |
-| Active submaps | 1–2 overlapping submaps |
-| New scan rate | ~10 Hz |
-| Match variables | Pose2: x, y, yaw |
+| Parameter | Accepted initial setting | Validation |
+| --- | --- | --- |
+| Grid resolution | **0.05 m** | Compare optional 0.025 m (≈4× cell count) and 0.10 m (≈¼) |
+| Writable active maps | **2 overlapping**, 1 during startup | Never more than 2 normally |
+| New submap | After **90 accepted scan insertions** | Configurable |
+| Freeze old submap | After **180 per-submap accepted insertions** | Configurable, safety may shorten |
+| Overlap | **90 shared accepted IDs / 180**, ≈50% by insertion count | No implied physical 50% overlap |
+| Prior `p` / cell state | **0.50**, `UNKNOWN` until first real update | Separate known mask required |
+| Hit increment probability | **0.55** | Initial, not calibrated |
+| Free increment probability | **0.49** | Initial, not calibrated |
+| Probability clamp | **0.10 to 0.90** (observed cells) | Initial |
+| Motion filter | Configurable minimum translation/yaw and elapsed time | No unverified numeric thresholds |
+| Map spatial/RAM budget | **Hard bounded dynamic allocation** | Benchmark on Pi 5 |
+| Frozen-map aging | **Disabled** | Separate future transient overlay only |
 
-Only insert a scan after successful localization against the existing map; never match a scan against a submap that has already incorporated that very scan. Handle unknown cells and maximum-range returns separately from occupied returns. Keep dynamic-object suppression and map aging configurable.
+**Exact lifecycle:** After scan IDs 1–90 have been accepted and inserted into A, create B. Insert 91–180 into **both** A and B; then freeze A at 180 and create C. B receives IDs 91–270 and freezes at 180 insertions; C starts at 181. Only **accepted, quality-valid, motion-filter-passing scan insertions** advance a submap's own counter. A single scan may count once in **each** of two active maps, not twice in one map; rejected/filtered scans continue to be recorded and contribute **zero** insertions. Store stable scan-to-submap IDs, true insertion counts and transition order so scan 90/180 cannot be duplicated. Always match against a **pre-insertion map snapshot**, not the scan's own freshly added cells.
+
+**Inverse-sensor update:**
+
+~~~text
+logit(p) = log(p/(1-p))
+L_prior = logit(0.50) = 0;  observed=false
+Delta_hit  = logit(0.55)
+Delta_free = logit(0.49)
+L_next = clamp(L + Delta_hit_or_free, logit(0.10), logit(0.90))
+observed=true only on a valid actual update
+~~~
+
+From an accepted, OD-004 midpoint-deskewed scan, transform the observed laser origin/endpoints to **each active submap's local frame**. For `VALID_HIT`, cast **free only strictly before** a measured endpoint and mark its cell **hit**. `VALID_NO_RETURN` may clear **only a measured, bounded ray** after documented and enabled sensor semantics. `INVALID_RETURN` and `MISSING` (OD-005) generate **zero free and occupied updates**, including lost sectors or invalid zero/out-of-range returns.
+
+**Within a single scan insertion into one submap**, accumulate unique hit-cell and traversed-free-cell sets, give **hit priority** when a cell is in both, then apply **at most one update per cell**. Crossing rays or duplicate beams must not overcount or erase a hit. A later accepted scan may update it again. Maintain intensity/range diagnostics without promoting an unsupported return to a free-space observation.
+
+**Motion filter and bounded allocation:** Apply configurable pose translation/yaw changes and optional maximum elapsed **acquisition** time relative to the last *accepted map insertion*. Filtering only affects mapping, never acquisition/recording, OD-006 motion, or pose outputs. Support capped dynamically allocated map extents/tiles, maximum cells/RAM and allocation-safe stop. On cap/travel/allocation failure, **early freeze with explicit actual count/overlap or stop insertion safely**, not unlimited growth or false obstacle/cell creation at boundaries. Hardware thresholds are pending measurement; do not assert every 10 Hz LD19 scan qualifies for insertion.
+
+**Immutability and graph:** Freezing makes the **local occupancy raster, observed mask, local coordinate origin and insertion history immutable**. Graph optimization changes a separately versioned global `T_map_submap`, not frozen occupancy. Cached local EDT/correlation fields remain valid while source raster/threshold/known-mask revisions match; global indexes may update with pose changes. Active matchers read **coherent published immutable snapshots** (OD-011 chooses refresh/invalidation/eviction) and localization runs read-only. No dynamic aging of frozen data; a future transient overlay must have independent lifetime and artifacts.
+
+**Modules/tests:** Native `OccupancyGrid`/`SubmapBuilder`/`FrozenSubmap`/`MapSnapshot` are **ROS-, Ceres- and GTSAM-independent** with typed SE(2) frames and versioned provenance. Docker Catch2 tests must cover insertion sequence 90/180 and overlapping IDs, motion filter skipped scans, logit arithmetic/clamp, known 0.5 vs unknown, invalid/missing/no-return no-clearing, per-insertion hit precedence, rotated ray geometry, 0.05/0.025/0.10 m accuracy/memory, hard caps/early freeze, frozen map hashes despite pose-graph updates, EDT/pyramid source revisions and no self-matching. Benchmark B18 measures map accuracy, CPU/RAM and lifecycle reliability on apartment/warehouse and Pi 5. See [OD-010](open-design-choices.md) and [Architecture Section 6](architecture-specification.md).
 
 ### 6.2 Accepted OD-007 — Ceres EDT scan-to-submap optimization
 
-The native **occupancy grid is the authoritative map representation**. A **truncated unsigned Euclidean distance field (EDT)** is a **derived, versioned immutable scan-matching cache**, built from a configurable confidence threshold applied to **occupied cells**. Unknown cells are **not** obstacles or evidence of free space; separately track the known/supported map mask and mask invalid interpolation stencils. Preserve the grid's translation/rotation origin, resolution, occupancy probabilities and revision. Cache metadata records source occupancy revision/checksum, confidence threshold, interpolation mode, truncation and support-mask policy (OD-010/011 still determine map update/cache mechanics).
+The native **occupancy grid is the authoritative map representation**. A **truncated unsigned Euclidean distance field (EDT)** is a **derived, versioned immutable scan-matching cache**, built from a configurable confidence threshold applied to **occupied cells**. Unknown cells are **not** obstacles or evidence of free space; separately track the known/supported map mask and mask invalid interpolation stencils. Preserve the grid's translation/rotation origin, resolution, occupancy probabilities and revision. Cache metadata records source occupancy revision/checksum, confidence threshold, interpolation mode, truncation and support-mask policy. **Accepted OD-010** determines authoritative log-odds and freezing; **OD-011** still determines cache update/eviction and active snapshot mechanics.
 
 For OD-005 valid-hit beams deskewed via OD-004 to the **midpoint laser frame**, optimize the **midpoint robot pose** `T` with laser extrinsic `T_base_laser`, a pinned map-frame EDT `D`, and the OD-006 odometry prediction `T_pred` and covariance `Sigma_pred` (same frame/time/tangent convention):
 
