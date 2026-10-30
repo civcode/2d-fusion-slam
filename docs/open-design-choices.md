@@ -34,7 +34,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-008 | Robust LiDAR-only information, rank gates and covariance calibration | P1 | Graph, localizer quality | **Accepted** (tests/calibration pending) |
 | OD-009 | Covariance-aware local correlation and asynchronous branch-and-bound recovery | P2 | Tracking recovery | **Accepted** (benchmark tuning pending) |
 | OD-010 | 5 cm log-odds occupancy, 90/180 overlap and immutable freezing | P1 | Mapping and graph | **Accepted** (tests/tuning pending) |
-| OD-011 | Distance-field cache / immutable map snapshots | P1 | Map/matcher memory | Open |
+| OD-011 | Coherent immutable snapshots, tiled active EDT and frozen-cache reuse | P1 | Map/matcher memory | **Accepted** (baseline first; optimization pending) |
 | OD-012 | Native map bundle and persistence format | P1 | Reuse across modes | Open |
 | OD-013 | GTSAM topology and information accounting | P1 | Backend accuracy | Open |
 | OD-014 | Offline re-deskew and remapping iteration | P1 | Mapping quality | Open |
@@ -827,17 +827,122 @@ Native C++20 `OccupancyGrid` / `SubmapBuilder` / `FrozenSubmap` / `MapSnapshot` 
 7. Freeze immutability across concurrent Ceres/OD-007 EDT and OD-009 correlative matcher readers; pose-graph moves only global `T_map_submap`, local hashes and versioned derived fields remain unchanged; global index may be updated.
 8. Deterministic replay of active-to-frozen transitions, map revisions, forced scan acceptance/rejection, per-submap scan ID provenance and no map self-matching. Verify offline map artifact round trip, ROS-free Catch2/CTest Docker tests and eventual hardware recordings.
 
-**Consequences:** OD-010 settles **authoritative log-odds occupancy, initial 5 cm/90/180 defaults, two overlapping active maps, per-scan hit precedence, safe unknown handling, bounded local grids and immutable freezing**. The exact motion filter thresholds, memory/spatial caps, hit/miss calibration and alternative resolutions remain benchmark-tuned. **OD-011** still decides cache update/eviction/publishing details; **OD-013** graph factor topology, **OD-012** map serialization and **OD-014** offline remapping remain open.
+**Consequences:** OD-010 settles **authoritative log-odds occupancy, initial 5 cm/90/180 defaults, two overlapping active maps, per-scan hit precedence, safe unknown handling, bounded local grids and immutable freezing**. The exact motion filter thresholds, memory/spatial caps, hit/miss calibration and alternative resolutions remain benchmark-tuned. **Accepted OD-011** fixes coherent cache updates/eviction/publishing architecture (with tuning pending); **OD-013** graph factor topology, **OD-012** map serialization and **OD-014** offline remapping remain open.
 
 **References:** [Cartographer 2D example configuration](https://github.com/cartographer-project/cartographer/blob/master/configuration_files/trajectory_builder_2d.lua), [Cartographer 2D submap lifecycle](https://google-cartographer.readthedocs.io/en/latest/configuration.html), [Cartographer 2D grid inserter hit precedence](https://github.com/cartographer-project/cartographer/blob/master/cartographer/mapping/2d/probability_grid_range_data_inserter_2d.cc).
 
-### OD-011 — Immutable map snapshots and distance-field cache
+### OD-011 — Coherent immutable map snapshots, active EDT tiles and reusable frozen caches
 
-**Question:** Rebuild whole distance field every scan, rebuild at freeze boundaries, incremental distance-transform tiles, or precomputed frozen fields loaded on demand?
+**State:** **Accepted** (target architecture selected; simpler baseline first, tiled implementation and performance validation pending)  
+**Decision date:** 2026-10-30  
+**Decision authority:** User's explicit selection of immutable snapshots, incremental active tiles and precomputed frozen fields  
+**Priority:** P1
 
-**Provisional preference:** immutable frozen fields for matching and offline precomputation for localization. Use versioned active-map snapshots where a live active submap is being matched; avoid concurrent read/write races.
+**Decision:** The OD-010 **authoritative 5 cm occupancy/observed grid** remains the only mutable map source. Publish **atomic, immutable, versioned matching snapshots** containing coherent occupancy/known-space support and compatible **OD-007 truncated unsigned EDT** and **OD-009 multiresolution correlative pyramid** representations. For active submaps, **dirty-region tracking and bounded incremental tile regeneration** are the target architecture; a **bounded-cadence complete EDT/pyramid rebuild** is the initial correctness/performance baseline and legitimate fallback. Frozen submaps have immutable precomputed derived fields, reused through a **memory-bounded pinned cache** with on-demand load/reconstruction. All rebuilding and publication are background/budgeted; never block sensor acquisition, odometry or recording. Native domain and cache interfaces have **no ROS or Ceres dependencies**.
 
-**Decision gate:** peak memory, matching p95 latency, cache invalidation correctness, map revisions/tiling and object lifetime under concurrent graph updates. Validate no stale map interpolation.
+**Options:** full rebuild every received scan — rejected as default (can be wasteful); rebuild only at freeze — insufficient for matching against active maps; **tiled active EDT and reusable frozen fields — accepted target**; **full-field rebuild on bounded refresh cadence — accepted initial implementation and correctness oracle**. An optimization shall not be assumed faster without Pi 5 profiling.
+
+#### Initial configuration (unmeasured starting values)
+
+| Parameter | Initial value | Meaning |
+| --- | --- | --- |
+| Authoritative map resolution | **0.05 m/cell** (OD-010) | Per-submap local coordinates |
+| Unsigned EDT truncation | **0.30 m** | Maximum nearest-occupied distance used by OD-007, **not Cartographer TSDF** |
+| EDT tile interior | **32 × 32 cells** | At 5 cm, **1.6 × 1.6 m** |
+| EDT source halo | **≥0.30 m plus bilinear interpolation support** | At 5 cm, **at least 6 cells radius plus ≥1 cell for interpolation**; account for border alignment/rounding |
+| Builder execution | **Background, bounded work units and time/memory caps** | No sensor-thread builds |
+| Initial baseline refresh | **Configurable cadence / work cap**, full field | Measure before adding tiled optimization |
+| Frozen fields | **Precomputed immutable; on-demand reload/recompute** | LRU-like eviction, pinned reader lifetime |
+| Staleness and cache RAM limits | **Explicit configurable caps** | Numerical values require Pi benchmarks |
+
+A **40 × 40 m** submap at 5 cm has **800 × 800 = 640,000 cells**. One float32 EDT is **2,560,000 bytes (~2.56 MB decimal / 2.44 MiB)**, excluding known mask, occupancy, tiling, interpolation padding, score pyramids, object metadata and concurrent snapshot copies. A 32-cell tile has a **32 × 32** output interior; its source computation window is larger.
+
+**Important distinction:** The **0.30 m value here is an *unsigned occupancy-to-obstacle EDT truncation parameter*** for OD-007; Cartographer's similarly sized **TSDF truncation parameter** is a different representation and does **not** establish a validated LD19 EDT radius.
+
+#### Snapshot identity, immutability and ownership
+
+A `MapSnapshot` is a **coherent immutable bundle** for a single local occupancy revision, not unrelated `occupancy_latest`, `edt_latest` and `pyramid_latest` pointers:
+
+~~~text
+MapSnapshot {
+  submap_id; occupancy_revision; content_hash; map_grid_origin/resolution;
+  observed_mask_revision; occupied_threshold/config_hash;
+  immutable_occupancy_and_known_mask;
+  immutable_EDT { source_occupancy_revision, truncation, interpolation, status };
+  immutable_correlation_pyramid { source_revision, score_config, bounds, status };
+  graph_pose_revision_or_pinned_transform; // separate from local cache identity
+  scan_insertion_id_high_watermark; creation/publication_stamp;
+  build_mode { FULL_REBUILD, TILED_INCREMENTAL, FROZEN_LOAD };
+}
+~~~
+
+- The map builder writes to private mutable state; a worker captures a **read-only occupancy revision** (via copy-on-write/shared immutable tiles or bounded equivalent), builds derived fields and publishes a **single completed coherent snapshot atomically**. No reader sees partially updated tiles, half-built pyramids, mismatched known masks or an occupancy/EDT version mismatch.
+- Both derived caches in a snapshot MUST reference that snapshot's **exact occupancy source revision and their own configuration hashes**. When a required cache is not built/valid, the bundle is **not ready for that operation**: OD-007 matching needs a coherent EDT; OD-009 coarse search needs a coherent pyramid. Never attach a new occupancy grid to old EDT/pyramid. A snapshot may expose operation-specific readiness; only **complete coherent versions** are handed to readers.
+- Pin snapshot lifetime through a native shared immutable handle (e.g. `shared_ptr<const MapSnapshot>` or equivalent). A Ceres match, BnB search, loop candidate or replay view uses the **same pinned snapshot for its entire operation** and records its map and graph-pose revisions. Global `T_map_submap` updates are independent of frozen local field identity; pin/consistently convert any global transform needed for the match.
+- An out-of-date worker result (base revision no longer valid) must be **discarded, versioned separately or restarted**, never published as a matching "latest" revision. If builders lag, a matcher MAY use a **previous complete coherent snapshot** only within separately configured **maximum age and number of accepted insertions behind**; record lag and mark quality accordingly. Once limits are exceeded, defer/reject matching or map insertion instead of mixing revisions or bypassing OD-008 gates.
+- Maintain **OD-010 match-before-insert**: candidate scan `n` matches a pinned map revision containing **no observation from scan n**. Successful OD-008 gate and OD-010 motion filter then insert scan n into the authoritative builder, emitting a *new* occupancy revision and dirty events. The presence of older not-yet-published insertions must be accounted for in the staleness/quality policy.
+- Bound **peak live memory including old pinned snapshots**, build scratch, tiles, EDT and score pyramids, in-flight jobs and frozen-cache entries. Never evict an in-use pinned object; if pinning prevents reclamation, throttle/cancel low-priority matching or cache builds, report `MEMORY_PRESSURE` and keep acquisition/recording alive.
+
+#### Correct active dirty-region EDT and pyramid updates
+
+After each **accepted** OD-010 occupancy insertion, detect cell changes and publish **dirty events** for:
+
+- Cells crossing the configurable **confidently occupied** threshold in either direction (**addition or removal** of nearest-occupied sources).
+- Changes to the **observed/unknown support mask** even without an occupied-threshold transition, because bilinear validity and score support can change.
+- Grid growth/extent/origin/resolution change, source calibration or cache-configuration change: **force full rebuild** when local dirty logic cannot prove equivalence.
+
+**Influence bound for a truncated Euclidean EDT:** For an occupancy source transition at `c`, only EDT output sample positions within its configured `R=0.30 m` metric radius can change *as a result of that source* (with appropriate rasterization boundary handling). Mark **all output tiles intersecting the changed source's R-expanded region**, plus the bilinear interpolation stencil/padding. This includes **removing** an occupied cell: any location whose former nearest source was removed must be recomputed against **all remaining nearby occupied sources**, not left with a stale minimum.
+
+For every dirty tile, calculate the output interior from the **current authoritative occupancy snapshot** and source region extended **at least R plus interpolation/padding** in all directions; include occupied sources **outside the tile interior**, invalid/unknown boundaries and map edges. Results must equal a **full exact EDT followed by metric truncation** for every supported output cell, within declared numeric tolerance. A `6-cell` halo is merely the raw radius at 5 cm; allow extra alignment/rounding and stencil support as needed. **Do not treat a small local flood update as automatically exact**, especially after source removal or a changed known-space mask.
+
+- If dirty coverage, topology, support transitions or scratch memory exceed configured bounds, **fall back to a complete field rebuild**.
+- The **OD-009 correlative score pyramid is distinct from EDT**; update/invalidate affected descendants and all influenced ancestors with score-bound correctness (including unknown masks). A changed occupancy probability can change correlation scores **even without crossing the occupied/known threshold**. Implement distinct dirty criteria and rebuild logic; do not derive pyramid validity solely from EDT dirty cells.
+- A pyramid used for branch-and-bound MUST preserve **admissible upper bounds** against its exact fine score under the pinned occupancy and score configuration. Recompute any affected aggregate maxima/halos, including decreases; test against exhaustive enumeration.
+- The *initial implementation* may always compute the **full exact EDT** (e.g. Felzenszwalb–Huttenlocher distance transform) and the **full score pyramid** on a bounded refresh cadence in a background worker. This is the correctness oracle for later tile optimization, not permission to rebuild on every incoming scan or expose incompatible maps.
+
+#### Frozen snapshots, memory cache and graph pose
+
+At OD-010 freeze, finalize the immutable local occupancy/observed mask, construct and verify final EDT and OD-009 pyramid with matching configuration hashes, and publish the **frozen complete snapshot**. A frozen local field never changes when its separate **global graph pose** is optimized. Frozen matching data is retained under a **bounded cache**: keep frequently used pinned entries, evict **only unpinned** cold derived fields, and reload/reconstruct on demand from the unchanged authoritative frozen grid if hashes/config differ or fields are missing. Cache-miss rebuilds occur on background/budgeted workers; a user operation defers or reports `NOT_READY` instead of blocking acquisition.
+
+The **cache-key contract** includes submap ID, authoritative content hash and revision, grid geometry/origin, observed/known mask/occupancy-confidence threshold, EDT truncation/interpolation/code version, and independent correlative score/pyramid configuration. Global pose revision is **not part of local-field cache identity**, but any global spatial index must track pose revisions. OD-012 still decides the physical on-disk native format and atomic persistence; cache source/hashes do not decide file layout.
+
+#### Minimal ROS-free cache-service contract and tests
+
+~~~text
+OD-010 accepted insertion -> authoritative OccupancyRevision_N + dirty events
+                  |
+       bounded background SnapshotBuilder
+              /                     \
+    full-field initial baseline   incremental tiles later
+              \                     /
+      verify occupancy, known-mask, EDT, pyramid source revisions
+                  |
+          atomic publish MapSnapshot_N (ready flags)
+                  |
+     native MapSnapshotProvider -> pinned immutable handle
+            /                 |                  \
+      OD-007 Ceres       OD-009 coarse BnB    frozen localizer
+       (EDT ready)        (pyramid ready)     / loop closure
+                  |
+       OD-008 matching quality and map-update gate
+~~~
+
+Core-domain `MapSnapshotProvider`, `CacheConfig` and `SnapshotHandle` APIs depend only on native C++20 map, memory and version types; **no Ceres, GTSAM, ROS, LD19, Pico or vendor structures**. Build/eviction scheduling is separate from sensor acquisition and map mutation. Worker queues must be bounded and jobs cancellable; record time, bytes, dirty tiles, queue age, snapshot lag, cache hits/misses, read pins, rebuild reason and publication outcomes. Benchmark thresholds and OS-level thread priorities remain tuning/OD-016/021 questions.
+
+**Required Docker/Catch2 and Pi benchmarks (not yet executed):**
+
+1. Compare exact full-grid EDT with tiled dirty updates for **addition, removal, repeated threshold crossings, obstacle motion, support-mask transitions, near edges/corners and tile seams**, including bilinear sampling/gradients within tolerance.
+2. Distinguish EDT occupied-threshold dirty tracking from **pyramid occupancy-probability changes**; verify OD-009 admissible upper bounds even when score **decreases** and when a cell becomes unknown/known.
+3. Check tile size 32×32, 0.30 m radius, **≥6-cell + interpolation halo**, rotated map origin, resolutions 0.025/0.05/0.10 m, source cells just outside tile boundary and map growth/recenter full rebuild.
+4. Concurrent insertion/read stress: optimizer pins one coherent revision while new maps and caches publish; no mixed versions, torn masks, use-after-free, stale cache attachment or self-matched scan.
+5. Refresh fallback and bounded **staleness in time *and* accepted insertion count**; reject/defer when too stale, no silent map catchup/late publications and deterministic replay.
+6. Frozen LRU-like eviction, pinned reader preservation, wrong config hash and on-demand reload/reconstruction, map global pose changes without local-cache rebuild.
+7. Resource caps: small map, **40×40 m / 640,000-cell** example, concurrent two active submaps, old pinned versions and several frozen entries; measure peak RAM/RSS, background CPU, p50/p95/p99 refresh time, Ceres/BnB latency, cache hit and thread-queue interference at ~10 Hz on **actual Pi 5**.
+8. Native interfaces compile without Ceres/ROS and match/insert ordering remains OD-010 compliant; forced worker cancellation/shutdown leaves the latest published snapshot valid.
+
+**Consequences:** **Atomic coherent snapshots, initial bounded full-field builds, eventual exact incremental active tiles, immutable frozen precomputation, bounded eviction/reload and separate versioned EDT/score caches** are settled. Exact refresh cadence, stale age/insertion caps, memory budget, cache eviction policy, tile fallback threshold and numerical tolerance are **performance-tuned parameters**. No incremental implementation or Pi runtime results are yet claimed.
+
+**References:** [Felzenszwalb–Huttenlocher, *Distance Transforms of Sampled Functions*](https://toc.cs.uchicago.edu/articles/v008a019/), [Cartographer fast correlative matching precomputation](https://google-cartographer.github.io/cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.html), [accepted OD-010](open-design-choices.md).
 
 ### OD-012 — Persisted map bundle format
 
@@ -987,6 +1092,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-010 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-011 are Accepted** (implementation/tests pending). Before the first implementation, decide **OD-017** so C++20 native module and Docker targets are stable. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and resolve the remaining recording schema decision (OD-023), then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and keep OD-013 graph factor topology/correlation as an open choice. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
