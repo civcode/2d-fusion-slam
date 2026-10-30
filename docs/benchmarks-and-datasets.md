@@ -135,7 +135,23 @@ The synthetic apartment and warehouse fixtures MUST include at least:
 5. Optional live prediction at **9.9 ms**, **10 ms** and **10.1 ms** beyond a valid trajectory boundary. The first two are allowed **only when quality gates pass**, while the last is always rejected under the initial 10 ms ceiling. Confirm `EXTRAPOLATED` status, covariance growth, domain/epoch checks and **no extrapolated ordinary map insertion**.
 6. A mock or alternative trajectory provider feeding the same deskew tests without LD19, MPU6050, wheel encoder, Pico or ROS libraries. Future spline benchmarking uses the identical public trajectory interface.
 
-For all B03/B12 results, publish endpoint error against exact synthetic truth, trajectory coverage fraction, deferred/rejected scans, uncertainty/error calibration, interpolation/extrapolation counts, and p50/p95/p99 scan processing/processing-delay latency. **Do not confuse frame time \`t_mid\` with the time at which computation finished.** Run tests and benchmarks in Docker; Pi 5 timing must be measured on actual target hardware.
+For all B03/B12 results, publish endpoint error against exact synthetic truth, trajectory coverage fraction, deferred/rejected scans, uncertainty/error calibration, interpolation/extrapolation counts, and p50/p95/p99 scan processing/processing-delay latency. **Do not confuse frame time `t_mid` with the time at which computation finished.** Run tests and benchmarks in Docker; Pi 5 timing must be measured on actual target hardware.
+
+### 4.2 Accepted OD-005 scan-assembly and safe occupancy fixtures
+
+The deterministic generator MUST support **LD19-like 12-beam packets that straddle an angular seam**, variable motor speed, 0°/configurable seam, forward/backward/raw clockwise direction, partial first/last revolutions, packet loss, incomplete sectors, corrupt packet CRC, and motor/clock discontinuity. Generate **exact observed beam acquisition times** and the true coverage of the simulated rotating sensor; never add a beam for missing sectors merely to complete a regular scan.
+
+Fixture variants include:
+
+1. Full 360° coverage with all valid hits, fixed seam crossing, and exactly-once beam assignment across packets.
+2. A **partial scan with adequate distributed valid hits** that passes configurable match/insertion gates; verify OD-004 midpoint equals the **actual observed** acquisition-time midpoint and full interpolated trajectory coverage enables insertion.
+3. **Insufficient angular support or a large missing wedge**: verify calculated **circular** angular coverage and that matching/insertion gate rejection reasons are correct even when minimum and maximum observed angles appear nearly a full revolution apart.
+4. Mixed **VALID_HIT**, **VALID_NO_RETURN**, **INVALID_RETURN** and **MISSING** data. Under all invalid/unknown/missing cases, assert **exactly zero free-space and occupied updates**; only explicitly validated, enabled no-return policy may produce bounded free rays. Preserve intensity/status and time-valid invalid-range slots.
+5. Dropped packets across the seam, ambiguous gaps spanning multiple possible revolutions, sensor reset and out-of-order packets: no phantom scans, fake beam timestamps, inferred occupied endpoints or clearing.
+6. Stalled acquisition watchdog event: marked partial/timeout recovery. In nominal continuous acquisition, verify **only angular seam crossings** delimit revolutions, independent of wall-clock timeouts.
+7. Repeat the same scenarios with changing packet/beam reception schedules and ensure identical assembly result given the same ordered acquisition samples. Track latency, packet loss, partial-scan acceptance and mapping error.
+
+Publish B13 outputs: **observed angular coverage fraction, largest missing sector (degrees), missing intervals, valid/invalid/no-return counts, accepted vs rejected partial scans, match/insertion eligibility reasons, malformed-packet count, watchdog recoveries, and free/occupied writes due to invalid/missing measurements (must be zero)**. Include Docker test image/version and report profile thresholds; measure Raspberry Pi 5 impact when real LD19 recordings are available. The Web Lab SHOULD render coverage and missing sectors distinctly, never as inferred free space.
 
 ## 5. Benchmark categories and experiments
 
@@ -153,6 +169,7 @@ For all B03/B12 results, publish endpoint error against exact synthetic truth, t
 | B10 | Benchmark comparison | Multiple deterministic configs | Reproducible side-by-side Web Lab views and machine-readable reports. |
 | B11 | LD19 timing reconstruction and alignment (OD-003) | Synthetic device packets + host receive jitter/clock drift; real LD19 capture | Relative per-beam error, clock slope/combined offset, jitter/uncertainty coverage, unknown physical-delay bound, wrap/reset recovery and deskew impact. |
 | B12 | Midpoint SE(2) trajectory and coverage (OD-004) | Exact arc trajectory, asynchronous wheel/gyro streams, nonuniform timed beams, missing samples and extrapolation cases | Midpoint pose/endpoint error; full-coverage map insertion acceptance; quality-gated 9.9/10/10.1 ms extrapolation; interpolation vs delay latency and covariance growth. |
+| B13 | OD-005 angular-seam partial scan and invalid-return safety | LD19 packet/seam fixtures, missing wedges, invalid/no-return states, motion coverage | Circular coverage and gap correctness; partial matching/insertion gates; **zero free or occupied updates from invalid/missing returns**; timeout-only recovery, no phantom beams. |
 
 Compare **LiDAR-only**, **LiDAR + wheel odometry**, and **LiDAR + wheel + gyro** wherever the dataset supports them. A `no-wheel` dataset must not be included in wheel-fusion averages. If a dataset provides only processed odometry and not raw ticks, label the experiment accordingly; don't imply independent source availability.
 
@@ -399,7 +416,7 @@ The example deliberately uses `null` for **unmeasured** fields: it is a reportin
 
 ### 11.1 Acceptance and delivery phases
 
-**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, midpoint-referenced SE(2) exponential interpolation and 10 ms gated extrapolation fixtures, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
+**D0 — Dataset architecture / first fixtures:** Commit scenario definitions, deterministic generator, compact truth/scan/IMU/wheel fixtures, midpoint-referenced SE(2) exponential interpolation, 10 ms gated extrapolation, **OD-005 seam/partial-scan/missing-sector and invalid-return safety** fixtures, manifest schema and Catch2 tests. Runs offline and completely within Docker. No external dataset required.
 
 **D1 — Compact public baseline:** Verify and pin the 38 MB Cartographer bag; implement horizontal-LiDAR/IMU import and standalone LiDAR–IMU smoke replay. Do not call it a full 3-sensor benchmark.
 
