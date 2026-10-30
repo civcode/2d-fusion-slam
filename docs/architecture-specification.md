@@ -64,30 +64,55 @@ LD19 UART      MPU6050        wheel encoders / steering
               (optional)                    (optional)
 ~~~
 
-Component ownership and forbidden dependencies:
+### 2.1 Accepted OD-017 — Initial host CMake targets and ownership
 
-| Module | Owned state/output | Boundary |
+**Build unit vs conceptual module:** The geometry diagram above and the subsequent conceptual modules (`sensors`, `motion`, `deskew`, `match_quality`, `offline_refinement`, `coarse_search`, etc.) are **responsibilities inside the eight accepted CMake libraries**, not a mandate to create a distinct library for each row. The initial host project creates exactly **eight libraries + three daemon executables**. Four libraries are **exported/installable SDK**; four are **private host implementation**.
+
+| CMake library | Public SDK? | Architectural ownership |
 | --- | --- | --- |
-| `core` | SE(2), units, timestamps, frame conventions, status, covariance types | Standard C++20 + Eigen; no Ceres/GTSAM/ROS |
-| `sensors` | LD19 parser, Pi GPIO/I²C/UART input or optional Pico native framed input, health and raw samples | No estimator/map ownership; no micro-ROS |
-| `time_sync` | Rollover, clock offset/drift, ordering and time quality | No map or solver dependency |
-| `calibration` | Versioned sensor extrinsics, wheel scales, gyro bias priors and timing offsets | Invalidates derived artifacts on change |
-| `motion` | Minimal wheel/gyro integrator, gyro bias, pose–bias uncertainty, replaceable KinematicModel, piecewise SE(2) trajectory, coverage and quality | No drivetrain assumption or global-map jumps; expose generic provider |
-| `scan_assembly` | Fixed-seam generic timed-beam grouping, partial coverage, missing sectors and return validity | No LD19 packet or ROS dependency |
-| `deskew` | Per-beam transformation into temporal midpoint laser frame, full-coverage validation and provenance | No device/ROS/optimizer dependence |
-| `mapping` | OD-010 log-odds/two active submaps; OD-011 coherent pinned snapshots, full-rebuild baseline, tiled active EDT and reusable frozen EDT/score caches | Domain independent of Ceres/GTSAM/ROS; map revision and graph pose separate |
-| `frontend_ceres` | OD-007 EDT/Ceres solve and **LiDAR-only** residual/Jacobian extraction with separate prior/boundary diagnostics | No ROS/device I/O; Ceres private behind native ScanMatcher |
-| `match_quality` | OD-008 robust PSD information, normalized rank/eigenvectors, calibrated full covariance or observable subspaces and acceptance | Native C++20/Eigen; no Ceres, ROS or sensor SDKs |
-| `coarse_search` | OD-009 covariance-aware local correlation, immutable multires score pyramids, async BnB and versioned candidate sets | No Ceres/ROS; bounded worker and native interface |
-| `backend_gtsam` | OD-013 keyframe/submap Pose2 graph with OD-015 motion-selected keyframes and independent submap anchors, one fused motion/quality-gated LiDAR constraint | GTSAM-private; bias remains OD-006 initially |
-| `offline_refinement` | OD-014 R0 plus up to 3 selective candidate passes; raw-data replay, dependency invalidation, hold-out gates and rollback | ROS/Ceres/GTSAM-free coordinator; private backend adapters |
-| `localization` | Frozen-map tracking state, confidence and recovery | Read-only map |
-| `io` | Raw MCAP plus OD-012 JSON/zstd map bundles, graph/submap schemas, atomic generations and safe lazy loading | Native ROS-/Ceres-free persistence; adapters own interchange |
-| `apps` | Four OD-016 Linux processes, versioned Unix seqpacket IPC and cxxopts offline CLI/lifecycle | Portable core has no IPC or OS scheduling dependencies |
-| `web_lab` | Local HTTP JSON and Canvas experiment explorer | C++ backend is only estimator |
-| `fusion_slam_ros` | ROS topics/messages/TF/bag conversions | Isolated ROS-specific build |
+| `slam_core` | **Yes: `slam::core`** | OD-001 typed time/clock epochs, SE(2), units, sensors, trajectory/uncertainty/provenance and domain interfaces |
+| `slam_mapping` | **Yes: `slam::mapping`** | OD-010 authoritative occupancy/known mask, local submaps, OD-011 immutable map snapshots and portable maps |
+| `slam_engine` | **Yes: `slam::engine`** | High-level mapping/localization session/config/status API, private frontend/matching/graph orchestration |
+| `slam_storage` | **Yes: `slam::storage`** | OD-012 versioned map bundle, recording and deterministic replay APIs (OD-023/024) |
+| `slam_frontend` | **No** | OD-004/005/006 trajectory/scan/deskew, keyframe selector OD-015, OD-009 correlation search, native match-quality and OD-014 offline orchestration |
+| `slam_match_ceres` | **No** | OD-007 bilinear EDT Ceres optimizer and private OD-008 Jacobian extraction, native quality output |
+| `slam_graph_gtsam` | **No** | OD-013 keyframe/submap batch graph and loop/factor backend, optional incremental implementation |
+| `slam_platform_linux` | **No** | Linux sensor/Pico acquisition adapters, OD-002/003 clock synchronization, OD-016 `SOCK_SEQPACKET` IPC, runtime process/scheduler helpers |
 
-Component interfaces MUST remain usable in offline replay without hardware/IPC/Web Lab. **Accepted OD-016** deploys four independent acquisition/recorder/SLAM/Web Lab processes with ROS-independent domain APIs.
+**The three native host executable targets** are `slam_acquisitiond` (platform/core), `slam_recorderd` (storage/platform), and `slam_localizerd` (engine/mapping/platform with private backend composition). They are thin `cxxopts` CLIs with independent startup/shutdown, versioned IPC and status reporting. **Web Lab remains the independent fourth OD-016 runtime process but is built separately**; Pico firmware is a separate RP2040/Pico SDK cross-compile. No default fourth/fifth host executable, forced Pico SDK, ROS 2, JavaScript/Web Lab build or external hardware requirement.
+
+### 2.2 Public API and dependency DAG
+
+~~~text
+installed public include/slam/
+  core/{time,geometry,sensor_data,trajectory}.hpp  + core/interfaces/
+  mapping/{occupancy_grid,submap,map_snapshot}.hpp
+  engine/{slam_engine,configuration,diagnostics}.hpp
+  storage/{map_bundle,recording}.hpp
+
+portable SDK dependency direction:
+ slam_core  <--- slam_mapping
+      ^               ^
+      +--- slam_storage
+      +---------------+--- slam_engine (public native facade)
+                                 |
+                          PRIVATE implementation:
+             slam_frontend + slam_match_ceres + slam_graph_gtsam
+                   (native interfaces, no cyclic links)
+
+host executables ---> slam_platform_linux (outer-only native Linux adapters)
+optional ROS 2 ----> public SDK (never the reverse)
+~~~
+
+**Hard architectural rules:**
+- `slam_core` has **no** Ceres, GTSAM, ROS2, Linux/Unix socket, Pico SDK, device driver or IPC types/link dependency. `slam_mapping` depends only on core among host libraries. `slam_storage` depends only on portable core/mapping types and keeps MCAP/Zstd implementation private. `slam_engine`'s installed API is **only portable native types**; implementations may use private Ceres/GTSAM/frontend backends, not their classes in public headers.
+- `slam_platform_linux` is the **outer adapter** linked at executable/deployment composition, never into SDK domain or solver/frontend algorithm libraries. Sensor/clock/IPC conversions terminate at the portable timestamped sensor interface; the ROS2 adapter separately consumes public SDK. Cross-module factor graph and cache models are portable; no Ceres/GTSAM types leak through the engine session contract.
+- Avoid implementation cycles by separating interfaces from concrete backends and providing private factories/pImpl. Frontend composition must not introduce frontend↔Ceres↔GTSAM circular linkage. The package's four installed targets are `slam::core`, `slam::mapping`, `slam::engine`, `slam::storage`, not the internal targets.
+- An installed **static SDK façade** that privately links internal static implementation libraries can export those dependencies with CMake `$<LINK_ONLY:...>` and break clean consumers. Use an appropriate shared-library/pImpl or equivalent audited packaging boundary for `slam_engine` and install private runtime dependencies separately; `PRIVATE` is not sufficient proof of an independent exported link interface. The package can avoid Ceres/GTSAM at **consumer configure time and installed public-header compilation** even though executable/runtime libraries may dynamically load private solver components. Inspect both exported CMake and runtime linker closure.
+- Install only `include/slam/{core,mapping,engine,storage}` headers, `FusionSLAMConfig.cmake`/`FusionSLAMConfigVersion.cmake` and `FusionSLAMTargets.cmake` with a documented version/ABI policy. Use `GNUInstallDirs`, `install(TARGETS ... EXPORT ...)`, `EXPORT_NAME`, target-based `cxx_std_20`/`PUBLIC`/`PRIVATE`/`INTERFACE`, and `CMakePackageConfigHelpers`. Correctly declare any actually public Eigen dependency. Never add global compile flags/includes or unapproved Boost.
+- Independent clean-prefix **`find_package(FusionSLAM CONFIG REQUIRED)` installed-consumer** integration must compile, link and run with all four installed imports and no private target/headers/implicit ROS/Ceres/GTSAM/Linux socket imports. `BUILD_TESTING=OFF` must not fetch Catch2; native CLI uses cxxopts only. Normal portable SDK build needs no hardware/Web Lab/Pico/ROS.
+
+**B25 acceptance:** Inspect all eleven host targets, exported imported target names, compile/header and linker dependency DAG, consumer install-tree relocation, C++20/ABI version metadata, no leaked solver/IPC headers, static `LINK_ONLY` pitfalls, normal Docker x86/Pi ARM64 builds, three daemon `--help`/error paths and OD-016 three-daemon-plus-separately-built-Web-Lab four-process smoke test. Test Ceres/GTSAM individually in private implementation, Catch2 v3/CTest, and independent optional integrations. No real build/test execution is asserted yet.
 
 ## 3. Geometry, frames and time
 
