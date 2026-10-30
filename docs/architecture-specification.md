@@ -79,7 +79,7 @@ Component ownership and forbidden dependencies:
 | `frontend_ceres` | OD-007 EDT/Ceres solve and **LiDAR-only** residual/Jacobian extraction with separate prior/boundary diagnostics | No ROS/device I/O; Ceres private behind native ScanMatcher |
 | `match_quality` | OD-008 robust PSD information, normalized rank/eigenvectors, calibrated full covariance or observable subspaces and acceptance | Native C++20/Eigen; no Ceres, ROS or sensor SDKs |
 | `coarse_search` | OD-009 covariance-aware local correlation, immutable multires score pyramids, async BnB and versioned candidate sets | No Ceres/ROS; bounded worker and native interface |
-| `backend_gtsam` | OD-013 keyframe/submap Pose2 graph, one fused wheel/gyro interval factor, quality-gated LiDAR/loop factors, graph pose revisions | GTSAM-private backend; high-rate bias/deskew remain OD-006 core |
+| `backend_gtsam` | OD-013 keyframe/submap Pose2 graph with OD-015 motion-selected keyframes and independent submap anchors, one fused motion/quality-gated LiDAR constraint | GTSAM-private; bias remains OD-006 initially |
 | `offline_refinement` | OD-014 R0 plus up to 3 selective candidate passes; raw-data replay, dependency invalidation, hold-out gates and rollback | ROS/Ceres/GTSAM-free coordinator; private backend adapters |
 | `localization` | Frozen-map tracking state, confidence and recovery | Read-only map |
 | `io` | Raw MCAP plus OD-012 JSON/zstd map bundles, graph/submap schemas, atomic generations and safe lazy loading | Native ROS-/Ceres-free persistence; adapters own interchange |
@@ -692,7 +692,7 @@ PGM/YAML export may aid ROS consumers but alone does not preserve all probabilit
 
 ### 7.1 Variables, gauge, and factor topology
 
-The **native portable graph model** has global keyframe `X_k = T_map_base(t_k) ∈ SE(2)` and global submap `S_j = T_map_submap_j ∈ SE(2)` variables. Each submap refers to one immutable OD-010 local log-odds grid with stable coordinate frame/ID. A keyframe timestamp is OD-004's **scan midpoint**; exact spacing/keyframe selection remains OD-015. This is a **pose-only graph initially**: OD-006 maintains wheel/gyro integration, gyro bias, covariance and continuous deskew trajectories **outside GTSAM**. Do **not** introduce duplicate GTSAM `B_k` bias states, raw wheel+yaw factors or a fixed-lag joint smoother before benchmarks justify them.
+The **native portable graph model** has global keyframe `X_k = T_map_base(t_k) ∈ SE(2)` and global submap `S_j = T_map_submap_j ∈ SE(2)` variables. Each submap refers to one immutable OD-010 local log-odds grid with stable coordinate frame/ID. A keyframe timestamp is OD-004's **scan midpoint**; **accepted OD-015** selects motion keyframes (0.20 m, 5°, 2 s moving, 0.2 s minimum). This is a **pose-only graph initially**: OD-006 maintains wheel/gyro integration, gyro bias, covariance and continuous deskew trajectories **outside GTSAM**. Do **not** introduce duplicate GTSAM `B_k` bias states, raw wheel+yaw factors or a fixed-lag joint smoother before benchmarks justify them.
 
 | Native constraint | Initial admission rule | GTSAM backend shape |
 | --- | --- | --- |
@@ -711,6 +711,39 @@ e_odom = Log( inverse(Z_odom(k,k+1)) * inverse(X_k) * X_(k+1) )
 ~~~
 
 Apply an explicitly tested SE(2) tangent convention, covariance frame transformation, source timestamp and Jacobian. **Fix the gauge exactly once.** Initialize each new `S_j` from its OD-010 anchor-frame relationship; do **not** add a high-confidence "anchor measurement" derived solely from the same odometry/local scan as an extra factor. An exact frame-definition relationship, if represented, must not redundantly constrain independent variables or prevent valid graph deformation. Test gauge rank/optimization freedom. Optimize `X_k` and `S_j` jointly; preserve immutable local occupancy while global `S_j` changes.
+
+### 7.1.1 Accepted OD-015 — Motion-adaptive keyframes and optional sparse bias knots
+
+**Independent state lifecycles:** OD-015 creates **keyframe SE(2) poses `X_k`** from timestamped OD-004 scan midpoint motion, while **OD-010 submap `S_j` creation/freeze continues at 90/180 accepted scan insertions**, not keyframe counts. Each submap has its own optimizable pose and an associated anchor keyframe, without a duplicated anchor measurement.
+
+| Keyframe selector setting | Initial value | Meaning |
+| --- | --- | --- |
+| Translation | **0.20 m** | Relative motion from last keyframe |
+| Rotation | **5° (pi/36 radians)** | Wrapped shortest yaw |
+| Elapsed time | **2.0 s while meaningfully moving** | No stationary periodic keyframes |
+| Minimum keyframe interval | **0.2 s** | Regular admission floor; tagged anchor/root exceptions |
+| Prediction uncertainty | Bounded secondary request | Depends on available geometric information and node budget |
+| Initial graph bias variables | **None** | OD-006 maintains local evolving gyro bias |
+| Optional future offline knots | **5–10 s** | Scalar yaw bias, random-walk and observable only |
+
+**Selection algorithm:** A native `KeyframeSelector` takes OD-005 valid scan IDs, OD-004 midpoint canonical nanosecond timestamps, OD-006 pose/twist/covariance and OD-008 match diagnostics; compare `T_last_keyframe^-1*T_candidate` translation magnitude and yaw (with correct wrap). Request a node on the **first** passed translation, yaw, meaningful-moving-time or evidence-backed uncertainty trigger; apply the 0.2 s minimum **after** the trigger. Log `DEFERRED_MIN_INTERVAL` and reconsider later scans rather than silently violating the minimum. Stationary periods do not create keyframes every two seconds; bias calibration may continue on raw IMU without graph nodes. Respect OD-001 domain/epoch resets, bad timestamp coverage and bounded node budgets.
+
+**Quality versus node creation:** High uncertainty only triggers earlier sampling if useful geometry is likely; high uncertainty **with low OD-008 observability** must cause OD-009 recovery or OD-022 degraded tracking, not unbounded unconstrained keyframes. A keyframe required for odom continuity or submap anchor may have **no LiDAR factor** if OD-008 quality rejects the scan. Use **one fused wheel/gyro OD-006 relative factor per actual interval between adjacent admitted keyframes**, preserving original sample/clock/bias IDs even when nodes are deferred. At most one independently validated OD-013 local LiDAR constraint per encounter; no duplicate from two overlapping submap memberships.
+
+**Anchor creation:** After OD-010's 90th accepted insertion creates a new submap, associate an existing suitable timestamped keyframe or explicitly create `SUBMAP_ANCHOR`, recording a justified 0.2 s exception. Split/recompute adjacent fused motion intervals to avoid reusing the same raw samples as independent factors. The anchor initializes `S_j` and records its local frame relationship; it is **not another high-confidence sensor factor** and must not pin `S_j` against loop-closure deformation. The OD-010 90/180 counters are **unchanged** regardless of graph node count.
+
+**Optional OD-014 offline joint refinement, never initial Pose2 graph:** Keep one evolving `b_g(t)` in OD-006 initially. After independent bias-drift/temperature/observability validation, an offline version may introduce sparse scalar knots `b_j` every **5–10 s** (same OD-001 acquisition epoch) with:
+
+~~~text
+b_(j+1) = b_j + w_j
+w_j ~ N(0, q_b * Delta_t_j)
+Var(w_j) = q_b * Delta_t_j
+// q_b: (rad/s)^2 per second; Delta_t_j in seconds
+~~~
+
+A random-walk factor alone does not couple bias to pose. The optional model must **replace** corresponding baseline fused odom factors with tested **planar wheel+gyro bias-aware relative-motion factors** that explicitly couple pose/yaw to interpolated knots and preserve correlations, instead of double-counting gyro/wheel measurements. GTSAM's 3D IMU preintegration is not directly interchangeable with this planar wheel/gyro model. Keep unobservable bias fixed/appropriately constrained (wheel slip is not bias evidence), selectively re-deskew/rebuild changed submaps via OD-014 and preserve raw intervals, calibration and factor IDs in OD-012. Enable knots only if held-out accuracy and uncertainty consistency improve.
+
+**Portable boundary/test:** Native C++20 `KeyframeSelector`, `KeyframeDecision`, `KeyframePolicy`, `SubmapAnchorAssociation` and `BiasKnotPlan` expose only domain SE(2), time, source IDs and uncertainties; no ROS, Ceres, GTSAM or device types. Docker B23 checks 0.20 m/5°/2 s/0.2 s edges, no stationary flooding, OD-008 null-rank factor abstention, distinct anchor/pose variables, unchanged 90/180 counts, source interval nonduplication, optional 5/10 s random-walk variance/Jacobians and OD-014 replay.
 
 ### 7.2 Correlated evidence and admitted factors
 
