@@ -517,9 +517,9 @@ Every pose output should carry a reference frame, source timestamp, covariance/q
 - **Local optimization:** Ceres Solver.
 - **Graph optimization:** GTSAM.
 - **Recording:** MCAP; ROS 2 adapters optional.
-- **Maps:** Native versioned map bundle with occupancy grid, submaps, and distance fields.
+- **Maps:** **Accepted OD-012** JSON-manifest directory + independently compressed portable binary authoritative occupancy/graph; OD-011 EDT/correlation caches optional and regenerable.
 - **Platforms:** Linux ARM64 and x86-64 with portable core algorithms.
-- **Testing:** Unit tests, synthetic-sensor tests, deterministic dataset replay, and local benchmark executable.
+- **Testing:** Unit tests, synthetic-sensor tests, deterministic dataset replay, portable map/checkpoint B20 integrity/fault tests and local benchmark executable.
 
 Suggested source layout:
 
@@ -548,6 +548,44 @@ docs/
 
 Do not add automatic GitHub Actions triggers by default; prefer local tests and builds. If CI workflows are introduced, keep them manual (**workflow_dispatch**) unless explicitly requested otherwise.
 
+### 10.1 Accepted OD-012 — Platform-independent native map bundle and checkpoint format
+
+The initial persistent map representation is a **directory** containing a strictly parsed **JSON `manifest.json`** and **fixed-width, explicit-endian, independently Zstandard-compressed binary payloads**. Authoritative state includes OD-010 local log-odds occupancy **plus an explicit observed/unknown mask**, per-submap local frames (including yaw), resolution/dimensions, scan-insertion/lifecycle metadata, separately versioned graph poses, graph nodes/constraints/uncertainties and required calibration/time/reconstruction information. The OD-007 EDT and OD-009 score pyramid are **OD-011 optional cache files**, each keyed to an exact occupancy source/config hash, and may always be regenerated. Never serialize GTSAM/Eigen/C++ object memory directly.
+
+**Directory generation model:**
+
+~~~text
+building_a.slam/
+  CURRENT                           # checkpoint generation ID, atomically replaced
+  generations/
+    000000000001/
+      manifest.json                 # schema version, map identity, indexed file hashes
+      graph.bin.zst                 # versioned factor/node/pose/information records
+      submaps/
+        sm_000001.bin.zst           # log-odds + observed mask, independently loaded
+      cache/
+        sm_000001.edt.bin.zst       # optional, exact source/config revision
+        sm_000001.corr.bin.zst      # optional
+      checkpoint/state.bin.zst      # only for resumable live sessions
+      preview.png                   # optional visualization
+~~~
+
+A one-off localization export MAY instead use a single self-contained directory containing the manifest and its files. **Repeated saves always write immutable numbered generations** with a small atomic `CURRENT` pointer, not in-place overwrites or rename-over-nonempty-directory assumptions.
+
+**Manifest fields:** magic/type and major/minor version; required/optional features and compatible-reader requirements; map ID, generation/provenance, `bundle_kind`; REP-103/105 coordinate/SE(2) frame conventions, units, tangent/covariance ordering; submap IDs, local map origin/yaw, width/height/resolution and insertion IDs; OD-010 occupancy encoding/prior/hit/miss/unknown policy; per-file relative path, role, payload version, codec, **compressed and uncompressed sizes and SHA-256**; graph revision/factor IDs/references; extrinsics, gyro/wheel and clock-calibration identifiers; OD-001 timestamp domain/epoch/session mapping; and optional cache config/source hashes. Unknown safe optional JSON fields may be ignored; unknown **required features/incompatible major** must be rejected and reported.
+
+**Binary encoding:** Define per-payload magic/version, bounded record counts and lengths, fixed-width integers, explicit **little-endian byte order**, specified IEEE-754 floats where needed, finite pose/covariance validation, cell-index ordering, packed observed bits and row-major log-odds values with documented quantization/precision. Do not encode `size_t`, compiler padding or native matrix layouts. Each frozen submap is **one independently decompressible zstd frame/file**; graph/checkpoint payloads may also be independently compressed. RFC 8878 is the transport-independent zstd format, but does **not** provide arbitrary random access *within* a compressed frame. Implement bounded streaming/decompression and reject malicious window sizes, size overflows and unsupported codec options before allocating.
+
+**Publication and recovery:** Capture a consistent immutable occupancy **and pose-graph** snapshot first (live resume also needs estimator/active/clock/replay state). Write a **new same-filesystem staging directory** and all payloads, sizes/checksums and manifest; validate cross-file IDs/required features then **fsync files and directories as supported**. Rename staging to an **unused immutable generation name**, sync the parent directory, write/fsync a temporary `CURRENT` file, atomically replace `CURRENT`, and sync its directory. Keep a prior validated generation. Never overwrite the live bundle or expose half-built output; loaders pin one generation and **validate all required authoritative files** before publishing to runtime. On interruption recover the newest fully valid compatible generation (bounded scan), ignoring leftover staging; optional invalid cache files are discarded/rebuilt. Atomic rename alone does **not** ensure power-loss durability on every filesystem, so fail safely or report unsupported guarantees when flush/rename/directory sync semantics are insufficient.
+
+**Strict loader limits:** Validate SHA-256 of stored bytes, relative path containment (no traversal, absolute paths, symlink escape), duplicate IDs, cross-references, feature/format versions, record size/count/decompression caps, finite transformations and covariance, matching observed-mask dimensions and source hashes. A partially valid required graph/submap **must not** reach the SLAM runtime. Optional cache/preview failure must not invalidate an otherwise valid map. Migration uses an explicit new generation, preserving the prior compatible source.
+
+**Bundle kind matters:** `LOCALIZATION_MAP` contains a sufficient frozen map, graph and matching/calibration metadata for read-only localization. `RESUMABLE_CHECKPOINT` also contains active submap builders, OD-006 bias/covariance/trajectory, graph continuation state, insertion/replay cursor, exact input identity and **OD-001 clock-domain/session/epoch and conversion provenance**. Monotonic Pi timestamps **do not retain the same epoch after reboot**; initialize/validate a new mapping for live resume. Never claim resume from a map-only export or infer acquisition time from bundle creation wall time. OD-024 governs periodic replay checkpoint policy.
+
+ROS/Nav2 YAML + PGM or OccupancyGrid adapters remain **separate and explicitly lossy** relative to native graph/submap/time state. Single-file packaging and database-backed persistence are deferred. The native loader/writer public interface MUST compile without ROS, Ceres, GTSAM serializers, Pico or sensor drivers; the GTSAM graph adapter converts native versioned factor records behind a separate boundary.
+
+**Acceptance:** Docker Catch2 B20 tests must round-trip exact log-odds/observed flags, rotated origins, graph factors/uncertainties, schema/major-minor versions and clock sessions; cross-platform endian/golden vectors, individual zstd submap lazy reads, SHA corruption and optional-cache rebuild, malicious paths/oversized decompression, crash injection around staged writes/rename/pointer and bounded previous-generation recovery; map-only vs complete resumable checkpoint behavior. Profile Pi 5 flash writes, compression memory/time, lazy load and p95 save/load latency before choosing resource limits. See [OD-012](open-design-choices.md) and [Architecture Section 10.1](architecture-specification.md).
+
 ## 11. Performance goals and resource policy
 
 These are **target budgets to benchmark**, not measured hardware performance:
@@ -575,7 +613,7 @@ Measure end-to-end **capture-to-pose latency**, not only Ceres solve time. Use b
 - Synthetic moving-wall/apartment/warehouse scans proving **midpoint-referenced** rotational and translational deskew, full interpolation eligibility, 10 ms quality-gated extrapolation and rejection of 10.1 ms or uncertain/gapped scans.
 - OD-007 Ceres EDT/bilinear/per-beam Huber/prior/boundary; OD-008 LiDAR-only rank/uncertainty; **OD-009** covariance-bounded correlative search, admissible BnB bounds, multiple hypotheses, cancellation and mode budgets; no posterior double counting.
 - GTSAM custom factor Jacobians, bias recovery, covariance scaling, loop-closure gating.
-- Map-bundle round-trip, version rejection, artifact integrity, and replay determinism.
+- **OD-012 B20** map-bundle platform-independent binary/JSON round-trip, required-file SHA and size verification, strict version/clock-domain checks, malicious loader bounds, atomic generation fault recovery, lazy zstd submap loading and cache regeneration; replay determinism.
 
 ### 12.2 Recorded-data benchmarks
 
