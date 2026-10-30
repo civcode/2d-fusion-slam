@@ -410,7 +410,7 @@ The offline backend MUST optimize **global keyframe poses `X_k=T_map_base(t_k)` 
 - **At most one primary local LiDAR keyframe-to-submap factor per keyframe/encounter**, admitted only from **separate LiDAR-only geometric evidence**, not OD-007's odometry-conditioned posterior pose. Preserve both insertion memberships when scans are included in two active OD-010 submaps.
 - **Validated loops** to submaps **not containing the query scan**, with overlap/shared-evidence deduplication, OD-008 geometry/observability and robust loss after validation.
 - **No GTSAM bias state or joint trajectory** initially; OD-006 handles stationary/online gyro bias, high-rate motion and OD-004 deskew outside the graph. Full joint state, optional **OD-015** 5–10 s sparse scalar yaw-bias knots and planar bias-aware motion factors are deferred offline extensions requiring OD-014 validation; live iSAM2 remains OD-019.
-- **Batch GTSAM optimization initially**, asynchronously; iSAM2 can be enabled later with OD-019 compute/queue policy and a demonstrated benefit.
+- **OD-013 full keyframe/submap graph remains batch-first offline**. **Accepted OD-019** adds an online sparse global **submap-only iSAM2** graph as Stage I; the separate local fixed-lag GTSAM smoother is conditional.
 
 For an admitted local LiDAR relative pose `Z_jk = T_submap_j_base(t_k)`:
 
@@ -471,7 +471,7 @@ This correlation is not removed by providing `Sigma_odom` and `Sigma_lidar` sepa
 
 Graph factor admission occurs **after** OD-007 geometry refinement and OD-008 rank/quality checks; no raw optimizer output bypasses the provenance/duplication guard. A pose graph includes one documented gauge reference, keyed `X_k/S_j`, fused interval odometry, at most one primary local LiDAR factor per encounter and non-self verified loops. **Accepted OD-015** chooses motion/quality keyframe timing and independent anchors; **accepted OD-018** governs spatial/signature frozen-submap loop retrieval, OD-019 live iSAM2, and OD-014 optional versioned offline re-deskew/remap.
 
-Run initial **GTSAM batch LM/Gauss–Newton** on an offline worker, not sensor acquisition threads. Verify finite errors and a consistent graph revision before publication. Global optimization may revise `X_k/S_j` and therefore `T_map_odom`, but **must not change continuous `T_odom_base` or any frozen local occupancy/EDT/correlation cache**. Map global correction can jump; its time, status and quality are tracked (OD-022). The resulting versioned graph and evidence references are saved by OD-012.
+Run initial **GTSAM batch LM/Gauss–Newton** on an offline worker, not sensor acquisition threads. **Accepted OD-019** independently adds sparse global submap iSAM2 during online mapping; a second local graph remains optional. Verify finite errors and a consistent graph revision before publication. Global optimization may revise `X_k/S_j` and therefore `T_map_odom`, but **must not change continuous `T_odom_base` or any frozen local occupancy/EDT/correlation cache**. Map global correction can jump; its time, status and quality are tracked (OD-022). The resulting versioned graph and evidence references are saved by OD-012.
 
 **Acceptance tests:** Docker Catch2/GTSAM tests for gauge/Jacobians, fused interval factor uniqueness, A/B overlapping submap memberships, scan self-match and duplicate-loop admission, OD-007 prior-regularized posterior rejection, OD-008 rank-deficient factor abstention, known synthetic corridor/loop truth, overlapping map correlation consistency, robust wrong-loop rejection and frozen hashes unchanged under graph pose updates. Measure B21 graph residual/ATE/RPE and held-out uncertainty calibration, solve time/memory, graph density, asynchronous no-blocking and native headers without GTSAM. See [accepted OD-013](open-design-choices.md) and [Architecture Section 7](architecture-specification.md).
 
@@ -501,6 +501,49 @@ Run initial **GTSAM batch LM/Gauss–Newton** on an offline worker, not sensor a
 **ROS-/GTSAM-independent graph input:** A native `LoopCandidateRetriever`/`LoopVerifier`/`LoopDecision` (OD-017 domain interface) carries query/target/source membership, OD-001 time/epoch, OD-011 occupancy/score/descriptor config hashes, graph-pose revision, covariance/observability and validation state, not Ceres, GTSAM, ROS or IPC types. Implement spatial/descriptor retrieval in internal `slam_frontend`, Ceres in `slam_match_ceres` and GTSAM in `slam_graph_gtsam`; do not create a ninth initial library. OD-014 remapping invalidates and regenerates loop candidates, affected derived signatures and factors when local geometry actually changes, while global rigid corrections leave local descriptors unchanged.
 
 **Acceptance (B26):** Docker Catch2 tests on exact synthetic apartment revisits with accumulated odom drift and repeated-shelving warehouse false loops; known/unknown and OD-005 partial scan descriptors; OD-010 A/B shared scans/self-match; OD-009 admissibility and top-K/time-limit results; OD-007 wrong-prior contamination; OD-008 LiDAR-only Hessian/rank/covariance and multimodal ambiguity; OD-013 overlap/graph provisional rejection and rollback; concurrent OD-011 version updates; Stage I vs Stage II recall@K/precision and unblocked Pi acquisition/localizer CPU/p95/p99. These are future tests, not measured outputs. See [accepted OD-018](open-design-choices.md), [Architecture Section 7.3.1](architecture-specification.md).
+
+### 7.3.2 Accepted OD-019 — Sparse online submap iSAM2 and conditional fixed-lag smoothing
+
+**Stage I (implement first):** Keep the OD-006 continuous wheel/gyro SE(2) estimator, bias correction and OD-004 deskew outside GTSAM. Add **ONE persistent global submap-only Pose2 iSAM2 graph** in the OD-016 SLAM process, using OD-017 internal `slam_graph_gtsam`. Retain every historical OD-010 submap pose `S_j` for global loop correction, and admit source-provenance-validated condensed inter-submap constraints and OD-018 verified loop factors. Do **not** add all keyframe states, an initial local GTSAM fixed-lag smoother or gyro-bias knots to this online graph. Keep the full OD-013 `X_k,S_j` batch graph independently reconstructible **offline**.
+
+**Stage II only if validated:** A second, bounded GTSAM local smoother may keep **30–60 s** of OD-015 keyframes (target cap **150–200**) and **two active OD-010 submaps plus recently frozen boundary**. Add it only if held-out accuracy/uncertainty improves or bounded local graph complexity requires it; the initial Stage I system has no local GTSAM smoother to marginalize. OD-010's 90/180 scan insertion policy and OD-015 keyframe selection remain independent.
+
+**Marginalization and correlated evidence:** For eliminated keyframes `m` and retained boundary/submap `b`:
+
+~~~text
+H = [ H_mm   H_mb ]    g = [ g_m ]
+    [ H_bm   H_bb ]        [ g_b ]
+
+H_reduced = H_bb - H_bm * solve(H_mm, H_mb)
+g_reduced = g_b - H_bm * solve(H_mm, g_m)
+~~~
+
+Use stable factorization, appropriate gauge/rank treatment, the **full joint separator block and RHS**, preserved off-diagonal cross-information, original linearization point and source factor IDs. **Do not** split one dense multi-submap separator into fictitiously independent pairwise factors or convert nullspace into full-rank confidence. Nonlinear marginalization is a **linearization-dependent approximation**. Transfer a summary with explicit supersession/conditional information ownership: never let the global graph and local smoother count identical wheel/gyro/deskew/scan sources twice. GTSAM `ISAM2UpdateParams::removeFactorIndices` is a **factor removal mechanism, not statistical marginalization**; follow tested solver-version legality, Bayes-tree ordering and leaf restrictions.
+
+**Summarized global constraints:** An OD-010 anchor and A/B overlapping submap membership are frame/source associations, **not independent measurements**. OD-013's fused odometry and LiDAR-only geometric evidence must be summarized with calibrated OD-008 rank/covariance, recorded OD-011 source hash, scan/gyro/wheel intervals and cross-correlation groups. A submap-only global graph **must not carry original keyframe likelihoods plus condensed copies**, or multiple independently weighted edges from substantially the same historical scan sets. **Defer an unsupported summary** rather than fabricate precision. Rejected/duplicate loops (OD-013/018) may be removed; valid factors must not be arbitrarily pruned solely to shrink the graph.
+
+**Initial unmeasured Pi 5 compute/growth targets:**
+
+| Metric | Initial budget | Applicable |
+| --- | --- | --- |
+| Local keyframe history | **30–60 s** | Stage II optional only |
+| Active keyframes | **~150–200 cap** | Stage II; safe marginalization, not raw factor deletion |
+| Local submaps | **Two active + recently frozen boundary** | Stage II |
+| Historical submaps | **All remain in global graph** | Stage I/II |
+| Global update | **Event-driven batched new factors** | Not per beam/scan |
+| Local completed update p95 | **<20 ms** | Stage II only |
+| Ordinary global completed update p95 | **<50 ms** | Stage I/II |
+| Large loop closure | **Longer bounded background work** | Does not block acquisition/localizer |
+| Work queue | **Bounded and coalesced where safe** | Exact size/overflow OD-021 |
+| Cleanup | **On demand/offline checkpoint** | Full OD-013 batch graph |
+
+The OD-010 new-submap period is ~90 *accepted* scan insertions; **10 accepted scans/s** gives **36000/90≈400 submaps per hour** as a hypothetical rate, not measured hardware acceptance. The global submap graph therefore grows and may eventually need explicitly designed regional partitioning; preserve historical `S_j` for OD-018 loops meanwhile.
+
+**Safe iSAM2 scheduling:** OD-016 runs a lower-priority bounded graph worker, batches OD-013-admitted summaries/verified loops on events, and pins coherent OD-011/013 snapshot/source revisions. **Do not interrupt an active `ISAM2::update` midway** because its elapsed time reached 20/50 ms. Apply admission deadlines, max queued work and cancellation **before or between** solver updates, or discard independent candidate copies. Measure actual *completed* update latency. Tune `ISAM2Params` relinearization thresholds/skip/reordering, factor-slot reuse and memory after profiling, not by dropping valid constraints. A completed finite/consistent result may atomically publish a versioned global `T_map_odom` correction/`S_j` pose set after source/version checks; continuous OD-006 `T_odom_base` must not jump. Large-loop work and graph backlog are `DEGRADED`/resource diagnostics, not a reason to delay sensor capture.
+
+**Offline rebuild and checkpoint:** Retain OD-005 original scan IDs and raw OD-006 wheel/gyro intervals, OD-008 geometry and uncertainty, OD-010 memberships, OD-011 versions, OD-013 original factor-source and correlation groups, OD-018 loop decisions and OD-015 keyframe time history. OD-012 bundles hold authoritative maps and graph state, **but OD-014 full re-deskew requires separate original MCAP/raw acquisitions and clock calibration**. At offline checkpoints, reconstruct the **full OD-013 keyframe/submap batch graph** from originals, excluding superseded summaries and rejected constraints, optionally run bounded OD-014 selective remap, validate held-out truth/consistency/loop quality and finite covariance, then publish a fresh immutable OD-012 generation. Reject stale cleanup outputs if live graph changes occurred; retain last accepted graph for rollback.
+
+**Portable boundary/B27:** `GlobalSubmapGraph`, `SubmapSummaryFactor`, `SeparatorInformation`, `LocalWindowPolicy`, `GraphWorkBudget` and `GraphReconstructionPlan` use portable SE(2), calibrated cross-information, source IDs and revision metadata without ROS, Ceres, GTSAM or IPC types; only `slam_graph_gtsam` owns solver objects. Benchmark **B27** measures sparse Stage I against offline OD-013 batch truth, optional Stage II exact Schur vs linear batch, correlated source factor dedup and large-loop relinearization, 30/60 s–150/200 keyframe bounds, 20/50 ms p95 completed update goals, sustained graph growth/memory and offline rebuild/atomic rollback. See [OD-019](open-design-choices.md) and [architecture Section 7.3.2](architecture-specification.md).
 
 ## 8. Operating modes
 
