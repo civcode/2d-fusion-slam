@@ -76,7 +76,8 @@ Component ownership and forbidden dependencies:
 | `scan_assembly` | Fixed-seam generic timed-beam grouping, partial coverage, missing sectors and return validity | No LD19 packet or ROS dependency |
 | `deskew` | Per-beam transformation into temporal midpoint laser frame, full-coverage validation and provenance | No device/ROS/optimizer dependence |
 | `mapping` | Authoritative occupancy grids and log-odds, submap builders, frozen snapshots and versioned derived EDT fields | No direct GTSAM or Ceres dependency |
-| `frontend_ceres` | Truncated EDT bilinear matcher, per-beam Huber, OD-006 whitened prior, separate boundary residuals, quality and LiDAR-only evidence | No ROS/device I/O; Ceres private behind native ScanMatcher |
+| `frontend_ceres` | OD-007 EDT/Ceres solve and **LiDAR-only** residual/Jacobian extraction with separate prior/boundary diagnostics | No ROS/device I/O; Ceres private behind native ScanMatcher |
+| `match_quality` | OD-008 robust PSD information, normalized rank/eigenvectors, calibrated full covariance or observable subspaces and acceptance | Native C++20/Eigen; no Ceres, ROS or sensor SDKs |
 | `backend_gtsam` | Factor graph, loop factors, bias states, optimized graph revisions | No acquisition/UI ownership |
 | `localization` | Frozen-map tracking state, confidence and recovery | Read-only map |
 | `io` | MCAP/native datasets, versioned maps, conversion/report schemas | No ROS runtime requirement |
@@ -431,7 +432,7 @@ E(T) = 0.5 * sum_i Huber_delta( r_i(T)^2 )
 
 ### 5.3 Evidence separation and acceptance
 
-**Crucial OD-006/OD-013 compatibility:** The regularized optimized pose combines **LiDAR + a wheel/gyro odometry prior**. It is a **posterior pose**, not a statistically independent LiDAR observation. If GTSAM separately receives wheel and gyro factors from those same measurements, it MUST NOT receive that posterior pose as an independent LiDAR-only factor. Instead preserve separate **LiDAR-only geometric measurement/diagnostics**, prior provenance/covariance and the final regularized pose; graph factor strategy and correlated uncertainty are explicitly still **OD-008/OD-013**. Do not assert an exact independent LiDAR covariance merely by subtracting prior information from a posterior Hessian; deskew/map conditioning is correlated.
+**Crucial OD-006/OD-013 compatibility:** The regularized optimized pose combines **LiDAR + a wheel/gyro odometry prior**. It is a **posterior pose**, not a statistically independent LiDAR observation. If GTSAM separately receives wheel and gyro factors from those same measurements, it MUST NOT receive that posterior pose as an independent LiDAR-only factor. Instead preserve separate **LiDAR-only geometric measurement/diagnostics**, prior provenance/covariance and the final regularized pose; **accepted OD-008** specifies LiDAR-only rank/uncertainty assessment; correlated graph factor extraction remains **OD-013**. Do not assert an exact independent LiDAR covariance merely by subtracting prior information from a posterior Hessian; deskew/map conditioning is correlated.
 
 The native **`ScanMatcher`** returns pose, convergence and failure reason; **LiDAR-only score and geometric-only information/eigenvalues**; inliers/overlap and informative/nontruncated counts; raw/robust residual quantiles; prior pose/covariance and cost; boundary/unknown/outside counts and costs; solver iterations/runtime; source scan/calibration and pinned occupancy/EDT revision; and conservative pose uncertainty (or an explicitly unavailable status).
 
@@ -441,7 +442,7 @@ The native **`ScanMatcher`** returns pose, convergence and failure reason; **LiD
 2. Sufficient known/observed supported-map **overlap** and spatial distribution of informative LiDAR endpoints; unknown/out-of-grid samples cannot count as valid inliers.
 3. Finite geometric residual statistics, bounded outlier fraction and rejection of **boundary-dominated** or truncation-saturated solutions.
 4. **LiDAR-only** observable SE(2) directions from geometry-only information/Hessian, with condition/eigenvalue diagnostics evaluated **without** the odometry prior and boundary term; a strong prior may stabilize a pose but does **not** make the scan informative.
-5. Convergence status plus pose jump and Mahalanobis consistency against the OD-006 prediction, with thresholds/uncertainty rules tuned in **OD-008**. A solver `SUCCESS` flag or low posterior objective is insufficient by itself.
+5. Convergence status plus pose jump and Mahalanobis consistency against the OD-006 prediction, with **accepted OD-008** rank/quality gates and held-out-calibrated thresholds. A solver `SUCCESS` flag or low posterior objective is insufficient by itself.
 
 **Graph information table:**
 
@@ -451,6 +452,52 @@ The native **`ScanMatcher`** returns pose, convergence and failure reason; **LiD
 | Gyro rate | Bias-corrected trajectory, odometry prior and deskew | Yaw/bias factors | Propagate shared conditioning and covariance conservatively |
 | LiDAR hits | Separate geometric EDT residual | Geometric scan-to-submap / loop evidence | Separate from prior and boundary terms; avoid map self-matching |
 | Map support | Interpolation/validity and boundary residual | Immutable reference revision | Boundary penalty is **not** observed wall geometry |
+
+### 5.3.1 Accepted OD-008: independent quality/uncertainty evaluation
+
+**Separation of responsibilities:** The private **Ceres adapter** optimizes the OD-007 prior-regularized pose and returns **only LiDAR residuals/Jacobians** plus solver, prior, map and acquisition diagnostics through native types. A separate native C++20/ Eigen **`MatchQualityEvaluator`** performs information analysis, covariance calibration and final correction gating **without linking to Ceres, ROS or device SDKs**. Solving a regularized objective and judging geometric reliability are separate operations.
+
+For each valid, observed, map-supported, nontruncated beam, `r_i` is the normalized OD-007 scalar `sqrt(w_i^beam)/sigma_i * D(q_i(T))`, `J_i` its 1×3 SE(2) tangent Jacobian, and `alpha_i=rho_delta'(r_i²)` its **Huber influence**. `w_i^beam` is already inside `J_i`; do **not** apply it again.
+
+~~~text
+H_L = sum_i alpha_i * J_i^T * J_i     // LiDAR geometry only, PSD
+// Exclude: OD-007 odometry prior, out-of-grid penalty, invalid/
+// unsupported/unknown points, graph priors and map-update factors.
+
+delta_xi = S*z     // physical tangent scaling; x/y metres, yaw radians
+H_norm = S^T * H_L * S = V diag(lambda_1, lambda_2, lambda_3) V^T
+rank_obs = count(valid information eigenvalues)
+~~~
+
+`S` is a **recorded normalization** with meaningful pose scales. Never compare unscaled mixed-unit Hessian eigenvalues as an invariant degeneracy test. A robust `rho''` curvature term is **excluded** from this PSD influence-weighted Gauss–Newton information; compare the implementation to Ceres manifold-aware Jacobian evaluations, rather than assuming Ceres's built-in covariance yields identical numbers.
+
+**Rank and covariance:**
+
+- For **rank 3 and acceptable condition**, `Sigma_raw≈H_L^-1`; calibrate `Sigma_match=K*Sigma_raw*K^T+Sigma_floor`, with validated finite inflation and symmetric PSD model-error floor. Track calibration ID, training/evaluation split, tangent frame and covariance status. Noise normalization, correlated LiDAR beams, conditioned deskew and uncertain occupancy invalidate any claim of exact independent covariance.
+- For **rank 0–2**, return **observable-space information/directions and null-space directions explicitly**, with unavailable/unbounded variance in unsupported dimensions. **Never** reinterpret the pseudo-inverse or a covariance floor as a valid full-rank covariance. The evaluator may **project** the correction relative to OD-006 predicted pose into the normalized supported subspace, preserving unsupported predicted coordinates, and recheck quality; otherwise **reject**. The resulting pose carries `ACCEPT_PROJECTED` or a reasoned rejection, **not** a full-confidence global fix.
+- Define separate **full covariance**, **observable subspace only**, and **unavailable** uncertainty states. The ROS adapter must not fill missing/degenerate directions with falsely small finite covariances; suppress or clearly degrade outputs when native uncertainty cannot be faithfully converted. GTSAM graph factor handling with rank deficiency and shared wheel/gyro evidence remains **OD-013**.
+
+**Quality gates, including rejection reasons:** Require solver termination/finite Jacobians; OD-005 valid-hit angular distribution, support and OD-004 time coverage; known-map overlap and informative nontruncated beams; LiDAR-only robust raw/residual statistics and outlier rate; normalized eigen-rank and conditioning **excluding the motion prior/boundary**; predicted-pose innovation using conservative correlation-aware uncertainty; OD-003 beam-time accuracy, OD-006 slip/bias/source gaps, map/EDT revision and calibration validity. Strong odometry may stabilize the returned posterior but must **not** improve LiDAR-only observable rank. Publish diagnostics for accepted and rejected scans, including all prior/EDT IDs and reasons.
+
+**Versioned calibration:** Fit `K`, `Sigma_floor` and rank/innovation/quality thresholds on held-out apartment/warehouse and genuinely independent trajectory-reference data. Include corridors, corners, open regions, partial scans, high speeds and degraded encoder/IMU/timestamps. Report covariance coverage, false accept/reject, overconfidence and runtime; distinguish synthetic exact from LiDAR-derived self-reference. An optional offline bootstrap can cross-check estimates but must acknowledge correlated beams.
+
+~~~text
+Ceres EDT solve -> native r_i/J_i + prior/boundary/solver diagnostics
+                                |
+                 MatchQualityEvaluator (no Ceres/ROS)
+                                |
+           H_L -> physically scaled rank/eigen-directions
+                   /                             \
+          rank=3, calibrated                 rank<3
+          full covariance                 observable subspace
+                   |                         /          \
+             ACCEPT_FULL               PROJECT      REJECT
+                   \                         |          /
+                 native MatchResult + reason/provenance
+                  -> localizer / Web Lab / guarded OD-013 graph
+~~~
+
+**Test obligations:** Docker Catch2 unit tests with hand-constructed rank 0/1/2/3 Jacobians, Huber influence vs original beam confidence, PSD and frame scaling, prior-independent rank, finite covariance calibration, projected null-space preservation, nonfinite/outlier rejection and missing data. Ceres-linked integration tests verify extracted Jacobians and optional `ceres::Covariance` comparison; held-out B16 benchmark calibrates error/coverage and false accepts. No dependency creep into public domain interfaces.
 
 ### 5.4 Private Ceres implementation and replaceable frontend
 
@@ -630,7 +677,7 @@ All tests run **inside Docker**, with **Catch2 v3**, CTest, C++20 and cxxopts ap
 | Device/time | LD19 CRC/47-byte parsing, 30 s wraps, angle/speed per-beam timing, LD19↔Pi clock fit, injected jitter/offset/drift and physical delay bounds; signed-ns epochs and ROS /clock; Pi/Pico acquisition faults |
 | Geometry | SE(2) composition, REP frames, rotated occupancy origin, Jacobians and extrinsics |
 | Motion/deskew | OD-006 minimal wheel/gyro integrator, bias calibration and bounded correction, supported/unconfigured drivetrain, wheel/gyro slip with covariance growth, pose–bias uncertainty, OD-004 SE(2) arcs/midpoint/10 ms gate |
-| Ceres | OD-007 EDT truncation, bilinear/unknown mask, per-beam Huber, odometry covariance whitening, explicit boundary gradients, LiDAR-only observability, correlation-safe graph export, false corridor minima and performance |
+| Ceres and match quality | OD-007 EDT/bilinear/per-beam Huber and prior/boundary; **OD-008** robust LiDAR-only Hessian/rank, scale normalization, covariance coverage and observable-subspace rejection/projection; no double-counted GTSAM factors |
 | Mapping/graph | No self-matching, immutable submaps, wheel/gyro factor independence, bias factor Jacobians, loop rejection |
 | Localization | Map->odom correctness, stale/lost states, kidnapped recovery and frozen map integrity |
 | IO/replay | MCAP and map schema roundtrip, version rejection, deterministic replay, interrupted writes |
