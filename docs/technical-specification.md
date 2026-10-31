@@ -667,17 +667,31 @@ Every native pose/status MUST contain **state/acquisition time**, separate **pub
 
 ## 9. Recording, API boundaries, and saved artifacts
 
-### 9.1 Recording format
+### 9.1 Accepted OD-023 — Native Protobuf MCAP raw recording
 
-Use the **native ROS-independent MCAP C++ writer in the recorder** for initial raw recordings; ROS 2 rosbag2 belongs to optional adapters/converters. Define portable serializable event schemas (exact channel/encoding/evolution choices remain OD-023) for:
+**One authoritative raw format:** Native MCAP C++ writer/reader and ROS-independent **`slam.recording.v1` Protobuf** messages, owned by `slam_storage`. Raw 47-byte LD19 packets and Pico transport frames are **byte-preserved**, including corrupted CRC frames where captured; sync observations, acquisition loss and config/calibration events are not replaceable with derived scans or odometry. Optional derived scans, trajectory and global-pose channels are regenerable outputs. Do not write a parallel proprietary raw-binary file; native OD-012 map/checkpoint bundles are distinct non-raw artifacts.
 
-- Raw LD19 UART frames (or exact raw packet bytes plus receive timestamps).
-- Decoded ranges, intensities, per-beam angle/time estimates and validity flags.
-- MPU6050 raw gyro/accelerometer samples, timestamps, and acquisition status.
-- Wheel tick counts or measured wheel increments, timestamps, and steering angle where available.
-- Calibration snapshot, frame definitions, clock/sync metadata, firmware/driver versions, and recording health statistics.
+| MCAP channel | Mandatory content |
+| --- | --- |
+| `/raw/ld19/packets` | Original 47-byte UART frame bytes, capture sequence, receive timestamp, integrity/framing/CRC status; preserve invalid bytes/fragments when available |
+| `/raw/pico/frames` | Unmodified Pico transport frame, Pi receive timestamp, source/on-wire sequence when present, Pico hardware tick, boot generation and integrity |
+| `/time/pico_sync` | Every four-timestamp synchronization exchange, domains/units/sequence/rejection and uncertainty evidence |
+| `/time/clock_models` | Versioned fitted offset/drift/uncertainty, calibration source observation ranges and valid clock generations |
+| `/events/acquisition` | Lost/corrupt/late frames, queue overflow, inferred angular LD19 gaps, source resets, reconnects, epoch changes |
+| `/config/calibration` | Timestamped config/extrinsics/firmware/protocol/clock setting changes, effective event IDs/revisions |
+| `/derived/odometry` | Optional OD-006 SE(2) pose/trajectory, covariance and source IDs |
+| `/derived/lidar_scans` | Optional OD-005/004 scans, deskew, return/coverage quality and raw packet refs |
+| `/derived/localization` | Optional OD-022 status, global/odom validity, calibrated covariance and global correction generation |
 
-A dataset must remain usable after decoders or deskew algorithms change. Avoid storing only angle-sorted LaserScan messages or already-fused odometry.
+**Protobuf encoding:** Every MCAP Channel must use `message_encoding=protobuf` with a referenced MCAP Schema encoded `protobuf`, its fully-qualified `slam.recording.v1.*` message name, and an embedded binary **`google.protobuf.FileDescriptorSet` with all transitive dependencies**. A rotated segment must independently include the necessary descriptor sets, channel metadata, schema hash, source/firmware/config revisions and session identity. Use `syntax="proto3"`, explicit presence (`optional` where appropriate), declared units and identifiers, stable tag numbers and reserved retired fields; incompatible changes require a separately versioned namespace or documented checked migration. A dynamic reader must decode using **only the embedded descriptor**, not source-specific installed `.proto` files. `RawSensorFrame` records at minimum source ID, host acquisition sequence, **original signed host receive nanoseconds plus its clock domain/epoch**, optional device ticks, source clock generation, raw payload bytes and integrity status; separate messages represent `PicoSyncExchange`, `ClockModelEstimate`, `AcquisitionEvent`, `CalibrationUpdate` and optional derived results.
+
+**Timestamp contract:** MCAP Message `log_time` and `publish_time` are **uint64 nanoseconds since an explicitly declared user-defined epoch**. `log_time` uses host-monotonic Pi receive time mapped by checked subtraction to **nonnegative recording-session-relative nanoseconds**. Use actual producer publication time for `publish_time` only when known and converted into the **same epoch**, else use `log_time` and document fallback. **Never substitute LD19 physical per-beam time or Pico device ticks into publish_time**. Payload must retain original OD-001 signed-ns host/canonical acquisition times and clock-domain, epoch, generation, raw device ticks/counter rollover, receive latency and timing uncertainty. MCAP file/segment metadata must persist Pi monotonic origin and boot/session ID, clock time units, host-to-canonical/wall mappings and uncertainties, calibration/effective generation, source stream IDs and clock resets. Reject incompatible epochs, overflow and negative-to-uint64 conversions; do not silently clamp or cast.
+
+**Observed versus inferred gaps:** LD19 has **no on-wire packet sequence**. A host-assigned increment detects lost events only *after sequence assignment*, whereas angular/speed/timing discontinuities may suggest missed UART data **before capture**; label these inferred and uncertain. A Pico's on-wire sequence (if supplied) is a separate native field and can diagnose upstream transport gaps. Preserve bad CRC original bytes when buffered, do not silently discard them or synthesize payload, and persist acquisition/recording loss events with sequence ranges, source sessions and epoch validity.
+
+**Replay and reprocessing:** Persist cross-source original **ingest/order index**, tie breaker, source timestamps and calibration-effective boundaries. Replay reads the complete raw+events evidence in deterministic acquisition order rather than trusting MCAP `log_time` sort alone; keep loss/clock discontinuities, invalid data and source restart semantics. **All** Pico four-timestamp sync observations (including rejected/outlier samples) and original LD19 packet timing let OD-002/003 and OD-014 refit offset/drift/physical delay and reconstruct beams, deskew and fusion differently. Never require optional derived channels to reproduce raw-based SLAM. Reader and replay live inside `slam_storage`, mapping MCAP/Protobuf implementation types privately into portable source/time/event domain contracts; no Protobuf, MCAP, ROS, Linux FD or rosbag2 types in `slam_core` or installed SLAM domain headers. ROS 1/2 adapters perform optional conversion only.
+
+**Durability and acceptance:** Follow **accepted OD-021** one writer thread, LZ4 initially, **chunk target 1 MiB or 1 s**, chunk CRC, **≤1 s target between successful OS fsyncs**, **segment rotation 60 s / 256 MiB** and separate accepted/written/synced/finalized high-water sequence. An MCAP chunk flush or socket acknowledgement is not an OS-durable ack. Missing source raw records or unverifiable continuity → **`FAILED`/`INCOMPLETE`**, even when reader can salvage a CRC-valid prefix. Schema descriptors, configuration and sync events must be recoverable/verified alongside data; preserve segment identity and record exact gaps. **B31** tests byte-exact LD19/Pico roundtrips, bad CRC, framing, Protobuf evolution/descriptors, 4-clock exchanges/refitting, epoch/uint64 boundaries, deterministic ingest order, raw-only replay, recovery/incomplete sessions and optional ROS conversion. Initial performance/compression settings require target-Pi fault-injection evidence; validation is **not yet executed**.
 
 ### 9.2 Native map artifact
 
