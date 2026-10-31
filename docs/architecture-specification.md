@@ -1018,32 +1018,71 @@ Each **bounded top-K track** has stable ID, initial candidate and frozen-target 
 **B28 acceptance (not yet tested):** Synthetic unknown/teleported SE(2) poses, repetitive corridors, rotated/reflective symmetries, partial LD19 scans, stale overconfident old pose, failed retrieval/partial coverage, odom drift/slip, multi-scan disagreement, map revision changes and worker starvation. Report **wrong global-lock rate** and refusal-to-localize separately from recovery rate/time, along with map suspension, continuous odom, CPU/RSS and pose-publication provenance. A high nominal success rate cannot excuse a false confident pose. Particle filtering is a later evidence-triggered comparison only.
 
 
-## 9. Concurrency, queue discipline, and lifecycle
+## 9. Accepted OD-021 — Bounded queues, recorder durability and overload isolation
 
-Proposed bounded execution path:
+The **four independent OD-016 processes** keep separate bounded acquisition→recorder and acquisition→SLAM routes; no acquisition UART/Pico callback waits indefinitely for disk, Ceres, GTSAM, map/cache work, ROS or Web Lab. Each queue has an enforced **item-count, byte-size and (where applicable) oldest-message age** maximum; host-steady age/deadlines are not ROS simulated time. Validate sequence, run/epoch and source IDs through every fan-out hop so that drops are explainable. Source event timestamps must never be rewritten to disguise late processing.
 
 ~~~text
-acquisition threads ---+--> raw record queue --> MCAP writer
-                       |
-                       +--> time reorder -> trajectory -> scan matching
-                                                          |
-                                               accepted pose / scan
-                                                          |
-                                         map builder / graph async queue
-                                                          |
-                                        immutable optimizer/map revisions
-                                                          |
-                                         pose / ROS / Web Lab / report
+LD19 / Pico / IMU / wheel source acquisition
+           |
+    per-source bounded rings (detect sequence/overflow)
+           |
+      nonblocking independent source/event fan-out
+       /                                  \
+raw sequence+epoch                     motion timeline
+(16 MiB / 5 s backlog)                (1 s history cap)
+       |                                  |
+RECORDER worker                     scan assembler (8 scans)
+MCAP chunks -> sink flush               |           |
+OS fdatasync/fsync                        |       OD-006 continuous odom
+segment rotation                         v
+integrity/manifest                  OD-004/007/008 local matching
+                                           |
+                                 accepted graph factors / versions
+                                           |
+                               coalesced optimizer (2 pending jobs)
+                               cache builds (1 running + 1 pending)
+                                           |
+                                coherent versioned state/snapshots
+                                           |
+                             latest telemetry / map snapshot resync
+                                           |
+                                         Web Lab
 ~~~
 
-- Acquisition threads never call optimizers, HTTP handlers or disk flush synchronously.
-- Keep distinct recording and live-estimation queue overflow policies. Recording loss must be surfaced; live estimator may skip stale scans while marking gaps.
-- Graph and loop closure work cannot block scan matching; snapshot writers publish whole coherent revisions.
-- Stop flushes storage safely and reports incomplete/truncated recordings.
-- Calibration hot changes require explicit reset or a transactional version handoff; scan processing cannot mix extrinsics mid-scan.
-- Lifecycle: `CREATED -> CONFIGURED -> CALIBRATED -> RUNNING -> DEGRADED/STOPPING -> STOPPED/FAILED`.
+### 9.1 Initial queue allocations (unmeasured Raspberry Pi defaults)
 
-Thread/process split **OD-016**, queue limits/drop and overload policy **OD-021**. UI and ROS are consumers, never timing authorities. Replay seek reinitializes time-dependent estimator state.
+| Owner / boundary | Initial cap | Full/stale behavior |
+| --- | --- | --- |
+| LD19 receive ring | **512 packets + 128 KiB** | Drain UART; detect/report lost packet IDs and invalidate raw completeness if required data lost |
+| Pico receive ring | **512 frames + 256 KiB** | Detect boot/sequence discontinuity; mark motion intervals invalid |
+| Raw acquisition→MCAP | **16 MiB or 5 s maximum age**, plus finite measured item cap | No silent raw drop; pressure alerts and sticky session failure on required loss, producer remains nonblocking |
+| SLAM motion history | **1 s**, plus count/bytes | Maintain trajectory validity; missing interval invalidates affected deskew, not interpolated as truth |
+| Completed scans | **8**, plus count/bytes/age | Drop oldest unprocessed complete stale scan with ID/time gap; never insert dropped scans |
+| Graph optimization | **2 pending**, plus bytes/jobs | Coalesce optimization triggers by target version, **not** authoritative factors/loops |
+| EDT/map cache | **1 running + 1 pending** | Supersede stale rebuild and check pinned snapshot/revision constraints |
+| Web telemetry | **1 latest state per stream** | Replace obsolete delivery without upstream backpressure |
+| Web map updates | **2 pending versions** | Abandon superseded deltas, deliver a complete versioned map snapshot on version gap |
+
+For each route implement a finite message count and payload-byte ceiling even if an initial row emphasizes time or job count; determine omitted numerical ceilings from measured largest events and worst-case burst. A limit fires on the **first of** count, bytes or permissible age. Overflow and deadline results are **explicit, metered** and deterministically replayable. A 5-second raw backlog maximum is **not** a promise to absorb all 5-second stalls on 16 MiB; both bounds apply. These settings are not Pi-tested production guarantees.
+
+### 9.2 Recording ownership and durability
+
+Only the recorder owns the native **MCAP C++ writer** and session manifest; OD-023 will separately specify channel/schema encodings. Initial writer setup: **one writer thread; LZ4** (benchmark Zstd), **1 MiB or 1 s per chunk** (whichever comes first), **chunk CRC enabled**, **successful OS disk synchronization target ≤1 s**, **rotation at 60 s or 256 MiB** (whichever first). The recorder may call MCAP \`closeLastChunk()\` at a time deadline, then flush its writable sink. Neither that flush nor a successful Unix socket send proves persistence: an FD-backed sink must separately check \`fdatasync\`/\`fsync\` (plus directory synchronization for necessary renamed manifest/segments). A failed sync or uncertain tail cannot advance the **durable high-water mark**. Log independently received/accepted, written, chunk-completed, synced and finalized source IDs.
+
+**State machine:** \`RECORDING\` → \`DEGRADED\` at **70%** queue use or latency/age warning, **critical alert at 90%**; \`FAILED\` on missing raw evidence, overflow, write/sync failure or unprovable continuity; healthy termination goes through \`FINALIZING\` to \`COMPLETE\` only after bounded drain, MCAP footer/index, successful synchronization, integrity checks and durable atomic session-manifest update. A FAILED session's incompleteness is irreversible, even if later segments are rescued or new sessions succeed. A forced crash, disk-full, interrupted chunk or unavailable device produces an explicit *recoverable-prefix* status, not an apparently complete bag. Recover only complete CRC-valid records/chunks, preserve sequence/clock discontinuities, quarantine invalid tails and do not fabricate a missing footer.
+
+### 9.3 Processing, backend and UI consistency
+
+OD-006 high-rate motion is consumed and validated independently from scan processing; loss of gyro/wheel intervals must invalidate OD-004 deskew coverage and OD-022 pose quality. Skip a complete stale scan if necessary, log processing gap and never use it for submap insertion, keyframe selection or factor admission. Long Ceres matching cannot freeze odometry. The graph owns admitted OD-013/019 factors in durable/in-process authoritative state or journal **before** a coalescible optimization request; never drop a loop closure to clear the work queue. Cancel/supersede redundant graph/cache *jobs* with version/revision checks, preserve immutable OD-011 snapshot pin limits, and degrade or pause expensive new verification when backend age grows.
+
+Web Lab streams latest local/global state and coherent versioned map snapshots; missed map deltas are repaired by requesting a full snapshot, not by buffering an unbounded history. Command authorization, acknowledgment and applied-config generations follow OD-016; *commands are not lossy telemetry*. No HTTP/WebSocket or browser deadline may propagate to acquisition/SLAM.
+
+### 9.4 Observability and fault-driven calibration
+
+Expose per-queue current/high-water items, bytes and oldest age; per-source sequence/gaps, overflow and drop reasons; lateness/processing deadline misses; graph/cache version lag and coalescing; recording queue pressure, MCAP chunk/CRC/segment status, written versus successfully-synced ranges, throughput, fsync duration/failure, recovery outcome and sticky \`INCOMPLETE\` flag. Rate-limit exported diagnostics without losing event counts and preserve deterministic replay information. Benchmark **B29** injects disk stalls/full, interrupted writes/recorder kill, acquisition outrunning SLAM, Pico loss/reconnect, multi-second graph stalls and slow/disconnected Web Lab consumers. Calibrate all initial capacities and warnings using *actual* Pi worst-case LD19/Pico rates, CPU/thermal load, SD/SSD latency and p50/p95/p99 tails. Until B29 runs, numerical bounds are recommendations only.
+
+Startup/shutdown still follows OD-016 process ownership and lifecycle (\`CREATED → CONFIGURED → CALIBRATED → RUNNING → DEGRADED/STOPPING → STOPPED/FAILED\`); recorder completeness is a **separate** session state machine. Calibration hot changes require an explicit reset or transactional version handoff. Raw MCAP remains independent of lossy SLAM/Web Lab processing; no ROS dependency is introduced.
 
 ## 10. Persistence, reproducibility and interfaces
 
@@ -1161,11 +1200,11 @@ A successful `send` or `recv` reports **transport**, not recorder `DURABLE` pers
 | OD-011 map/cache and OD-012 save | Budgeted low-priority background work | Fall back to last coherent snapshot under staleness policy; report disk/cache failure |
 | Snapshot publication | Tiny atomic versioned handoff | Drop obsolete graph/cache outputs |
 
-Use **`SCHED_OTHER` normal Linux scheduling first**, tune based on Pi 5 p95/p99 time, thermal and CPU contention. Do not assume `SCHED_FIFO` is safe; only measure bounded acquisition boost with starvation watchdog and privileges if justified. Enforce **fixed worker counts, per-edge item-and-byte queue caps, short nonblocking enqueue, bounded in-flight jobs, cancellation and backpressure**. The **exact** capacities, drop precedence and recorder fsync thresholds remain **OD-021**; they are deliberately not invented by OD-016. Timeouts for execution use host-steady clock, not pausable `/clock`.
+Use **`SCHED_OTHER` normal Linux scheduling first**, tune based on Pi 5 p95/p99 time, thermal and CPU contention. Do not assume `SCHED_FIFO` is safe; only measure bounded acquisition boost with starvation watchdog and privileges if justified. Enforce **fixed worker counts, per-edge item-and-byte queue caps, short nonblocking enqueue, bounded in-flight jobs, cancellation and backpressure**. Accepted **OD-021** provides provisional capacities, age/drop precedence, pressure thresholds and MCAP sync/rotation targets; **B29** must calibrate them on the actual Pi and storage before any timing/durability guarantee. Timeouts for execution use host-steady clock, not pausable `/clock`.
 
 **Failure recovery:** Each process has independent health, restart limits, socket/FD cleanup and session-generation checks. Acquisition restart creates source clock epoch/run discontinuities. SLAM restart cannot silently continue an old graph as if the session were identical; it requires a compatible OD-012 checkpoint or a declared new localizer session. Recorder restart rolls a segment/gap and explicitly audits incomplete recordings. A crashed Web Lab has no hardware access and can reconnect to latest coherent telemetry. Graceful shutdown must drain/finalize the recorder within a bounded policy or mark incomplete. Avoid hidden reliability claims: finite buffers cannot guarantee raw losslessness under unbounded disk stalls.
 
-**Benchmark B24:** Test four-process lifecycle and graceful/crash restarts; ordered `SOCK_SEQPACKET` versioned envelopes, `MSG_TRUNC`, `EAGAIN`, sequence gaps, clock epochs and authorization; disk full/slow recorder, stopped SLAM matcher, long graph batch, stale immutable snapshots and long-running map saves while synthetic 10 Hz LD19 + ~200 Hz gyro/wheel ingestion continues. Monitor p50/p95/p99 capture→local pose, input queue age/bytes, gap/incomplete counts, CPU/peak RSS, FDs, thermal/graph lag, false durable acknowledgments, stable odom and stale correction rejection. Optional memfd vs copying benchmark after profiling. Docker Catch2/CTest multi-process tests; no GitHub Actions.
+**Benchmark B24** tests process and IPC isolation; **B29** adds quantitative OD-021 queue, MCAP durability, replay salvage and UI resynchronization testing. B24: test four-process lifecycle and graceful/crash restarts; ordered `SOCK_SEQPACKET` versioned envelopes, `MSG_TRUNC`, `EAGAIN`, sequence gaps, clock epochs and authorization; disk full/slow recorder, stopped SLAM matcher, long graph batch, stale immutable snapshots and long-running map saves while synthetic 10 Hz LD19 + ~200 Hz gyro/wheel ingestion continues. Monitor p50/p95/p99 capture→local pose, input queue age/bytes, gap/incomplete counts, CPU/peak RSS, FDs, thermal/graph lag, false durable acknowledgments, stable odom and stale correction rejection. Optional memfd vs copying benchmark after profiling. Docker Catch2/CTest multi-process tests; no GitHub Actions.
 
 **References:** [Linux unix(7)](https://man7.org/linux/man-pages/man7/unix.7.html) and [memfd_create(2)](https://man7.org/linux/man-pages/man2/memfd_create.2.html).
 
