@@ -595,15 +595,14 @@ Offline replay must support deterministic scan selection, configurable processin
 
 Load a frozen map or indexed map tiles plus precomputed distance fields. Keep high-rate wheel/gyro odometry continuous and match each deskewed scan using Ceres in the nearby map region. Publish global correction via **map -> odom**, while **odom -> base_link** remains continuous.
 
-The localization state model includes these five states (exact hysteresis thresholds remain OD-022):
+The accepted **OD-022 localization state machine has exactly four runtime states**; unknown initialization and new-map bootstrapping are distinct lifecycle/validity conditions. Without a verified global anchor, start LOST with a no-initial-pose reason; do not pretend to be TRACKING.
 
-| State | Behavior |
+| Tracking state | Runtime behavior |
 | --- | --- |
-| UNINITIALIZED | No trusted map pose; schedule full-map OD-020 candidate search and prohibit mapping. |
-| TRACKING | Predict using wheel/gyro, then locally refine with Ceres. |
-| UNCERTAIN | Enable bounded OD-009 local correlation (±0.3 m/±10°, initially 10–20 ms), refine selected candidates with Ceres and require OD-008 acceptance. |
-| LOST | Revoke trusted global fix and suspend all mapping; schedule OD-020 map-wide OD-009/018 asynchronous BnB recovery with 360° yaw. |
-| RELOCALIZING | Propagate persistent top-K hypotheses using continuous OD-006 odom; test across subsequent LiDAR scans, geometry, ambiguity and search coverage. Publish no global correction until all gates pass. |
+| `TRACKING` | OD-006 odom prediction and fresh OD-007/008 matches, calibrated full covariance; map insertion only with ordinary nominal quality gates |
+| `UNCERTAIN` | OD-009 local correlation and OD-007 refinement may run; output predicted global pose only as restricted/uncertain with growing covariance, suspend mapping |
+| `LOST` | Revoke current global authority, suspend mapping and schedule OD-020 known-map search when sensors and clock are ready |
+| `RELOCALIZING` | Propagate and independently verify persistent top-K hypotheses under OD-020; no authoritative current global pose or mapping until accepted |
 
 The initial localizer uses the **accepted OD-006 minimal local predictor with conservative prediction/measurement uncertainty**. An EKF or GTSAM recent-state smoother may replace/enhance it later **only if benchmarks justify the complexity**. A local optimizer alone does **not** solve global or kidnapped-robot localization. **Accepted OD-009/020** supplies multiresolution branch-and-bound and persistent top-K multi-scan recovery. A persistent particle filter is **not** the initial backend; introduce or compare it only if B28 proves a need.
 
@@ -626,6 +625,45 @@ A lost/stale pose must be explicitly signaled to downstream navigation/control; 
 ### 8.3 Mode C — Full online SLAM (third priority)
 
 Reuse acquisition, high-rate prediction, deskewing, Ceres frontend, submaps, and graph definitions. Run graph optimization and loop closure asynchronously so sensor collection and local control are not blocked. Generate new global map versions while preserving a continuous odom trajectory.
+
+### 8.2.2 Accepted OD-022 — Four-state threshold, covariance and pose-output specification
+
+**Initial configurable quality thresholds (NOT field-validated):**
+
+| Metric | Normal TRACKING | UNCERTAIN condition | LOST condition |
+| --- | --- | --- | --- |
+| Age of last accepted global LiDAR update | ≤300 ms | >300 ms | >1,000 ms |
+| Local scan-match rejections | 0–1 consecutive | ≥2 consecutive, or ≥3 in last 5 attempts | ≥8 consecutive |
+| Global horizontal 1σ `σ_xy` | ≤0.15 m | >0.15 m | >0.50 m |
+| Global yaw 1σ `σ_θ` | ≤5° | >5° | >15° |
+| Acquired scan angular coverage | ≥90% | <90% | Persistently unusable scans / update-timeout |
+| Largest missing angular sector | ≤15° | >15° | Persistently unusable scans |
+| Valid map-supported endpoints | ≥50% and ≥80 | Below either | Persistent inadequate support / timeout |
+| OD-008 LiDAR observability | Full rank and conditioned | Weak/degenerate direction | Invalid uncertainty or hard bound |
+| Latest valid wheel/IMU motion sample age | ≤100 ms | >100 ms | >250 ms |
+| Clock/timestamp mapping | Valid | Bounded degraded timing quality | Invalid mapping or epoch discontinuity → **immediate LOST** |
+
+Calculate the **global calibrated** covariance metrics `σ_xy = sqrt(λ_max(Σ[0:2,0:2]))`, `σ_θ = sqrt(Σ[2,2])` on the full symmetric PSD **3×3** planar pose covariance, including x/y/yaw cross terms, graph/map uncertainty and OD-006 propagated motion noise. Reject/flag nonfinite, missing, uncalibrated or non-PSD covariance; OD-008 Ceres LiDAR-only Hessian is *not* complete global covariance. Preserve shared-source correlations from OD-006/007/008/013/019; joint covariance preferred, validated conservative inflation/quality flag if information unavailable. The 100/250 ms age limits require calibration for the implemented Pico/IMU/encoder sampling rate.
+
+**Transition order:** Critical sensor/clock/estimator validity fault → immediate LOST; hard covariance/age/rejection threshold → LOST; soft geometry/covariance/age threshold or 2 consecutive/3-of-5 rejections → UNCERTAIN; then evaluate restoration hysteresis. Use independent monotonic freshness evaluation even when no LiDAR scans arrive. Ordinary `UNCERTAIN→TRACKING` requires **5 consecutive informative accepted** scan updates over **≥0.5 s**, `σ_xy<0.12 m` and `σ_θ<4°` and full valid trajectory/source epochs. `LOST→RELOCALIZING` only with valid timeline, supported map, and initiated OD-020 search. `RELOCALIZING→TRACKING` requires a unique OD-020 candidate with sufficient full-domain search/credible-competitor exclusion, **≥5 independent informative scans over ≥0.5 s**, `σ_xy<0.20 m` and `σ_θ<7°`. On abort/critical failure return LOST; unresolved viable ambiguity remains RELOCALIZING without trusted pose. Repeated symmetric views are *not* independent confirmations. Reset streaks on incompatible clock/map revisions, bad motion interval or contradictory scan.
+
+**Relock exception:** The wider 0.20 m/7° initial OD-020 acceptance permits an explicitly **recovery-qualified/restricted** TRACKING transition with actual reported covariance, **not permission to insert map scans, add graph factors or navigate** until normal TRACKING ≤0.15 m/5° plus OD-005/008 geometry/freshness hold. Recheck soft thresholds on subsequent health evaluations and degrade to UNCERTAIN if not cleared. Never artificially tighten covariance at recovery, silently insert during uncertainty or backfill old scans.
+
+**Local innovation:** For the *ordinary local-match* SE(2) innovation `e=Log(T_pred⁻¹ T_meas)`, use `d²=eᵀ S⁻¹ e` with the properly cross-correlated innovation covariance `S`. Conditional on full-rank calibrated approximately Gaussian 3-DOF residual, `d²>11.34` is a nominal 99% chi-squared consistency rejection. Degenerate/biased/correlated likelihoods and OD-020 *global* candidates require their separate OD-008 and OD-020 geometry/ambiguity logic; the threshold is not universal. Scan quality additionally checks physically acquired sector coverage, largest gap, valid map-supported hit fraction and absolute count; bootstrap without an existing map has a **separate** supported-initialization mode rather than invalidly enforcing a 50% map-support test.
+
+**Output contract:**
+
+| Output | TRACKING | UNCERTAIN | LOST / RELOCALIZING |
+| --- | --- | --- | --- |
+| OD-006 local odometry | Nominal 50 Hz if sensor time/trajectory valid | Same conditional validity | Same conditional validity |
+| Current global pose on accepted LiDAR | Nominal ≤10 Hz, full calibrated covariance, explicit validity; recovery-qualified outputs restricted | Uncertain-only prediction with growing covariance and original fix time | **Suppress current authoritative pose**; retain historical last known only |
+| `map→odom` | Update only validated revisions | Freeze last accepted correction, mark global tracking uncertain | Not authoritative as current |
+| Map insertion/graph-derived constraints | Only normal fresh full-rank tracking | Suspended | Suspended |
+| Navigation | Valid-current pose plus independent safety | Stop/restricted by default | Disabled |
+
+Every native pose/status MUST contain **state/acquisition time**, separate **publication time**, **last accepted global LiDAR fix time**, frame/source clock domain and epoch, SE(2) pose, calibrated full 3×3 covariance plus validity/quality, `TrackingState`, `globally_valid`, `odom_valid`, age/freshness, explicit reasons, map/graph revisions and `correction_generation`. Never re-stamp a retained global fix as a current pose. Global warning is **300 ms**, invalidation **1,000 ms**, and historical last-known pose may be kept indefinitely as *historical only*. OD-004 maximum optional extrapolation outside motion state is **10 ms**, never normal map insertion. A large OD-020 relock or validated OD-013/019 loop update increments the global correction generation, without discontinuity in `odom→base_link`. A ROS REP-105 adapter must carry full pose covariance/status separately from TF and cannot continue authoritative global TF when invalid.
+
+**Validation:** New benchmark **B30** uses deterministic exact threshold edges (age, rejects, angular coverage, endpoint support, covariance eigenvalues/yaw, invalid clock mapping, missing motion, slip), held-out relocalization corridors/symmetric rooms/partial LD19, five informative scan spans, covariance calibration, preservation of local odom, map-suspension assertions, frame corrections and stale global pose republishing attempts. Run Docker Catch2/CTest + native x86/ARM64 and targeted real Pi recordings/fault injection. Initial numeric thresholds and nominal 50/10 Hz publication rates are *not measured or approved for deployment without validation*.
 
 ## 9. Recording, API boundaries, and saved artifacts
 
