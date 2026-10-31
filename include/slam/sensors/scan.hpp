@@ -19,10 +19,14 @@ struct BeamObservation {
   double angle_rad{};  // sensor-local angle in radians (unwrapped or wrapped)
   double range_m{};
   ReturnKind kind{ReturnKind::invalid};
+  std::uint64_t source_id{}; // 0 means unspecified synthetic/import source
+  std::uint64_t calibration_revision{};
 };
 
 struct AssembledScan {
   std::vector<BeamObservation> beams; // excludes missing placeholders
+  std::uint64_t source_id{};
+  std::uint64_t calibration_revision{};
   Timestamp first_acquired{};
   Timestamp last_acquired{};
   Timestamp midpoint{};

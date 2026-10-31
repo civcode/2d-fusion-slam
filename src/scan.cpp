@@ -44,6 +44,10 @@ std::optional<AssembledScan> ScanAssembler::push(BeamObservation beam) {
   const double now = phase(beam.angle_rad);
   bool crossed = false;
   if (!pending_.empty()) {
+    if (beam.source_id != pending_.back().source_id ||
+        beam.calibration_revision != pending_.back().calibration_revision) {
+      throw std::invalid_argument("mixed sensor source or calibration revision");
+    }
     const auto diff = between(beam.acquired_at, pending_.back().acquired_at);
     if (!std::holds_alternative<DurationNs>(diff) ||
         std::get<DurationNs>(diff).value < 0) {
@@ -71,6 +75,8 @@ std::optional<AssembledScan> ScanAssembler::push(BeamObservation beam) {
 AssembledScan ScanAssembler::finish(bool crossed) const {
   AssembledScan scan;
   scan.beams = pending_;
+  scan.source_id = pending_.front().source_id;
+  scan.calibration_revision = pending_.front().calibration_revision;
   scan.first_acquired = pending_.front().acquired_at;
   scan.last_acquired = pending_.back().acquired_at;
   const auto diff = between(scan.last_acquired, scan.first_acquired);

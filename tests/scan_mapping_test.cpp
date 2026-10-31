@@ -77,6 +77,23 @@ int main() {
         gap->last_acquired.ns == fixture.beams.back().acquired_at.ns,
         "missing does not extend timestamp bounds");
 
+  // Source provenance/calibration cannot be silently mixed within a scan.
+  ScanAssembler provenance;
+  check(!provenance.push({reference, -std::numbers::pi, 1, ReturnKind::hit, 42, 3}),
+        "first source/revision");
+  bool bad_source = false;
+  try { (void)provenance.push({{reference.ns + 1, 4, 7}, -3, 1, ReturnKind::hit, 43, 3}); }
+  catch (const std::invalid_argument&) { bad_source = true; }
+  check(bad_source, "source change rejected");
+  bool bad_calibration = false;
+  try { (void)provenance.push({{reference.ns + 1, 4, 7}, -3, 1, ReturnKind::hit, 42, 4}); }
+  catch (const std::invalid_argument&) { bad_calibration = true; }
+  check(bad_calibration, "calibration change rejected");
+  const auto provenance_scan = provenance.flush();
+  check(provenance_scan && provenance_scan->source_id == 42 &&
+        provenance_scan->calibration_revision == 3 && provenance_scan->beams.size() == 1,
+        "source and calibration revision retained");
+
   // Clock domain/epoch/time discontinuity is explicitly rejected, no silent merge.
   ScanAssembler discontinuity;
   check(!discontinuity.push({reference, -std::numbers::pi, 1, ReturnKind::hit}), "first beam");
@@ -148,6 +165,22 @@ int main() {
   (void)rotated.integrate_rays({{{9.95, -4.95}, {9.95, -3.95}, ReturnKind::hit}});
   check(rotated.cell(10, 0)->log_odds > 0, "rotated occupied endpoint cell");
   check(rotated.cell(1, 0)->log_odds < 0, "rotated free ray origin cell");
+
+  // Known-mask and probability remain independent after exact neutralization.
+  GridConfig neutral_config = grid_config;
+  neutral_config.map_from_grid = {};
+  neutral_config.hit_log_odds = 0.4;
+  neutral_config.free_log_odds = -0.4;
+  OccupancyGrid neutral(neutral_config);
+  (void)neutral.integrate_rays({{{1.05, 1.05}, {3.05, 1.05}, ReturnKind::hit}});
+  (void)neutral.integrate_rays({{{1.05, 1.05}, {4.05, 1.05}, ReturnKind::hit}});
+  check(neutral.at_world({3.05, 1.05})->observed &&
+        approx(neutral.at_world({3.05, 1.05})->log_odds, 0),
+        "known neutral remains known (not unknown)");
+  for (int n = 0; n < 100; ++n)
+    (void)neutral.integrate_rays({{{1.05, 1.05}, {4.05, 1.05}, ReturnKind::hit}});
+  check(neutral.at_world({4.05, 1.05})->log_odds <= neutral_config.max_log_odds,
+        "occupied cell log odds saturate");
 
   // Use the existing synthetic scene for a real 360-ray static mapping pass.
   std::vector<WorldRay> world_rays;
