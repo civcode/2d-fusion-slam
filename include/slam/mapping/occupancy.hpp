@@ -49,6 +49,8 @@ class OccupancyGrid {
   [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
   [[nodiscard]] std::optional<Cell> cell(std::size_t x, std::size_t y) const noexcept;
   [[nodiscard]] std::optional<Cell> at_world(const Eigen::Vector2d& point_map) const noexcept;
+  // Deep-copy for publication. Caller must serialize this with integrate_rays().
+  [[nodiscard]] std::vector<Cell> snapshot_cells() const { return cells_; }
   [[nodiscard]] InsertStats integrate_rays(const std::vector<WorldRay>& rays);
 
  private:

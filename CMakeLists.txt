@@ -58,7 +58,17 @@ target_include_directories(slam_mapping PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_mapping PUBLIC slam::core slam::sensors)
 
+add_library(slam_distance_field STATIC src/distance_field.cpp)
+add_library(slam::distance_field ALIAS slam_distance_field)
+target_compile_features(slam_distance_field PUBLIC cxx_std_20)
+target_include_directories(slam_distance_field PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_distance_field PUBLIC slam::mapping)
+
 if(BUILD_TESTING)
+  add_executable(slam_distance_field_test tests/distance_field_test.cpp)
+  target_link_libraries(slam_distance_field_test PRIVATE slam::distance_field)
+  add_test(NAME distance_field COMMAND slam_distance_field_test)
   add_executable(slam_ld19_motion_test tests/ld19_motion_test.cpp)
   target_link_libraries(slam_ld19_motion_test PRIVATE slam_ld19 slam_motion slam_fixtures)
   add_test(NAME ld19_motion COMMAND slam_ld19_motion_test)
