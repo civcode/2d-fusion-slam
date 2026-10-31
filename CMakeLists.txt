@@ -37,6 +37,13 @@ target_include_directories(slam_sensors PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_sensors PUBLIC slam::core)
 
+add_library(slam_mapping STATIC src/occupancy.cpp)
+add_library(slam::mapping ALIAS slam_mapping)
+target_compile_features(slam_mapping PUBLIC cxx_std_20)
+target_include_directories(slam_mapping PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_mapping PUBLIC slam::core slam::sensors)
+
 if(BUILD_TESTING)
   add_executable(slam_fixtures_smoke tests/fixtures_smoke.cpp)
   target_link_libraries(slam_fixtures_smoke PRIVATE slam_fixtures)
