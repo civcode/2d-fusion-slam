@@ -1,16 +1,16 @@
 # Implementation status and verification evidence
 
 **Updated:** 2026-10-31  
-**Repository branch:** \`main\`  
+**Repository branch:** `main`  
 **Scope:** C0 foundation; this is not a completed SLAM application.
 
 ## Implemented
 
 | Target | Implemented behavior | Current verification |
 | --- | --- | --- |
-| \`slam_core\` | C++20 native \`Timestamp\` (nanoseconds/domain/epoch), checked arithmetic; \`Pose2\` and SE(2) transform/exp/log/integration | GCC 14 native build, \`core_smoke\` passed via CTest |
-| \`slam_fixtures\` | Noiseless, deterministic apartment/warehouse line-segment ray cast; moving sensor pose at exact acquisition time; hit/no-return | \`fixtures_smoke\` passed via CTest |
-| CMake project | \`slam_core\`, \`slam_fixtures\`, network-free CTest and an opt-in verified-commit Catch2 v3 FetchContent declaration | CMake 3.31.6/Ninja native configuration and build worked with a local Eigen header location |
+| `slam_core` | C++20 native `Timestamp` (nanoseconds/domain/epoch), checked arithmetic; `Pose2` and SE(2) transform/exp/log/integration | GCC 14 native build, `core_smoke` passed via CTest |
+| `slam_fixtures` | Noiseless, deterministic apartment/warehouse line-segment ray cast; moving sensor pose at exact acquisition time; hit/no-return | `fixtures_smoke` passed via CTest |
+| CMake project | `slam_core`, `slam_fixtures`, network-free CTest and an opt-in verified-commit Catch2 v3 FetchContent declaration | CMake 3.31.6/Ninja native configuration and build worked with a local Eigen header location |
 
 **Local command used for the verified smoke suite:**
 
@@ -21,7 +21,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ~~~
 
-**Result:** 2/2 smoke tests passed. \`SLAM_ENABLE_CATCH2=ON\` is the normal detailed-test path, pinned to Catch2 v3.8.1 upstream commit \`2b60af89e23d28eefc081bc930831ee9d45ea58b\`. **Its fetch/build/test was not verified** because local GitHub DNS access was unavailable. No attempt was made to run GitHub Actions.
+**Result:** 2/2 smoke tests passed both in the normal build and in a second local build using `-Wall -Wextra -Wpedantic -Werror -fsanitize=undefined -fno-sanitize-recover=undefined` (GCC 14). `SLAM_ENABLE_CATCH2=ON` is the normal detailed-test path, pinned to Catch2 v3.8.1 upstream commit `2b60af89e23d28eefc081bc930831ee9d45ea58b`. **Its fetch/build/test was not verified** because local GitHub DNS access was unavailable. No attempt was made to run GitHub Actions.
 
 ## Not implemented / not verified
 

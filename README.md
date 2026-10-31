@@ -14,8 +14,8 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 
 ## What works today
 
-- \`slam_core\`: checked signed 64-bit nanosecond arithmetic with explicit clock domains/epochs, SE(2) compose/inverse/transform/exp/log, constant-body-twist integration.
-- \`slam_fixtures\`: deterministic apartment (15 × 12 m, doorway gaps) and warehouse (30 × 20 m, repeated shelves) with exact ground-truth moving-ray acquisition times and hit/no-return classification.
+- `slam_core`: checked signed 64-bit nanosecond arithmetic with explicit clock domains/epochs, SE(2) compose/inverse/transform/exp/log, constant-body-twist integration.
+- `slam_fixtures`: deterministic apartment (15 × 12 m, doorway gaps) and warehouse (30 × 20 m, repeated shelves) with exact ground-truth moving-ray acquisition times and hit/no-return classification.
 - Local CMake/Ninja build and two network-free CTest smoke tests. Additional Catch2 v3 tests are available by pinned FetchContent but **not yet verified in this offline environment**.
 
 The synthetic fixtures are initial geometry test inputs, not an LD19 packet simulator or an accuracy benchmark yet. There is **no Ceres/GTSAM pipeline, Pi driver, recorder, ROS adapter or Web UI** implemented.
@@ -38,7 +38,7 @@ cmake --build build-catch
 ctest --test-dir build-catch --output-on-failure
 ~~~
 
-If Eigen3 is not discoverable, supply \`-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3\`. No public dataset download, hardware or GitHub Actions are required.
+If Eigen3 is not discoverable, supply `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3`. No public dataset download, hardware or GitHub Actions are required.
 
 ## Documentation
 
