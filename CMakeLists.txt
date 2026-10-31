@@ -65,7 +65,35 @@ target_include_directories(slam_distance_field PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_distance_field PUBLIC slam::mapping)
 
+add_library(slam_match_geometry STATIC src/match_geometry.cpp)
+add_library(slam::match_geometry ALIAS slam_match_geometry)
+target_compile_features(slam_match_geometry PUBLIC cxx_std_20)
+target_include_directories(slam_match_geometry PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_match_geometry PUBLIC slam::distance_field)
+
+# Ceres is an optional private solver: core tests and map construction never
+# fetch solver dependencies or link GTSAM. Enable when the toolchain has Ceres.
+option(SLAM_ENABLE_CERES "Build the Ceres scan-to-map matcher if available" ON)
+if(SLAM_ENABLE_CERES)
+  find_package(Ceres QUIET CONFIG)
+  if(Ceres_FOUND)
+    add_library(slam_match_ceres STATIC src/match_ceres.cpp)
+    add_library(slam::match_ceres ALIAS slam_match_ceres)
+    target_compile_features(slam_match_ceres PUBLIC cxx_std_20)
+    target_compile_definitions(slam_match_ceres PUBLIC SLAM_HAS_CERES=1)
+    target_include_directories(slam_match_ceres PUBLIC
+      "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+    target_link_libraries(slam_match_ceres PUBLIC slam::match_geometry PRIVATE Ceres::ceres)
+  else()
+    message(STATUS "Ceres not found: geometry reference matcher and EDT tests remain available")
+  endif()
+endif()
+
 if(BUILD_TESTING)
+  add_executable(slam_match_geometry_test tests/matcher_test.cpp)
+  target_link_libraries(slam_match_geometry_test PRIVATE slam::match_geometry)
+  add_test(NAME match_geometry COMMAND slam_match_geometry_test)
   add_executable(slam_distance_field_test tests/distance_field_test.cpp)
   target_link_libraries(slam_distance_field_test PRIVATE slam::distance_field)
   add_test(NAME distance_field COMMAND slam_distance_field_test)
