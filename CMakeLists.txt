@@ -44,6 +44,13 @@ target_include_directories(slam_ld19 PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_ld19 PUBLIC slam::sensors)
 
+add_library(slam_motion STATIC src/trajectory.cpp)
+add_library(slam::motion ALIAS slam_motion)
+target_compile_features(slam_motion PUBLIC cxx_std_20)
+target_include_directories(slam_motion PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_motion PUBLIC slam::sensors slam::core)
+
 add_library(slam_mapping STATIC src/occupancy.cpp)
 add_library(slam::mapping ALIAS slam_mapping)
 target_compile_features(slam_mapping PUBLIC cxx_std_20)
