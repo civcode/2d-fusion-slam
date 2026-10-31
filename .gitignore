@@ -1,0 +1,8 @@
+/build/
+/build-*/
+/.cache/
+/Testing/
+*.mcap
+*.bag
+*.db3
+*.log
