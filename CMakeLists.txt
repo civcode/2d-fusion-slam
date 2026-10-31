@@ -59,6 +59,9 @@ target_include_directories(slam_mapping PUBLIC
 target_link_libraries(slam_mapping PUBLIC slam::core slam::sensors)
 
 if(BUILD_TESTING)
+  add_executable(slam_ld19_motion_test tests/ld19_motion_test.cpp)
+  target_link_libraries(slam_ld19_motion_test PRIVATE slam_ld19 slam_motion slam_fixtures)
+  add_test(NAME ld19_motion COMMAND slam_ld19_motion_test)
   add_executable(slam_scan_mapping_test tests/scan_mapping_test.cpp)
   target_link_libraries(slam_scan_mapping_test PRIVATE slam::mapping slam_fixtures)
   add_test(NAME scan_mapping COMMAND slam_scan_mapping_test)
