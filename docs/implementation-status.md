@@ -1,41 +1,42 @@
 # Implementation status and verification evidence
 
 **Updated:** 2026-10-31  
-**Repository branch:** `main`  
-**Scope:** C0 foundation; this is not a completed SLAM application.
+**Branch:** `main`  
+**Scope:** C0 foundation and early C1 observation/occupancy primitives; **not a complete SLAM system**.
 
 ## Implemented
 
-| Target | Implemented behavior | Current verification |
+| Target | Working functionality | Verification |
 | --- | --- | --- |
-| `slam_core` | C++20 native `Timestamp` (nanoseconds/domain/epoch), checked arithmetic; `Pose2` and SE(2) transform/exp/log/integration | GCC 14 native build, `core_smoke` passed via CTest |
-| `slam_fixtures` | Noiseless, deterministic apartment/warehouse line-segment ray cast; moving sensor pose at exact acquisition time; hit/no-return | `fixtures_smoke` passed via CTest |
-| CMake project | `slam_core`, `slam_fixtures`, network-free CTest and an opt-in verified-commit Catch2 v3 FetchContent declaration | CMake 3.31.6/Ninja native configuration and build worked with a local Eigen header location |
+| `slam_core` | Checked int64 nanosecond time with explicit domains/epochs and SE(2) geometry | `core_smoke` |
+| `slam_fixtures` | Exact-time deterministic synthetic apartment/warehouse ray casting | `fixtures_smoke` |
+| `slam_sensors` | Per-beam timestamps and return kinds, angular-seam scan assembly, CW/CCW support, midpoint from actual acquired bounds, invalid/missing/partial coverage, source/calibration revision checks | `scan_mapping` |
+| `slam_mapping` | Rotated-origin bounded 2D log-odds grid, independent known mask, ray clipping, deduplicated hit-over-free updates, opt-in trusted no-return clearing and revision counter | `scan_mapping` |
 
-**Local command used for the verified smoke suite:**
+**Local test evidence:** GCC 14 / CMake 3.31.6 / Ninja / locally provisioned Eigen3. Network-free `SLAM_ENABLE_CATCH2=OFF` configuration built successfully. **3/3 CTest tests passed**, both normally and with `-Wall -Wextra -Wpedantic -Werror -fsanitize=undefined -fno-sanitize-recover=undefined` enabled. Tests exercise epoch/source/calibration rejection, scan wrap and partial coverage, invalid/missing rays, hit precedence, no-return opt-in, rotated origins, clipping, neutral-but-known cells, clamping, and a stationary synthetic apartment scan.
+
+Reproduce without external downloads:
 
 ~~~sh
-cmake -S . -B build -G Ninja -DBUILD_TESTING=ON \
-  -DSLAM_ENABLE_CATCH2=OFF -DSLAM_EIGEN_INCLUDE_DIR=<local-Eigen3-include-root>
+cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DSLAM_ENABLE_CATCH2=OFF
 cmake --build build
 ctest --test-dir build --output-on-failure
 ~~~
 
-**Result:** 2/2 smoke tests passed both in the normal build and in a second local build using `-Wall -Wextra -Wpedantic -Werror -fsanitize=undefined -fno-sanitize-recover=undefined` (GCC 14). `SLAM_ENABLE_CATCH2=ON` is the normal detailed-test path, pinned to Catch2 v3.8.1 upstream commit `2b60af89e23d28eefc081bc930831ee9d45ea58b`. **Its fetch/build/test was not verified** because local GitHub DNS access was unavailable. No attempt was made to run GitHub Actions.
+Pass `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3` if Eigen3 is not autodetected. The pinned Catch2 v3 FetchContent tests are **not locally verified** because direct GitHub network/DNS is unavailable. No GitHub Actions were used.
 
-## Not implemented / not verified
+## Scope limitations
 
-- Public dataset manifests/import/conversion, complete B01–B18 benchmark suite or quantitative mapping/localization accuracy.
-- LD19 native 47-byte UART packet parsing, MPU6050 I2C acquisition, clock drift modeling, MCAP raw recording or real-device timing calibration.
-- Source capability model/scan assembly, gyro-only or wheel-fusion estimator, deskew validation, occupancy grid/submaps, EDT/Ceres scan matching or GTSAM graph.
-- Portable map bundle, Pi known-map localization, online SLAM, semantic seek, Web Lab and optional ROS/Pico integration.
-- Raspberry Pi 5, ARM64, Docker image, real-hardware or thermal/performance validation.
+- **Scan assembly is generic beam-level processing**, not an LD19 47-byte UART/CRC parser or validated per-beam physical clock model. Source IDs and calibration revisions can be checked; clock drift fitting and calibration workflows remain future work.
+- **Occupancy integration accepts already valid world-space rays**, not arbitrary raw moving beams. It performs **no deskew, trajectory interpolation or sensor time alignment**. The synthetic mapping test uses a truly stationary scan; passing it is not evidence that a moving sensor's map is correct.
+- The grid is mutable, not yet an immutable revisioned snapshot/submap or portable map bundle. The revision counter does not substitute for the future map-source provenance ledger.
+- Missing and invalid returns are never occupancy evidence. No-return free-space clearing is disabled unless explicitly enabled for a sensor with verified semantics.
+- B01/B03/B06 have **partial unit/integration coverage**, not complete benchmark acceptance or independent mapping accuracy evidence.
 
-## Next checkpoints
+## Not implemented or validated
 
-1. Implement sensor/beam validity classes and scan assembly; test missing/invalid/partial data and trustworthy ray rules (**B02/B03**).
-2. Implement a simple 2D occupancy known-mask/log-odds grid with checked ray insertion; synthetic exact fixture tests (**B06**).
-3. Establish geometry-only Ceres scan-match baseline against immutable map generations; compare predictions on held-out synthetic and later validated public data (**B07/B08**).
-4. Build a workstation one-pass graph/map bundle, then benchmark known-map localization on identical prepared data before any Pi-specific optimizations.
+LD19 packet parser and raw recording; MPU6050/Pi acquisition; packet/gyro clock models; full scan deskew/trajectory provider; submap lifecycle; immutable EDT caches; Ceres matching; GTSAM batch mapping; map persistence; public dataset import/benchmark runs; Pi runtime; Web Lab; ROS; online SLAM; real-hardware calibration/measurements.
 
-A minimal hardware acquisition path may develop **in parallel**, but it does not gate these initial synthetic/public tests.
+## Next milestone
+
+Implement native LD19 packet parsing and source time/beam modeling with synthetic packet/CRC/rollover fixtures (**B02**); support a defensible scan-to-world trajectory interface and deskew quality modes (**B04/B05**) before inserting moving scans. Follow with immutable occupancy snapshots/EDT and the first Ceres matcher (**B07/B08**). Hardware capture may advance independently, while **synthetic and validated public datasets remain the initial algorithm acceptance basis**.

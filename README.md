@@ -1,6 +1,6 @@
 # 2D Fusion SLAM
 
-**Status: C0 bootstrap underway.** The portable C++20 time/SE(2) core and deterministic synthetic apartment/warehouse scan fixtures are implemented; **this is not yet a working SLAM system**. See [implementation status](docs/implementation-status.md).
+**Status: C0 complete for core primitives; early C1 sensor/mapping slice implemented.** Time/SE(2), deterministic synthetic fixtures, timestamp-aware scan assembly and a 2D occupancy grid exist; **this is not yet a working SLAM system**. See [implementation status](docs/implementation-status.md).
 
 The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optional **actually measured** wheel odometry. Three target modes share a portable core:
 
@@ -16,7 +16,9 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 
 - `slam_core`: checked signed 64-bit nanosecond arithmetic with explicit clock domains/epochs, SE(2) compose/inverse/transform/exp/log, constant-body-twist integration.
 - `slam_fixtures`: deterministic apartment (15 × 12 m, doorway gaps) and warehouse (30 × 20 m, repeated shelves) with exact ground-truth moving-ray acquisition times and hit/no-return classification.
-- Local CMake/Ninja build and two network-free CTest smoke tests. Additional Catch2 v3 tests are available by pinned FetchContent but **not yet verified in this offline environment**.
+- `slam_sensors`: time-aware, source/calibration-consistent angular-seam assembly, full/partial classification, actual acquisition bounds and observed-sector coverage; invalid/missing/no-return remain distinct.
+- `slam_mapping`: bounded rotated-origin log-odds occupancy with independent known mask, clipping, one update per touched cell, hit-over-free priority and default-safe no-return policy. Callers supply trusted world-space rays; no automatic deskew is implied.
+- Local CMake/Ninja build and **three** network-free CTest tests pass under GCC 14, including strict warnings and UBSan. Pinned Catch2 v3 remains **unverified in this offline environment**.
 
 The synthetic fixtures are initial geometry test inputs, not an LD19 packet simulator or an accuracy benchmark yet. There is **no Ceres/GTSAM pipeline, Pi driver, recorder, ROS adapter or Web UI** implemented.
 
@@ -50,4 +52,4 @@ If Eigen3 is not discoverable, supply `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3`
 - [Implementation status and local test evidence](docs/implementation-status.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
-**Next:** sensor/scan data contracts, time-aware scan assembly and occupancy mapping; then Ceres matching, offline GTSAM and known-map localization. A minimal Web Lab follows once mapped state and replay are available.
+**Next:** LD19 packet/clock modeling and validated scan-to-world trajectory/deskew boundaries, followed by immutable map snapshots/EDT, Ceres matching, workstation GTSAM and known-map localization. A minimal Web Lab follows once mapped state and replay are available.

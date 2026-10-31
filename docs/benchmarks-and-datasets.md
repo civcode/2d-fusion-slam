@@ -1,6 +1,6 @@
 # 2D Fusion SLAM — Benchmarks and Datasets
 
-**Status:** Revised benchmark plan v0.2; basic C0 math and fixture smoke tests executed locally; full benchmark campaigns not yet run  
+**Status:** Revised benchmark plan v0.2; C0, scan-assembly and simple occupancy smoke tests run locally; full benchmark campaigns not yet run  
 **Date:** 2026-10-31  
 **Related:** [Architecture](architecture-specification.md) · [Technical specification](technical-specification.md) · [Implementation contract](implementation-contract.md) · [Design decisions](open-design-choices.md)
 
@@ -89,7 +89,7 @@ Every rejected scan, LOST interval, unavailable metric and recovery abstention m
 
 ## 5. Initial benchmark IDs and acceptance intent
 
-B01 is **partially exercised** by local core smoke tests; initial noiseless apartment/warehouse fixture generation is also smoke-tested. B02–B18 and full accuracy/performance benchmark campaigns remain **planned**, not executed. IDs describe test objectives, not necessarily existing tools. The previous B01–B33 enumerations were design proposals, **not completed evidence**.
+B01, B03 and B06 are **partially exercised** by local smoke/integration tests (time/SE(2), synthetic fixtures, seam/partial/time checks, basic occupancy known-mask/ray safety). B02 native LD19 packet/CRC timing, the remaining portions of B03/B06 (including submap lifecycle), B04–B05 and B07–B18, and all full accuracy/performance benchmark campaigns remain **planned**, not executed. IDs describe test objectives, not necessarily existing tools. The previous B01–B33 enumerations were design proposals, **not completed evidence**.
 
 | ID | Test / benchmark | Initial input | Required assertion or output |
 | --- | --- | --- | --- |
