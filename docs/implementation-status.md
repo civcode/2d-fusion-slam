@@ -2,42 +2,41 @@
 
 **Updated:** 2026-10-31  
 **Branch:** `main`  
-**Scope:** C0 and initial C1 native primitives; **not yet a SLAM pipeline**.
+**Scope:** Synthetic scan-to-map baseline with portable solver interface; **not complete offline SLAM**.
 
-## Implemented, with local tests
+## Implemented and locally exercised
 
-| Target | Working implementation | Local test |
+| Target | Working functionality | Evidence |
 | --- | --- | --- |
-| `slam_core` | Checked signed nanosecond time, clock domain/epoch, SE(2) exp/log/compose | `core_smoke` |
-| `slam_fixtures` | Deterministic apartment/warehouse exact-time synthetic moving-beam ray casting | `fixtures_smoke` |
-| `slam_sensors` | Angular seam scan assembly, partial coverage, acquisition midpoint, source/calibration/time-quality consistency | `scan_mapping` |
-| `slam_mapping` | Rotated bounded known-mask/log-odds grid, conservative ray insertion and hit precedence | `scan_mapping` |
-| `slam_ld19` | 47-byte native packet parsing, CRC-8 (poly 0x4D), raw-frame and CRC-failure events, fragmented UART stream resynchronization, nominal 30-second device-counter unwrap, provisional beam angles/relative timing | `ld19_motion` |
-| `slam_motion` | Interpolation-only sampled SE(2) trajectory, strict time coverage, lever-arm midpoint deskew of valid hits, explicit gyro-only/full-SE(2) and provisional/verified timing safeguards | `ld19_motion` |
+| `slam_core` | Checked nanosecond/epoch time and SE(2) geometry | `core_smoke` |
+| `slam_fixtures` | Deterministic exact-time apartment/warehouse synthetic ray casting | `fixtures_smoke` |
+| `slam_sensors` and `slam_ld19` | Beam timing/quality, partial scan assembly, 47-byte LD19/CRC/frame/rollover parsing | `scan_mapping`, `ld19_motion` |
+| `slam_motion` | Sampled SE(2) trajectory interpolation and deskew diagnostic safety | `ld19_motion` |
+| `slam_mapping` | Known-mask log-odds grid and safe ray updates | `scan_mapping` |
+| **`slam_distance_field`** | Immutable deep-copy occupancy snapshot with pinned revision and non-cryptographic fingerprint, exact 2-pass EDT, map-frame bilinear gradients, known-mask and nontruncated residual support | **`distance_field`** |
+| **`slam_match_geometry`** | LiDAR geometry-only Huber robust EDT scoring and a small damped reference optimizer; synthetic pose recovery with overlap, rank/eigenvalues and source-coherence diagnostics | **`match_geometry`** |
+| `slam_match_ceres` (optional) | A private Ceres single-scalar-per-beam cost-function adapter, bounded local solve, fail-closed unsupported-region evaluation and identical output quality gate | **Source committed, NOT compiled/tested** without Ceres |
 
-**Verified locally:** GCC 14 / CMake 3.31.6 / Ninja / provisioned Eigen3. **4/4 tests pass** with network-free `SLAM_ENABLE_CATCH2=OFF` in all three configurations: normal, `-Wall -Wextra -Wpedantic -Werror -fsanitize=undefined`, and the same strict warnings with `-fsanitize=address,undefined -fno-sanitize-recover=all`. Tests cover frame fields, independent CRC vector, packet corruption and resync, source receive clock discontinuity, device counter wrap/reset/gaps, provisional timing, timestamp overflow, exact synthetic twist interpolation, laser-mount lever arm, moving-world-point deskew and safe refusal of unsupported mapping quality.
+**Test evidence:** GCC 14, CMake 3.31.6, Ninja, provisioned Eigen3 on Linux x86-64. **6/6 CTest tests passed** with network-free `SLAM_ENABLE_CATCH2=OFF`, including the normal build and a strict build using `-Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-sanitize-recover=all`. The EDT tests compare all cells to exact Euclidean reference distances, test rotated grids, immutable source revisions, unknown stencils and truncation. The matching tests check geometry-only convergence toward synthetic truth, overlap, rank, cost reduction and unsupported-region rejection. These are **unit/synthetic tests**, not a public-dataset accuracy benchmark.
 
 ~~~sh
-cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DSLAM_ENABLE_CATCH2=OFF
+cmake -S . -B build -G Ninja \
+  -DBUILD_TESTING=ON -DSLAM_ENABLE_CATCH2=OFF
 cmake --build build
 ctest --test-dir build --output-on-failure
 ~~~
 
-Set `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3` if needed. Pinned Catch2 v3 FetchContent tests remain **unverified locally** because direct network access to GitHub is unavailable. No GitHub Actions were run.
+Use `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3` if the Eigen package is not automatically found. If Ceres is installed, `SLAM_ENABLE_CERES=ON` discovers it, builds `slam_match_ceres`, and registers a seventh `match_ceres` synthetic test. **That conditional build/test was not run** in this environment; passing 6/6 does not validate Ceres. Pinned FetchContent Catch2 v3 was also not fetched here because direct GitHub DNS is unavailable. No GitHub Actions were created or executed.
 
-## Explicit limitations and safety boundaries
+## Guarantees and limitations
 
-- **Raw byte recording is not yet implemented.** The stream parser retains recognized 47-byte candidates (even when CRC fails), but this is *not* an authoritative lossless UART capture. A real acquisition/MCAP recorder must preserve all incoming bytes separately.
-- **Device counters are not canonical acquisition time.** The 30,000 ms unwrap policy is a nominal model and rejects ambiguous gaps, resets and discontinuities. Actual LD19 packet timestamp reference, transport delay, host clock drift and true beam-time error remain unmeasured. No wall/receipt timestamp is silently treated as physical beam acquisition.
-- **Relative beam timing is provisional.** Angle and speed produce relative offsets under an explicitly assumed last-beam reference. Calibrated/synthetic exact anchors require an explicit physical-reference-validation flag, and scan quality carries the provisional/calibrated distinction. Real calibration evidence must precede claims about validated per-beam timing.
-- **No gyro estimator or measured XY source yet.** The trajectory class interpolates **supplied** poses; it does not read MPU6050, integrate gyro, estimate bias, or infer wheel velocity. Gyro-only capability does not permit metric XY translation or full moving-scan mapping. Provisional timing is diagnostic-only by default.
-- **No direct raw-scan-to-map insertion.** Deskew returns reference-frame hit points with a mapping-suitability check. The existing occupancy grid accepts separately validated world-space rays; this milestone does not secretly compose these into a production mapping pipeline.
-- Physical LD19 firmware variation, packet timing and serial noise have **not** been tested on real hardware. Public dataset conversions, independent accuracy measurements and Pi performance have not been tested either.
-
-## Benchmark evidence
-
-B01–B06 have **partial synthetic unit/integration coverage**, not full acceptance: B02 lacks physical timing/real LD19 recordings, B04 lacks gyro bias/wheel source measurements, B05 lacks sensor/dataset comparisons, B06 lacks submap lifecycle. B07–B18 are unexecuted.
+- **Snapshots are immutable after publication**, but capture is only coherent if the caller serializes copying with map insertion. There is no multi-threaded map owner/rebuild scheduler yet.
+- **EDT is exact at cell centres**, with bilinear interpolation using four observed cells and entirely nontruncated stencil values. Unknown/out-of-map/saturated support is **not** a false zero residual. The derived cache is not map authority.
+- **Matcher is a local, geometry-only baseline** seeded near the map pose. Its synthetic test uses independent, known synthetic landmark geometry but is not a full SLAM trajectory/loop benchmark. No relocalization/global search or verified sensor bias/clock estimator is implemented.
+- The information matrix and its eigenvalues are **observability diagnostics**, not a calibrated independent covariance. A returned tracking pose is not an automatically graph-eligible factor. A local matcher can still have map/deskew correlations.
+- **Ceres backend awaits a toolchain test.** An unsupported trial evaluation fails rather than yielding an artificial zero-distance residual. Its actual convergence, false-lock and boundary behavior must be profiled on synthetic and validated public recordings before deployment.
+- LD19 packet time-reference, MPU6050 gyro bias, real acquisition/MCAP, actual Pi performance, public dataset import and full online/offline SLAM remain unverified.
 
 ## Next checkpoint
 
-Implement a synthetic/verified-public-data frontend using immutable occupancy snapshots and a baseline Euclidean distance field (B07), followed by Ceres geometric scan matching and quality diagnostics (B08). In parallel, continue Pi LD19/MPU6050 raw acquisition and calibration work, plus measured gyro motion and time alignment. Continue to prefer synthetic/public benchmark evidence before optimization.
+First verify/benchmark the optional Ceres target and its Jacobians in a real Ceres-enabled toolchain. Then add **deterministic full-map replay/map export and a simple offline pose-only GTSAM reference graph**, with conservative factor provenance and false-loop checks. Independently progress real Pi LD19/MPU6050 acquisition and data calibration; initial algorithm experiments continue using synthetic and verified public data.

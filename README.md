@@ -1,6 +1,6 @@
 # 2D Fusion SLAM
 
-**Status: C0 foundations and initial C1 sensor/motion primitives implemented.** The portable core now includes synthetic scenes, scan assembly, an occupancy grid, an LD19 packet decoder and a minimal trajectory/deskew library. **This is not yet a working SLAM system.** See [implementation status](docs/implementation-status.md).
+**Status: C0 foundations and an initial synthetic scan-to-map matching baseline implemented.** The portable C++20 core includes synthetic scenes, scan assembly, occupancy mapping, LD19 parsing, sampled deskew, immutable map snapshots, exact Euclidean distance fields and a tested geometry matcher. **This is not yet a complete SLAM system.** See [implementation status](docs/implementation-status.md).
 
 The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optional **actually measured** wheel odometry. Three target modes share a portable core:
 
@@ -20,9 +20,12 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_mapping`: bounded rotated-origin log-odds occupancy with independent known mask, clipping, one update per touched cell, hit-over-free priority and default-safe no-return policy. Callers supply trusted world-space rays; no automatic deskew is implied.
 - `slam_ld19`: 47-byte LD19 packet decoding, CRC-8, corrupted-stream recovery, raw frame preservation, bounded 30-second counter unwrapping and **provisional** angle/speed timing. Receipt time and acquisition time remain distinct.
 - `slam_motion`: sampled SE(2) interpolation and midpoint deskew diagnostics with laser mounting offset, explicit gyro-only/full-SE(2) capability and acquisition-time validity gates.
-- Local CMake/Ninja build and **four** network-free CTest tests pass under GCC 14, strict warnings, UBSan and ASan+UBSan. Pinned Catch2 v3 remains **unverified in this offline environment**.
+- `slam_distance_field`: deep-copy immutable map snapshot with revision/content fingerprint, full-field exact centre-to-centre Euclidean distance transform, strict four-cell known-mask interpolation, finite gradients and source-version pinning.
+- `slam_match_geometry`: geometry-only robust Huber scan-to-EDT reference matcher with synthetic pose recovery, overlap and LiDAR Hessian-rank diagnostics, and conservative rejection of unknown/truncated evidence.
+- `slam_match_ceres` (optional): Ceres cost-function/solver adapter using the same geometry and fail-closed support policy; **not compiled or runtime-verified** in the current environment because Ceres is not installed.
+- Local CMake/Ninja build and **six** network-free CTest tests pass under GCC 14, strict warnings, and ASan+UBSan. Pinned Catch2 v3 and the Ceres-specific test remain **unverified in this offline environment**.
 
-LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no Ceres/GTSAM pipeline, Pi driver, recorder, ROS adapter or Web UI** implemented.
+LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no fully verified Ceres-based SLAM pipeline**, GTSAM optimizer, Pi driver, recorder, ROS adapter or Web UI implemented.
 
 ## Build and test
 
@@ -54,4 +57,4 @@ If Eigen3 is not discoverable, supply `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3`
 - [Implementation status and local test evidence](docs/implementation-status.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
-**Next:** connect the physical sensor acquisition and time-calibration path in parallel, and implement immutable map snapshots/EDT and synthetic Ceres scan matching. A tested gyro predictor and verified translational motion source remain future work, followed by workstation GTSAM and known-map localization. A minimal Web Lab follows once mapped state and replay are available.
+**Next:** build and exercise the Ceres target in a Ceres-enabled environment, evaluate a genuine held-out synthetic/public scan-to-map benchmark, and establish conservative map/match acceptance rules. Then implement a reproducible offline mapping pass, map generation/export and GTSAM batch reference. Pi LD19/MPU6050 acquisition/calibration continues in parallel; Web Lab follows when useful map/replay data is available.

@@ -1,6 +1,6 @@
 # 2D Fusion SLAM — Technical Specification
 
-**Status:** Revised technical baseline v0.2; time/SE(2), synthetic fixtures, scan assembler, occupancy, LD19 packet parser and sampled deskew library implemented; full SLAM/hardware behavior not benchmark-validated  
+**Status:** Revised technical baseline v0.2; time/SE(2), fixtures, scan/LD19/deskew primitives, immutable occupancy/EDT and synthetic geometry matching implemented; Ceres target and full SLAM/hardware behavior not validated  
 **Date:** 2026-10-31  
 **Related:** [Architecture](architecture-specification.md) · [Implementation contract](implementation-contract.md) · [Benchmarks](benchmarks-and-datasets.md) · [Design decisions](open-design-choices.md)
 

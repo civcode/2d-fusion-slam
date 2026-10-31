@@ -1,6 +1,6 @@
 # 2D Fusion SLAM — Benchmarks and Datasets
 
-**Status:** Revised benchmark plan v0.2; C0, scan assembly, occupancy, synthetic LD19 packet decoding and trajectory/deskew tests run locally; full benchmark campaigns not yet run  
+**Status:** Revised benchmark plan v0.2; C0, scan assembly, occupancy, LD19 packets, trajectory/deskew, exact EDT and geometry-only synthetic matching tests run locally; full benchmark campaigns not yet run  
 **Date:** 2026-10-31  
 **Related:** [Architecture](architecture-specification.md) · [Technical specification](technical-specification.md) · [Implementation contract](implementation-contract.md) · [Design decisions](open-design-choices.md)
 
@@ -89,7 +89,7 @@ Every rejected scan, LOST interval, unavailable metric and recovery abstention m
 
 ## 5. Initial benchmark IDs and acceptance intent
 
-B01, B02, B03, B04, B05 and B06 are **partially exercised** by local synthetic/unit tests: time/SE(2), 47-byte LD19 framing/CRC/nominal counter wrap and provisional angle timing, scan assembly, capability-enforced interpolation/deskew, and basic occupancy. B02 physical clock calibration/actual packet validation, B04 gyro bias/fusion and B05 real scan comparisons, B06 submaps, B07–B18, public dataset evaluation and full accuracy/performance campaigns remain **unexecuted**. IDs describe test objectives, not necessarily existing tools. The previous B01–B33 enumerations were design proposals, **not completed evidence**.
+B01–B08 are **partially exercised** by local synthetic/unit tests: time/SE(2), LD19 frames/CRC/nominal counter wrap, assembly, interpolated deskew, occupancy, immutable map revision snapshots, exact full-field EDT and geometry-only robust scan-to-map reference optimization. **B07** still lacks cache concurrency/staleness and large-grid profiling. **B08** has unverified Ceres compilation/runtime, no independent real benchmark, no odom-prior ablation, no calibrated covariance, and incomplete outlier/degeneracy campaigns. B02 physical calibration, B04 gyro estimator, B06 submaps, B09–B18, public dataset evaluation and full performance campaigns are **unexecuted**. IDs describe test objectives, not necessarily existing tools. The previous B01–B33 enumerations were design proposals, **not completed evidence**.
 
 | ID | Test / benchmark | Initial input | Required assertion or output |
 | --- | --- | --- | --- |

@@ -4,7 +4,7 @@
 **Date:** 2026-10-31  
 **Related:** [Architecture](architecture-specification.md) · [Technical specification](technical-specification.md) · [Benchmarks](benchmarks-and-datasets.md) · [Design decisions](open-design-choices.md)
 
-> The repository now has **C0 foundations and early C1 sensor/motion/mapping primitives** (time/SE(2), synthetic scenes, scan assembly, known-mask occupancy, LD19 packet/CRC/rollover parser, sampled trajectory/deskew and four local CTest suites). Most application targets and benchmark features below remain staged plans rather than existing software; see [implementation status](implementation-status.md). The first implemented algorithms and benchmarks use **synthetic and opt-in verified public datasets**. The real LD19/MPU6050 recorder is a **parallel development path**, not a gate for the initial synthetic/public-data vertical slice.
+> The repository now has **C0 foundations and an initial C1 synthetic geometry matching slice** (time/SE(2), sensor/LD19/deskew, occupancy, immutable snapshots, exact EDT and tested robust reference matcher with six CTest suites). The optional Ceres backend is source-complete but has not yet compiled in a Ceres-enabled toolchain. Most application targets and benchmark features below remain staged plans rather than existing software; see [implementation status](implementation-status.md). The first implemented algorithms and benchmarks use **synthetic and opt-in verified public datasets**. The real LD19/MPU6050 recorder is a **parallel development path**, not a gate for the initial synthetic/public-data vertical slice.
 
 ## 1. Policy and precedence
 
