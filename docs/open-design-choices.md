@@ -45,7 +45,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-019 | Sparse global submap iSAM2, optional fixed-lag, offline batch cleanup | P3 | Onboard full SLAM | **Accepted** (performance/tests pending) |
 | OD-020 | Global BnB + bounded persistent top-K multi-scan relocalization | P2 | Kidnapped robot / initial localization | **Accepted** (B28 validation pending) |
 | OD-021 | Bounded independent queues, loss-detectable durable MCAP, freshness SLAM and latest-state UI | P1 | Fault handling | **Accepted** (B29/Pi calibration pending) |
-| OD-022 | Localization state and publication gating | P2 | Downstream safety | Open |
+| OD-022 | Four-state tracking, covariance/quality hysteresis and explicit global-pose validity | P2 | Downstream safety | **Accepted** (B30 tuning/tests pending) |
 | OD-023 | MCAP channels, schema and bag import | P1 | Recording/replay | Open |
 | OD-024 | Replay checkpoints, seek and reproducibility | P1 | Benchmarks/Web Lab | Open |
 | OD-025 | ROS 2 distro, QoS and adapter interface | P3 | Nav2/RViz integration | Open |
@@ -1736,15 +1736,68 @@ All queues expose capacity and high-water **items, bytes and oldest host-steady 
 
 **B29** must inject Pi CPU contention and measured sensor bursts, storage stalls/full disk and sync errors, acquisition faster than Ceres, Pico disconnect/reconnect and missing motion intervals, recorder crash/forced termination and interrupted MCAP chunks, GTSAM multi-second stalls and loop-factor arrival, map-cache backlogs, slow/disconnected Web Lab clients and missed map deltas. Assert acquisition never waits indefinitely; fixed item/byte/age memory bounds; no false complete recording; no falsely valid deskew or map insertion across motion gaps; no silently lost graph factors; snapshot resync and bounded UI lag. Compare LZ4/Zstd and 1 s sync/60 s/256 MiB rotation on **target Raspberry Pi + selected SD/SSD under worst-case load**, recording actual rates, tails, CPU/RSS, disk bytes and p50/p95/p99 latencies. Tests are **required but not yet run**; adjust thresholds only from recorded evidence.
 
-**Consequences:** OD-016 topology and OD-020 global-recovery safety remain unchanged. OD-021 fixes the *initial* isolation and overload choices while leaving quantitative calibration open; **OD-023** still defines MCAP channel/schema specifics, **OD-024** replay seek/checkpoints, and **OD-022** localization-state hysteresis/pose thresholds. Neither an unbounded stall nor a partially recovered file can be represented as a guaranteed lossless valid session.
+**Consequences:** OD-016 topology and OD-020 global-recovery safety remain unchanged. OD-021 fixes the *initial* isolation and overload choices while leaving quantitative calibration open; **OD-023** still defines MCAP channel/schema specifics, **OD-024** replay seek/checkpoints, and **accepted OD-022** localization-state hysteresis/pose thresholds. Neither an unbounded stall nor a partially recovered file can be represented as a guaranteed lossless valid session.
 
-### OD-022 — Tracking-state thresholds and pose publication
+### OD-022 — Four-state tracking with asymmetric hysteresis and explicit pose validity
 
-**Question:** Exact TRACKING/UNCERTAIN/LOST/RELOCALIZING transition thresholds, hysteresis, covariance and stale-pose handling?
+**State:** **Accepted** (initial thresholds and rates are engineering defaults; B30/held-out/Pi calibration pending)  
+**Decision date:** 2026-10-31  
+**Decision authority:** User's explicit four-state, fail-closed tracking and pose-publication selection  
+**Priority:** P2
 
-**Provisional preference:** multi-scan hysteresis with overlap, residual, degeneracy, time-gap and predictor-disagreement gates. Publish continuous local odom separately from quality-rated global pose.
+**Decision:** The only **runtime tracking states** are \`TRACKING\`, \`UNCERTAIN\`, \`LOST\`, and \`RELOCALIZING\`. Evaluate OD-005/007/008 scan geometry, OD-006/004 motion integrity, OD-001/002/003 time validity, calibrated full-pose covariance and freshness using explicit **asymmetric hysteresis**. Preserve high-rate local odometry separately from any globally corrected pose. Do not authorize current global localization from stale, unobservable or merely plausible poses. **Startup/initial map bootstrap is a separate lifecycle/mode condition, not a fifth tracking state**: enter TRACKING only with a validated current global anchor; otherwise begin LOST (reason \`NO_TRUSTED_INITIAL_POSE\`) until known-map OD-020 recovery or independently validated mapping initialization establishes a reference. A new unmapped map's bootstrap must explicitly waive *map-support* thresholds until it has reference geometry, but must not waive clock/motion/covariance integrity or imply a known-map global fix.
 
-**Decision gate:** held-out map localization, featureless corridors, kidnapped robot, wheel slip and stale IMU tests; tune for low false-positive global fixes and measured recovery latency.
+**Alternatives:** (A) binary good/lost state — rejected for lack of degraded-pose signaling and hysteresis; (B) unbounded confidence score / Ceres Hessian alone — rejected for false certainty under geometry degeneracy, missing motion and correlated evidence; (C) **four explicit quality/covariance states with immediate invalidation, hysteresis and independent odom/global outputs — accepted**. Neither stale-pose timestamp rewriting nor covariance reset on recovery is permitted.
+
+#### Initial numerical thresholds (NOT yet validated)
+
+| Metric | TRACKING nominal eligibility | UNCERTAIN / soft threshold | LOST / hard threshold |
+| --- | --- | --- | --- |
+| Age since **last accepted global LiDAR localization** | ≤**300 ms** | >**300 ms** | >**1,000 ms** |
+| Consecutive rejected local matches | 0–1 | **≥2** (also **3 of 5** attempts) | **≥8** |
+| Horizontal global position std. dev. | ≤**0.15 m** | >**0.15 m** | >**0.50 m** |
+| Global heading std. dev. | ≤**5°** | >**5°** | >**15°** |
+| Valid acquired angular coverage | ≥**90%** | <**90%** | Persistently unusable scans; age/rejection or loss-of-observability hard gate |
+| Largest missing angular wedge | ≤**15°** | >**15°** | Persistently unusable scans |
+| Map-supported valid endpoints | ≥**50%** **and ≥80** endpoints | Below either | Persistently poor support |
+| LiDAR-only OD-008 observability | Full rank + calibrated condition limit | Degenerate/weak eigendirection | Covariance or validity beyond hard bound |
+| Motion-data age | ≤**100 ms** | >**100 ms** | >**250 ms** |
+| Clock/timestamp integrity | Valid mapped epoch and source time | Degraded, still bounded uncertainty | **Invalid mapping, epoch discontinuity or reset: immediate invalidation** |
+
+For a symmetric, calibrated *global* planar pose covariance \`Σ\`: \`sigma_xy = sqrt(lambda_max(Σ[0:2,0:2]))\`, \`sigma_theta = sqrt(Σ[2,2])\`. Preserve full **3×3 cross-terms**, validate finite/PSD and time/frame basis; non-PSD/unknown covariance cannot be treated as small uncertainty. Thresholds refer to **global-pose uncertainty**, **not** the inverse Ceres LiDAR Hessian. At exactly 300/1,000 ms and exactly numeric sigma limits, the stated strict \`>\` trigger has **not yet fired**; critical validity overrides equality conventions. The 100/250 ms motion-age defaults depend on measured encoder/IMU rate and must be tuned to avoid misclassifying valid hardware.
+
+**Geometric gates:** OD-005 valid partial scans may still enter candidate/recovery processing; meeting a simple percentage is not proof of rank or full-observability. Count **acquired angular sectors** (not synthetic filled rays); distinguish *map-supported* endpoints from valid raw return count. Apply OD-008 LiDAR-only robust residual/overlap, rank/conditioning, calibrated covariance and source-quality gates independently of OD-007 odometry prior. For normal local matches, let \`e = Log_SE2(T_pred^(-1) * T_meas)\` and \`d² = e^T S^(-1) e\` with **innovation covariance including relevant cross-correlations**; **11.34** is an initial 99% \`χ²(3)\` rejection boundary **only if** full-rank approximately Gaussian/calibrated 3-DOF innovation is justified. Otherwise reject/degrade or use a validated observable-subspace gate; never apply that threshold blindly to OD-020 top-K recovery candidates or correlated evidence.
+
+#### State transitions, ordering and mapping authorization
+
+| Transition | Initial rule |
+| --- | --- |
+| \`TRACKING → UNCERTAIN\` | **Any** soft quality/coverage/observability/freshness/covariance threshold crossed; **≥2 consecutive rejects** or **≥3 rejections in the last 5** attempted matches |
+| \`UNCERTAIN → TRACKING\` | **5 consecutive informative, quality-accepted** scans spanning **≥0.5 s** with \`sigma_xy <0.12 m\` and \`sigma_theta <4°\`, fresh/valid sensor timeline and stable quality |
+| \`TRACKING or UNCERTAIN → LOST\` | **Any** critical clock/motion/estimator integrity failure, hard covariance/freshness limit, **≥8 consecutive rejects**, or explicit unrecoverable source validity failure; hard failure is immediate |
+| \`LOST → RELOCALIZING\` | Canonical timeline/sensors valid, immutable known frozen map and OD-020 search resources available, asynchronous global recovery actually started |
+| \`RELOCALIZING → TRACKING\` | OD-020 unique fully verified map pose with sufficient search coverage/competing-hypothesis exclusion and **≥5 informative accepted scans spanning ≥0.5 s**, \`sigma_xy <0.20 m\`, \`sigma_theta <7°\`, valid time/revisions |
+| \`RELOCALIZING → LOST\` | Search aborted, unrecoverable input/snapshot failure, unusable map/sensor support or critical input failure; ambiguity alone may keep RELOCALIZING if bounded safe progress remains possible |
+
+**Precedence:** (1) critical validity fault → (2) any hard LOST criterion → (3) any soft UNCERTAIN criterion → (4) restoration/recovery hysteresis. A hard transition cannot be delayed by a previously accumulated positive streak. Rejection windows and informative scan streaks reset on source/clock epoch change, invalid gap, contradictory scan, or an incompatible map/calibration revision. Repeated views of a symmetric corridor do **not** count as independent informative recovery confirmations; OD-020's spatial/temporal diversity and full-search ambiguity checks remain mandatory.
+
+**Wider recovery threshold is not a mapping exemption.** An OD-020 accepted pose with uncertainty between normal TRACKING (\`0.15 m/5°\`) and relocalization (\`0.20 m/7°\`) limits can enter TRACKING as an **explicitly recovery-qualified global fix**, but **map insertion and autonomous navigation remain withheld** until ordinary TRACKING geometric/covariance/freshness gates are met; publish calibrated covariance and recovery-qualified/restricted validity. On subsequent health evaluation, unresolved soft thresholds move to UNCERTAIN. This avoids both a hidden soft-gate bypass and falsely shrinking covariance to force normal TRACKING. Never backfill scans collected during uncertainty or recovery (OD-020).
+
+#### Global pose, odometry and publication safety
+
+- **Local \`T_odom_base(t)\`:** publish independently at an **initial nominal 50 Hz**, **only while OD-006 trajectory queries are valid** and mark invalid gaps; no jump when map correction changes. This is *not* authority for global coordinates.
+- **Global \`T_map_base(t)\`:** publish a current valid full-covariance pose on accepted OD-007/008 global localization updates, nominal **≤10 Hz**. In \`UNCERTAIN\`, a predicted global pose may be emitted **only explicitly UNCERTAIN/restricted**, with propagated/inflated calibrated covariance and exact \`state_time\`; never relabel prediction as a fresh LiDAR fix. In \`LOST\` or \`RELOCALIZING\`, **suppress a current globally valid pose**; last known global estimate remains an explicitly *historical* diagnostic artifact with original acquisition/fix time.
+- **Corrections:** \`T_map_odom\` is updated only after validated localization/revisions; freeze last accepted transform in UNCERTAIN and mark it **invalid for current global localization** when LOST/RELOCALIZING. A valid OD-020 relock or discontinuous accepted OD-013/019 loop correction **increments \`correction_generation\`** with source graph/map ID; the downstream transform update must not masquerade as robot motion. No old global pose may be republished with a newly minted state timestamp. Standard optional ROS \`map→odom\`/ \`odom→base_link\` publishing respects REP-105 but ROS is not a core dependency; TF cannot carry the full pose covariance/validity by itself, so publish a distinct stamped status/pose record and stop authoritative TF updates when untrusted.
+- **Covariance:** publish full symmetric finite/PSD 3×3 SE(2) covariance (cross-terms), with timestamp, frame, provenance/calibration quality and correlation caveats. Propagate OD-006 relative-motion uncertainty through missed scans (including relevant cross-covariances), incorporate independent OD-008 LiDAR-only information and OD-013/019 joint graph/marginal uncertainty **without double-counting shared measurement sources**. Where exact joint covariance is unavailable, use measured conservative approximations and mark \`CONSERVATIVE/UNAVAILABLE\`; never treat raw Ceres Hessian alone as the global covariance or reset covariance to small numbers on recovery.
+- **Time/freshness:** maximum optional live extrapolation **10 ms** outside last supported OD-004 trajectory sample, subject to all existing quality gates and disabled for ordinary map insertion. **300 ms warning**, **1,000 ms invalidation** since accepted global update; last-known pose retained indefinitely for diagnostics only. Every pose/status has **state/acquisition time, publish time, last global-fix time, source/epoch, frame, covariance/quality, state, global/odom validity, freshness age, map/graph/correction revisions and reason codes**. Use OD-001 epoch-aware time; measure elapsed watchdog age on monotonic host time and handle simulated time jumps explicitly.
+
+**Mapping/navigation policy:** normal mapping and localization-derived graph-factor admission enabled only for currently trusted TRACKING with normal full-rank/coverage/uncertainty gates; \`UNCERTAIN\`, \`LOST\`, \`RELOCALIZING\` and recovery-qualified-but-not-yet-normal tracking suspend insertion/new active submaps. Navigation is allowed only for a validated current global fix and downstream safety checks; UNCERTAIN defaults to restricted/stop and LOST/RELOCALIZING disabled. Do not impose *existing-map endpoint support* on a clean initial **new-map bootstrap** until a map exists; use an explicit bootstrap lifecycle flag, verified initial anchor and alternative safety/quality gates instead of a fifth tracking state.
+
+**Portable interface:** Domain-only \`TrackingState { TRACKING, UNCERTAIN, LOST, RELOCALIZING }\`, \`PoseEstimate\` (\`state_time_ns\`, \`publish_time_ns\`, \`last_global_fix_ns\`, \`Pose2\`, full \`Matrix3\`, \`tracking_state\`, \`globally_valid\`, \`odom_valid\`, \`covariance_quality\`, \`freshness_age\`, \`failure_reasons\`, \`map_version\`, \`graph_version\`, \`correction_generation\`, \`source_epoch\`) and \`TrackingDiagnostics\`/state-transition events. Public interfaces are free of ROS/Ceres/GTSAM/MCAP/Linux transport types; keep native replay deterministic.
+
+**B30 requirement (not yet run):** Generate exact 299/300/301 and 999/1,000/1,001 ms age boundaries, rejected-match sequences (2, 3/5, 8), 0.12/0.15/0.20/0.50 m and 4/5/7/15° covariance edges, angular coverage/missing sectors/endpoints, PSD and correlated innovation, missing IMU/Pico/clock-epoch faults, synthetic corridors/symmetry/kidnapping with OD-020 top-K ambiguity, 5 informative scans across 0.5 s, graph jump/generation, replay clock jumps and old-state re-publication attacks. Measure false-valid global poses, missed-degrade/lost events, safe abstention, recovery latency, map-insertion violations, covariance calibration and pose/TF age under load. Use independent held-out truth, Docker Catch2/CTest x86/ARM64 and actual Raspberry Pi recorded/fault-injected data. All numerical thresholds require field calibration and evidence before operational deployment.
+
+**Consequences:** OD-020 verifies global candidates before acceptance; OD-021 isolates freshness/durability overload; OD-023/024/025 still own channel schemas, replay seek/checkpoint implementation and ROS2 adapter policy. No implementation, test completion or proven Pi thresholds are claimed by this decision.
 
 ### OD-023 — MCAP native channel and schema
 
