@@ -37,6 +37,13 @@ target_include_directories(slam_sensors PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_sensors PUBLIC slam::core)
 
+add_library(slam_ld19 STATIC src/ld19.cpp)
+add_library(slam::ld19 ALIAS slam_ld19)
+target_compile_features(slam_ld19 PUBLIC cxx_std_20)
+target_include_directories(slam_ld19 PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_ld19 PUBLIC slam::sensors)
+
 add_library(slam_mapping STATIC src/occupancy.cpp)
 add_library(slam::mapping ALIAS slam_mapping)
 target_compile_features(slam_mapping PUBLIC cxx_std_20)

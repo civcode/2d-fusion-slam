@@ -13,6 +13,8 @@ namespace slam::sensors {
 // It never contributes acquisition time, angular support or map evidence.
 enum class ReturnKind { hit, no_return, invalid, missing };
 enum class RotationDirection { counterclockwise, clockwise };
+// Time provenance: unknown/provisional physical beam timing is not mapping-ready.
+enum class BeamTimeQuality { unspecified, provisional, calibrated, synthetic_exact };
 
 struct BeamObservation {
   Timestamp acquired_at{};
@@ -21,12 +23,14 @@ struct BeamObservation {
   ReturnKind kind{ReturnKind::invalid};
   std::uint64_t source_id{}; // 0 means unspecified synthetic/import source
   std::uint64_t calibration_revision{};
+  BeamTimeQuality time_quality{BeamTimeQuality::unspecified};
 };
 
 struct AssembledScan {
   std::vector<BeamObservation> beams; // excludes missing placeholders
   std::uint64_t source_id{};
   std::uint64_t calibration_revision{};
+  BeamTimeQuality time_quality{BeamTimeQuality::unspecified};
   Timestamp first_acquired{};
   Timestamp last_acquired{};
   Timestamp midpoint{};
