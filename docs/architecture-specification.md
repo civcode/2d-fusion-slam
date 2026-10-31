@@ -1128,7 +1128,7 @@ Startup/shutdown still follows OD-016 process ownership and lifecycle (\`CREATED
 - ROS 2 adapter maps native scan/IMU/odometry/map/pose to standard topics and owns TF/clock conversions; only one publisher per TF edge.
 - No browser, ROS or Node/JS runtime is required for the headless core.
 
-Accepted OD-023 native Protobuf MCAP channels/descriptors, accepted OD-024 indexed seek/semantic checkpoint format (**B32** pending), ROS distro/QoS defaults **OD-025**. **OD-001 signed-ns time, OD-002 Pi-first/Pico-future acquisition, and OD-003 LD19 beam timing/clock alignment are accepted**: use signed 64-bit nanoseconds with explicit clock-domain conversion and ROS-neutral simulated-clock events.
+Accepted OD-023 native Protobuf MCAP channels/descriptors, accepted OD-024 indexed seek/semantic checkpoint format (**B32** pending), accepted OD-025 Jazzy/Ubuntu 24.04 arm64 standalone ROS adapter and QoS defaults (B33 pending). **OD-001 signed-ns time, OD-002 Pi-first/Pico-future acquisition, and OD-003 LD19 beam timing/clock alignment are accepted**: use signed 64-bit nanoseconds with explicit clock-domain conversion and ROS-neutral simulated-clock events.
 
 ### 10.1 Accepted OD-012: versioned directory map bundles and generation publication
 
@@ -1242,6 +1242,49 @@ Do **not** persist native `ISAM2`/Ceres memory dumps, pointers or Boost object l
 **Atomic sidecar persistence:** Follow OD-012 staging/checksum/size/path validation, file+directory synchronization, manifest and **atomic index/current pointer publication**; recover the last fully published checkpoint, reject partially written or corrupt/incompatible checkpoints and fall back to earlier compatible or session start. Segments, referenced immutable maps and checkpoint payloads are content-verified. Checkpoint sidecar failure must **not** mark an otherwise healthy raw MCAP session incomplete or block acquisition; OD-021 still controls recording completeness, bounded IO and queue isolation. A user-requested historical state must never include post-T loop closures; an offline globally optimized map may revise old poses but must be labeled a **different result**.
 
 **B32 verification (not yet executed):** Synthetic exact-session baseline versus checkpoints with random, equal-timestamp, late/out-of-order and boundary seeks; 30 s/freeze cadence; Pico sync/clock epochs and LD19 partial scans; OD-006 bias, trajectory and covariance; active/frozen submaps/keyframe IDs; accepted/pending loops, OD-019 iSAM2 deterministic continuation; OD-020 competing recovery hypotheses; OD-022 trust/pose publication; corrupt/missing/incompatible sidecar and immutable map refs; segment rollovers, MCAP index disabled/truncated and B29 disk faults; and deliberately injected future loop closure. Compare **exact hashes** for discrete data/decisions and **declared numerical tolerances** for solver floating state; measure checkpoint size, per-seek wall time versus recorded warm-up length, index fallback cost, Pi CPU/peak RSS and disk contention. No runtime or measured Pi performance is claimed.
+
+### 10.4 Accepted OD-025 — Optional ROS 2 Jazzy 24.04 arm64 IPC integration
+
+**Placement:** Keep the four mandatory OD-016 processes (`acquisition`, `recorder`, `slam`, `web_lab`). An **optional, independently launched `slam2d_ros` ament_cmake/Jazzy integration process** connects **only through OD-016 versioned `SOCK_SEQPACKET` native IPC**, consuming existing source/pose/map/status streams and issuing only validated commands. It does not open LD19/Pico devices, own maps, run a separate SLAM frontend/graph or replace native Protobuf MCAP recording. Use an independently pinned **Ubuntu 24.04 Noble arm64 / ROS 2 Jazzy** adapter Docker/colcon image and installed ROS-neutral C++ SDK; the native CMake/Docker build, SDK, headless recording/replay, hardware and persistence must work without ROS, ament, DDS or rosbag2. `slam2d_ros` is one optional **integration package**, not an additional compulsory core target. Lyrical on Ubuntu 26.04 arm64 is a future separately tested adapter build, not source/API changes.
+
+~~~text
+LD19/Pico source -> native acquisition -> raw recorder (authoritative OD-023 MCAP)
+                                |
+                                +-> OD-016 native bounded IPC -> native SLAM/map
+                                                                 |
+                                         versioned telemetry/status/map IPC
+                                                                 |
+                                  optional slam2d_ros (Jazzy, isolated)
+                                  |        |          |          |
+                                 /scan   /odom   /slam/pose     /map
+                                 /points  /diagnostics   /tf  /tf_static*
+                                                       |
+                                               Nav2 / RViz / optional rosbag2
+* static edges only if adapter is explicitly appointed sole static authority
+~~~
+
+**Publishers and default QoS:**
+
+| Topic | ROS 2 type | Reliability | Durability | Depth |
+| --- | --- | --- | --- | --- |
+| `/scan` | `sensor_msgs/msg/LaserScan` | best effort | volatile | 5 |
+| `/points` | `sensor_msgs/msg/PointCloud2` | best effort | volatile | 5 |
+| `/imu/data_raw` (optional) | `sensor_msgs/msg/Imu` | best effort | volatile | 5 |
+| `/odom` | `nav_msgs/msg/Odometry` | reliable | volatile | 10 |
+| `/slam/pose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | reliable | volatile | 5 |
+| `/map` | `nav_msgs/msg/OccupancyGrid` | reliable | transient local | 1 |
+| `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | reliable | volatile | 10 |
+| `/tf`, `/tf_static` | `tf2_msgs/msg/TFMessage` | standard tf2_ros broadcaster | standard (static is late-joiner capable) | broadcaster-defined |
+
+All topic names, frame IDs and supported QoS fields are adapter parameters/remappable with startup compatibility checks. Publishers and nonblocking subscriptions follow accepted OD-021 byte/count/age limits: slow ROS/TF/Nav2 subscribers never stall native acquisition, local odom, graph or recording. Transient-local `/map` publishes coherent versioned *full* snapshots for late joiners; do not replay an unbounded delta backlog. A normal `LaserScan` represents genuinely uniform angular/time samples with a **first-beam acquisition timestamp** and correct angle sign; OD-005 partial/nonuniform scans must instead be represented faithfully via `PointCloud2` with documented per-point timing, not a forged raw scan.
+
+**REP-105 transform authority and OD-022 gating:** Exactly one designated broadcaster for each `map→odom`, `odom→base_link` and `base_link→{laser,imu_link}` edge. `slam2d_ros` may own `map→odom` when global authority is configured, never simultaneously with AMCL/another localizer; continuous `odom→base_link` comes from exactly one configured local odometry provider (disable adapter broadcast if external); extrinsics come from robot_state_publisher or one named static publisher. Compute `T_map_odom(t) = T_map_base(t) * inverse(T_odom_base(t))` using same valid acquisition time, matching source/clock/map/graph generation, and record OD-022 `correction_generation` on discontinuous relock or graph publication without jumping local odom. `TRACKING` publishes only currently authorized valid corrected poses/TF. `UNCERTAIN` issues restricted/uncertain status but **no current authoritative global TF by default**; `LOST`/`RELOCALIZING` issue neither current valid global pose nor new global TF. Static extrinsics and valid local odometry remain available as their own health permits. TF buffers may retain past transforms: consumers must check explicit `/diagnostics` tracking/freshness/validity, and stale TF cannot be refreshed with fake stamps.
+
+**OD-001 ROS clock adapter:** The domain's signed int64 nanosecond timestamps/clock domains/epochs remain canonical. In live hardware mode monitor a measured **monotonic→system/ROS time mapping**, offset/drift/uncertainty/jumps and conversion overflow; stamp sensor ROS messages at *actual acquisition* time (or reconstructed first beam). `node->now()` on arrival is not a substitute. During `use_sim_time`, respect `/clock` readiness, pauses, resets/backward seeks and replay epochs: convert to the selected simulated timeline and suppress unconvertible/unsafe data. The bounded source→ROS transform must be validated, and clock discontinuities may invalidate TF and odom interpolation according to OD-001/022. Do not assign physical beam time to OD-023 MCAP `publish_time` or confuse ROS system time with session-relative MCAP log time.
+
+**Recording interoperability:** `rosbag2_storage_mcap` writes **secondary** ROS message-typed recordings (`ros2 bag record -s mcap /scan /points /odom /slam/pose /map /tf /tf_static /diagnostics`). These MCAPs are not the authoritative raw `slam.recording.v1` Protobuf MCAP format, and a native raw file is **not automatically `ros2 bag play` compatible**. Keep optional exporter/converter in the adapter tooling: consume OD-023 `slam_storage` native raw events and OD-024 replay, transform to appropriate ROS serialization/time/frames, write ROS-compatible topics and document conversion losses. No rosbag2 in recorder, source drivers, `slam_core` or portable `slam_storage`.
+
+**B33 tests (not yet executed):** ROS-free installed native SDK/CTest; standalone 24.04 arm64 Jazzy ament/colcon container and IPC version negotiation/reconnect/queue limits; message fields/covariances, map origin rotation/unknowns, true scan first beam/partial point cloud, TF authority duplicate prevention and OD-022 LOST stale transforms, time mapping wall vs `/clock` pause/seek/reset/epoch/uncertainty, QoS overrides/late map subscribers, Nav2/RViz frames, native versus ROS MCAP/play/export, and CPU/RSS/latency/queue faults on target Raspberry Pi. Keep OD-025 acceptance distinct from implementation and target hardware measurements.
 
 ## 11. Accepted OD-016: four-process isolation, versioned IPC and bounded workers
 
