@@ -140,9 +140,9 @@ Use non-root runtime where practical; map only required devices and explicitly w
 | --- | --- | --- |
 | **C0** | C++20 core, synthetic apartment/warehouse, time/SE(2) and test harness | Local/Docker native build, deterministic fixture checks |
 | **C1** | Prepared public dataset import, scan assembly, gyro-only/no-wheel motion capability, basic occupancy | Verified metadata/truth status, unit/integration tests; no real hardware required |
-| **C2** | Ceres matcher and frozen-map localizer on synthetic/public held-out traversals | Geometry-only/prior ablations, false-lock/degenerate rejection, map read-only |
-| **C3** | Workstation one-pass offline GTSAM reference with verified loops, map bundle | Graph/factor/gauge tests, source evidence, rollback and reproducible report |
-| **C4** | Pi known-map localizer on *prepared identical datasets*, then direct Pi sensor path | Benchmark latency/CPU/RSS/thermal, failure isolation, correct validity |
+| **C2** | Ceres scan matcher and quality gates against known synthetic/reference maps | Geometry-only/prior ablations, Jacobians, rank/degeneracy and false-match rejection |
+| **C3** | Workstation one-pass offline mapping with GTSAM batch, verified loops and native map bundle | Graph/factor/gauge tests, false-loop rollback and map round-trip |
+| **C4** | Held-out workstation known-map localization, then identical prepared-data tests on Pi and later live sensor input | Accuracy/false-lock/status first; then measured Pi latency/CPU/RSS/thermal, failure behavior |
 | **C5** | Optional Pi online SLAM if measured need | Incremental-vs-offline parity, graph growth/session limit and safe degradation |
 
 **Parallel hardware track H0–H2:** H0 confirm device electrical wiring, drivers and actual wheel telemetry; H1 minimal Pi native LD19+MPU6050 raw capture/MCAP; H2 controlled sensor timing, bias and calibration recordings. Its readiness does **not** block C0–C3; later real-data checks refine models and thresholds.

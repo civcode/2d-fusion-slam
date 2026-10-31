@@ -213,8 +213,8 @@ Priorities: **P0** necessary for first runnable core; **P1** first workstation o
 
 1. **C0/V0:** Buildable portable core, time/SE(2), synthetic apartment/warehouse and no-network tests.
 2. **C1/V1:** Public dataset manifest/import; gyro/no-wheel source behavior, scan assembly, reproducible mapping primitives.
-3. **C2/V2/V3:** Ceres matcher, static-map held-out localizer, then one-pass offline GTSAM/map export and safe loop verification. The [implementation contract](implementation-contract.md) lists the detailed C0–C5 work items; [Benchmarks](benchmarks-and-datasets.md) defines V0–V5 evidence stages independently.
-4. **C4/V4:** Same prepared dataset on Pi, then source-connected tests. Test capture-to-valid-pose latency, thermal/memory and failure behavior before adding caching/graph complexity.
+3. **C2/C3/V2:** Implement Ceres matching first, then one-pass offline GTSAM mapping, verified loops and a native map export on synthetic/prepared public data. The [implementation contract](implementation-contract.md) lists C0–C5 work items; [Benchmarks](benchmarks-and-datasets.md) defines V0–V5 evidence stages independently.
+4. **C4/V3/V4:** Evaluate held-out known-map localization on the workstation first, then replay the same prepared datasets on Pi before source-connected tests. Measure latency, thermal/memory and failure behavior before adding caching/graph complexity.
 5. **C5/V5:** Optional online Pi graph after comparison with offline reference, bounded real session duration and a measured resource policy.
 
 **Parallel H0–H3:** Pi LD19/MPU6050 hardware acquisition, native raw MCAP and controlled calibration recordings. It is encouraged early but **not a prerequisite for C0–C3 synthetic/public benchmark acceptance**. Real device data subsequently validates hardware clock, drift, vibration and real trajectory behavior.
