@@ -51,7 +51,7 @@ Priorities: **P0** necessary for first runnable core; **P1** first workstation o
 | OD-024 | Indexed seek/checkpoint | P1/P3 | **Reopened/deferred** | Deterministic start-to-finish replay first |
 | OD-025 | Optional ROS integration | P3 | **Selected isolation; optional build** | Standalone Jazzy adapter only after native integration need |
 
-**Evidence as of this revision:** Design/specification documents only. No implementation, datasets, test runs, Pi profiling or real sensor calibration results are asserted. No candidate numerical performance guarantee is accepted.
+**Implementation evidence update (2026-10-31):** A C++20 checked time/SE(2) core and simple synthetic apartment/warehouse ray-casting fixture are implemented. Two local CTest smoke suites passed, covering only parts of C0/B01 and fixture generation. No complete SLAM, pinned public dataset benchmark, Pi profiling or real-sensor calibration result is asserted. See [implementation status](implementation-status.md). No candidate numerical performance guarantee is accepted.
 
 ## 3. Source time, motion and scan decisions
 

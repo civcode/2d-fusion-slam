@@ -1,6 +1,6 @@
 # 2D Fusion SLAM — Technical Specification
 
-**Status:** Revised technical baseline v0.2; not yet implemented or benchmark-validated  
+**Status:** Revised technical baseline v0.2; core time/SE(2) and initial synthetic fixtures implemented, SLAM functions not yet benchmark-validated  
 **Date:** 2026-10-31  
 **Related:** [Architecture](architecture-specification.md) · [Implementation contract](implementation-contract.md) · [Benchmarks](benchmarks-and-datasets.md) · [Design decisions](open-design-choices.md)
 

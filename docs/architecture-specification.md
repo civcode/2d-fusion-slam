@@ -5,7 +5,7 @@
 **Scope:** ROS-independent C++20 2D LiDAR/gyro SLAM, workstation offline mapping, Raspberry Pi 5 known-map localization and optional later onboard SLAM.  
 **Related:** [Technical specification](technical-specification.md) · [Implementation contract](implementation-contract.md) · [Benchmarks and datasets](benchmarks-and-datasets.md) · [Design decisions](open-design-choices.md)
 
-> This is an intended architecture, **not implemented functionality**. A selected interface or algorithm is not a tested performance claim. The original detailed proposals are historical design input, not mandatory first-implementation requirements.
+> This is an intended architecture, **not a completed SLAM implementation**. Only the checked timestamp/SE(2) core and initial deterministic synthetic fixtures have been implemented so far; see [implementation status](implementation-status.md). A selected interface or algorithm is not a tested performance claim. The original detailed proposals are historical design input, not mandatory first-implementation requirements.
 
 ## 1. Architectural strategy and deployment profiles
 

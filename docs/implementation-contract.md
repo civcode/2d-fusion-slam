@@ -4,7 +4,7 @@
 **Date:** 2026-10-31  
 **Related:** [Architecture](architecture-specification.md) · [Technical specification](technical-specification.md) · [Benchmarks](benchmarks-and-datasets.md) · [Design decisions](open-design-choices.md)
 
-> This repository is **currently documentation-only**. Example targets and commands below are requirements for future implementation stages, not evidence that such files, tools or tests already exist. The first implemented algorithms and benchmarks use **synthetic and opt-in verified public datasets**. The real LD19/MPU6050 recorder is a **parallel development path**, not a gate for the initial synthetic/public-data vertical slice.
+> The repository now has a **C0 bootstrap implementation** (C++20 time/SE(2) core, deterministic apartment/warehouse synthetic fixtures, local CTest smoke tests). Most application targets and benchmark features below remain staged plans rather than existing software; see [implementation status](implementation-status.md). The first implemented algorithms and benchmarks use **synthetic and opt-in verified public datasets**. The real LD19/MPU6050 recorder is a **parallel development path**, not a gate for the initial synthetic/public-data vertical slice.
 
 ## 1. Policy and precedence
 

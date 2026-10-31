@@ -1,26 +1,53 @@
 # 2D Fusion SLAM
 
-**Project stage:** Architecture and benchmark planning. No SLAM source code, fixtures, build configurations, or benchmark results are implemented in this repository yet.
+**Status: C0 bootstrap underway.** The portable C++20 time/SE(2) core and deterministic synthetic apartment/warehouse scan fixtures are implemented; **this is not yet a working SLAM system**. See [implementation status](docs/implementation-status.md).
 
-The target sensor combination is **LD19 2D LiDAR + MPU6050 gyro**, with **wheel odometry optional and only used if actually measured**. The portable C++20 core is designed for three modes:
+The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optional **actually measured** wheel odometry. Three target modes share a portable core:
 
-| Profile | Environment | Goal |
+| Mode | Platform | Function |
 | --- | --- | --- |
-| **Offline SLAM** | Powerful workstation | Reproducible Ceres/GTSAM batch mapping and reliable map export |
-| **Known-map localization** | Raspberry Pi 5 | Read-only map, bounded tracking and explicit global pose validity, no initial GTSAM |
-| **Online SLAM** | Raspberry Pi 5, later | Reduced, resource-limited incremental mapping after benchmarks |
+| Offline SLAM | Powerful workstation | Ceres scan matching, occupancy mapping and GTSAM batch optimization |
+| Known-map localization | Raspberry Pi 5 | Read-only verified map and bounded pose tracking, no initial GTSAM |
+| Online SLAM | Raspberry Pi 5 (later) | Resource-limited mapping, designed from benchmark evidence |
 
-**Initial implementation and benchmark priority:** deterministic synthetic apartment/warehouse fixtures and opt-in validated public datasets. **In parallel**, develop LD19/MPU6050 Pi acquisition and native raw recording; its actual hardware measurements do not block the initial algorithmic milestones. Real-device calibration and Pi profiling are required before claiming hardware-specific performance.
+**Development strategy:** Run initial implementation/tests/benchmarks on synthetic and verified opt-in public data. Develop real LD19/MPU6050 Pi acquisition/recording **in parallel**, without blocking synthetic/public tests. Optimizations and online graph complexity are selected using measurements, not assumptions.
 
-## Current specifications
+## What works today
 
-- [Architecture and runtime modes](docs/architecture-specification.md)
-- [Technical and sensor-capability requirements](docs/technical-specification.md)
-- [Implementation and dependency contract](docs/implementation-contract.md)
-- [Synthetic/public datasets and acceptance plan](docs/benchmarks-and-datasets.md)
-- [Decisions OD-001–OD-025 and evidence status](docs/open-design-choices.md)
-- [Migration rationale from v0.1](docs/documentation-migration-notes.md)
+- \`slam_core\`: checked signed 64-bit nanosecond arithmetic with explicit clock domains/epochs, SE(2) compose/inverse/transform/exp/log, constant-body-twist integration.
+- \`slam_fixtures\`: deterministic apartment (15 × 12 m, doorway gaps) and warehouse (30 × 20 m, repeated shelves) with exact ground-truth moving-ray acquisition times and hit/no-return classification.
+- Local CMake/Ninja build and two network-free CTest smoke tests. Additional Catch2 v3 tests are available by pinned FetchContent but **not yet verified in this offline environment**.
 
-**Working rule:** Preserve rigorous time/frame/source/map/pose contracts immediately; make sophisticated solvers, caches, graph summarization, relocalization and process topology earn their complexity through reproducible benchmarks.
+The synthetic fixtures are initial geometry test inputs, not an LD19 packet simulator or an accuracy benchmark yet. There is **no Ceres/GTSAM pipeline, Pi driver, recorder, ROS adapter or Web UI** implemented.
 
-No GitHub Actions are required by the design. Any future workflow should be manual-only by default, and tests should run locally or in Docker when code exists.
+## Build and test
+
+Install CMake 3.25+, C++20 compiler, Eigen3 (3.3+), Ninja (recommended). Network-free smoke tests:
+
+~~~sh
+cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DSLAM_ENABLE_CATCH2=OFF
+cmake --build build
+ctest --test-dir build --output-on-failure
+~~~
+
+For the pinned Catch2 v3 suite (may download Catch2 if not already cached):
+
+~~~sh
+cmake -S . -B build-catch -G Ninja -DBUILD_TESTING=ON -DSLAM_ENABLE_CATCH2=ON
+cmake --build build-catch
+ctest --test-dir build-catch --output-on-failure
+~~~
+
+If Eigen3 is not discoverable, supply \`-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3\`. No public dataset download, hardware or GitHub Actions are required.
+
+## Documentation
+
+- [Architecture](docs/architecture-specification.md)
+- [Technical specification](docs/technical-specification.md)
+- [Implementation contract](docs/implementation-contract.md)
+- [Benchmarks and datasets](docs/benchmarks-and-datasets.md)
+- [Design choices OD-001–OD-025](docs/open-design-choices.md)
+- [Implementation status and local test evidence](docs/implementation-status.md)
+- [Specification migration notes](docs/documentation-migration-notes.md)
+
+**Next:** sensor/scan data contracts, time-aware scan assembly and occupancy mapping; then Ceres matching, offline GTSAM and known-map localization. A minimal Web Lab follows once mapped state and replay are available.
