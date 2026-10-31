@@ -44,13 +44,13 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-018 | Spatial + frozen-submap signature retrieval with BnB/Ceres verification | P1 | Offline mapping | **Accepted** (descriptor staged; tests pending) |
 | OD-019 | Sparse global submap iSAM2, optional fixed-lag, offline batch cleanup | P3 | Onboard full SLAM | **Accepted** (performance/tests pending) |
 | OD-020 | Global BnB + bounded persistent top-K multi-scan relocalization | P2 | Kidnapped robot / initial localization | **Accepted** (B28 validation pending) |
-| OD-021 | Queue sizes, backpressure and recording loss | P1 | Fault handling | Open |
+| OD-021 | Bounded independent queues, loss-detectable durable MCAP, freshness SLAM and latest-state UI | P1 | Fault handling | **Accepted** (B29/Pi calibration pending) |
 | OD-022 | Localization state and publication gating | P2 | Downstream safety | Open |
 | OD-023 | MCAP channels, schema and bag import | P1 | Recording/replay | Open |
 | OD-024 | Replay checkpoints, seek and reproducibility | P1 | Benchmarks/Web Lab | Open |
 | OD-025 | ROS 2 distro, QoS and adapter interface | P3 | Nav2/RViz integration | Open |
 
-Recommended **implementation order**: accepted OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009/020 accepted coarse search and persistent global hypotheses, then OD-022 (tracking state thresholds), then **accepted OD-016** four-process deployment, OD-019/025 (full online/ROS). Accepted OD-016 fixes process boundaries and nonblocking IPC requirements; OD-021 still defines numeric queue, backpressure and recording-durability thresholds.
+Recommended **implementation order**: accepted OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009/020 accepted coarse search and persistent global hypotheses, then OD-022 (tracking state thresholds), then **accepted OD-016** four-process deployment, OD-019/025 (full online/ROS). Accepted OD-016 fixes process boundaries and nonblocking IPC requirements; accepted OD-021 now defines numeric queue, backpressure and recording-durability thresholds.
 
 ## 3. Sensor, timestamp and odometry decisions
 
@@ -1686,13 +1686,57 @@ The numbers are **engineering objectives to benchmark**, not measured or hard re
 
 **Consequences:** OD-009 + OD-018 + OD-007/008 are reused with **one bounded top-K temporal verification layer**, not a second global localization algorithm. B28 explicitly measures wrong global locks **including false confidence**, correct recovery, ambiguity refusal and resource noninterference. Numerical budgets/K/gates have **not** been measured; implementation and testing are pending. OD-021 still sets exact queue/backpressure, OD-022 global state and publication thresholds, and OD-024 replay checkpoints.
 
-### OD-021 — Bounded queues, drop and recorder durability
+### OD-021 — Bounded independently managed queues and subsystem-specific overload semantics
 
-**Question:** Queue capacities and overload semantics for acquisition, MCAP writer, scan processing, backend and UI?
+**State:** **Accepted** (capacities and deadlines are unmeasured engineering defaults; B29 / target-Pi tuning and implementation pending)  
+**Decision date:** 2026-10-31  
+**Decision authority:** User's explicit four-priority overload and durable-recording choice  
+**Priority:** P1
 
-**Provisional preference:** separate bounded channels with explicit policy: acquisition cannot block on optimization; recorder raises integrity failure if unable to preserve raw data; live matcher may drop stale scans while recording the drop; Web Lab samples aggressively.
+**Decision:** Keep every acquisition, recording, motion/SLAM, graph/cache and Web Lab boundary separately bounded and metered. **Acquisition must never block indefinitely** on recording, local matching, graph optimization, cache building or visualization. Preserve raw evidence or explicitly invalidate the recording's completeness; prefer fresh complete scans in SLAM without fabricating motion continuity; coalesce redundant *work*, never authoritative graph factors; and let lossy UI consumers resynchronize to the newest coherent version. Use native, ROS-independent typed contracts with per-source event/sequence/epoch provenance. OD-016 still defines the four independent processes and versioned Unix seqpacket transport.
 
-**Decision gate:** sustained Pi load, disk slowdown/full, serial burst, optimization stall, shutdown and interrupted writes. Show observable counters and no silent data loss. Test replay reproducibility from deliberately truncated bags.
+**Alternatives:** (A) one shared FIFO/unbounded blocking backpressure — **rejected**, permits disk/UI/optimizer stalls to starve acquisition and grow memory; (B) uniformly drop-oldest across all streams — **rejected**, conceals irrecoverable raw loss, erases motion evidence and can discard accepted graph factors; (C) separate bounded channels with **evidence-preserving recorder, gap-validating SLAM, coalesced backend work and latest-state UI — accepted**. A disk spool or extra broker may be evaluated later, not assumed in the initial design.
+
+#### Initial queue and workload policy (not hardware-validated)
+
+These are **starting configuration values** for LD19 near 10 Hz and Pico wheel/IMU events on a Raspberry Pi with OD-016's four processes; they are **not guaranteed throughput, real-time deadlines or safe lossless capacities**. Each route must have a configured item-count bound **and** byte bound, and maximum resident age/deadline wherever applicable; the first exceeded limit triggers its documented overload result. Set missing count/byte limits from measured maximum event size and bursts in B29. "5 s" is a *maximum backlog age*, not permission to queue without byte or count limits.
+
+| Queue / owner | Initial capacity or envelope | Overload result |
+| --- | --- | --- |
+| LD19 acquisition ring | **512 packets and 128 KiB** | Keep draining UART when possible; report overwritten/failed-enqueue packet IDs and gaps; recording is incomplete if required raw evidence is lost |
+| Pico acquisition ring | **512 frames and 256 KiB** | Preserve boot/epoch and sequence gap diagnostics; invalidate incomplete wheel/IMU intervals |
+| Acquisition → MCAP recorder | **16 MiB or 5 s oldest-event backlog**, plus measured finite item cap | No intentional silent drop; pressure warning, then fail/mark incomplete on unavoidable raw loss; producer stays nonblocking |
+| Acquisition → SLAM motion stream | **1 s motion history** with finite measured item/byte limits | Flag missing/overage intervals, reject invalid deskew/trajectory coverage; never interpolate across absent samples as valid |
+| Completed scan processing | **8 scans**, with finite byte and maximum-age bounds | Discard **oldest unprocessed complete** stale scans; report time and scan-ID gaps; do not insert dropped scans |
+| Backend optimization | **2 pending jobs**, plus in-flight and memory caps | Coalesce redundant optimization *requests* by target graph version; retain all admitted factor IDs/journal entries and critical loop changes |
+| Map/EDT/cache rebuild | **1 running + 1 pending**, finite snapshot/byte caps | Supersede stale pending rebuilds and reject stale publications; never mutate a pinned immutable snapshot |
+| Web Lab telemetry | **1 latest state per stream**, finite payload/age cap | Replace obsolete frames; UI lag must not affect producer |
+| Web Lab map versions | **2 pending versions**, finite payload cap | Skip superseded deltas, mark version gap and send a fresh full consistent snapshot |
+
+Do not apply raw-drop rules to SLAM scan-only queues or vice versa. Event identity, production/acceptance/processed/high-water marks, and all queue-cap exceedances are explicit in diagnostics. The OD-001 host-steady clock governs *processing* age, deadlines and monitoring; source/event clock stamps and OD-001 epoch identities remain intact.
+
+#### Recording, MCAP durability and session integrity
+
+Use the **native MCAP C++ writer** in the recorder process with ROS-independent serializable raw event schemas (exact channel inventory, encoding and evolution remain **OD-023**). Initially configure **one writer thread**, **LZ4** compression (benchmark Zstd), **chunk CRC enabled**, chunk target **1 MiB or 1 s of input, whichever first**, a target **at most 1 s between successful disk synchronizations**, and segment rotation **every 60 s or 256 MiB, whichever first**. All are provisional B29/Pi targets; an elapsed time trigger may explicitly call MCAP \`closeLastChunk()\`, including when the byte target has not been reached. Chunk closure and the sink's \`flush()\` are **not** an OS durability guarantee: use a controlled FD-backed sink and check \`fsync\`/\`fdatasync\` results, with directory synchronization as necessary for durable segment/manifest rename/rotation. Record last accepted, written, chunk-completed, **successfully synced**, and finalized/verifiably complete source/event high-water marks **separately**; transport acknowledgments do not imply any of these stronger claims.
+
+A segment is **COMPLETE only after** graceful writer close/index/footer, successful required sync and integrity verification, and a durable/atomic session manifest update. On crash or forced termination, scan and **recover only individually complete, CRC-valid records/chunks** supported by the format/reader; quarantine/truncate unusable tails, mark recovered coverage and **INCOMPLETE** if missing required evidence, and never synthesize an apparently complete MCAP summary. Rotate and recover with monotonic segment numbers, explicit continuity/sequence checks, checked write/flush/fsync errors and atomic manifest status; disk-full, persistent stall, unexpected restart and unsynced-tail uncertainty must remain observable. B29 determines whether the proposed sync interval and segment cadence are feasible on real storage.
+
+**Recorder session state machine:** \`RECORDING\` (all admitted raw events accounted for); \`DEGRADED\` (at **70%** recorder-queue occupancy or excessive writer age/latency); \`FAILED\` (actual required raw-data loss, sequence gap/overflow, irrecoverable write/sync failure or unprovable completeness); \`FINALIZING\` (bounded drain, close, sync and verify for a nonfailed session); \`COMPLETE\` (successfully finalized *and verified*). At **90%** occupancy issue a critical warning. Queue-age, byte, event-count and disk-latency alerts can trigger earlier than occupancy. **FAILED is sticky for session completeness**: salvaged segments and subsequent new recording sessions may be useful, but may not rename a failed original session COMPLETE. If shutdown cannot drain/sync, record INCOMPLETE, not COMPLETE. Never allow a network/visualization subscriber to backpressure the recorder.
+
+#### SLAM, backend and Web Lab safety
+
+- **Local motion** remains a separate time-ordered OD-006 trajectory with checked sample coverage, valid epochs and covariance; missing Pico/IMU/encoder intervals invalidate affected OD-004 deskew and trigger OD-022 degraded/uncertain status. Stale completed scans may be skipped for freshness, with exact scan/time gaps. A skipped or improperly deskewed scan cannot become an OD-010 insertion, keyframe or OD-013 factor. Raw recording remains independent.
+- **Graph** accepts factors into authoritative OD-013/019 factor state or a recoverable journal *before* scheduling optimization; coalesce only worker requests, preserving every admitted factor, loop closure and graph version. Work items reference input graph versions; optimization results publish only if validated against a coherent version. Under persistent lag, defer new expensive loop verification or degrade, never silently delete accepted constraints.
+- **Map/cache** supersedes redundant pending rebuild requests while keeping immutable OD-011 snapshots/version pins and a measured ceiling on pinned bytes; stale completions cannot overwrite newer coherent results.
+- **Web Lab** serves current per-stream localization telemetry and complete versioned map snapshots; when a client skips a map delta/version, it must request/receive a new coherent full snapshot rather than replaying an unbounded delta log. Slow/disconnected clients affect only Web Lab memory and latency. Control commands remain acknowledged, validated and non-lossy as OD-016 specifies, not a "latest value" telemetry substitute.
+
+#### Required observable evidence and benchmark B29 (tests not yet executed)
+
+All queues expose capacity and high-water **items, bytes and oldest host-steady age**, enqueue/dequeue age and outcome, per-source IDs/sequence gaps, drops/overflows, deadline misses, queue and worker versions, active job count, cancellation/coalescing and lag. Recorder diagnostics additionally expose MCAP bytes/chunks/CRC, writer throughput, pending/durable sequence boundaries, \`fsync\` latency/failures, segment rotation/recovery and a sticky session completeness verdict. Emit bounded machine-readable diagnostic events/replay trace; prevent diagnostics themselves from creating an unbounded feedback queue.
+
+**B29** must inject Pi CPU contention and measured sensor bursts, storage stalls/full disk and sync errors, acquisition faster than Ceres, Pico disconnect/reconnect and missing motion intervals, recorder crash/forced termination and interrupted MCAP chunks, GTSAM multi-second stalls and loop-factor arrival, map-cache backlogs, slow/disconnected Web Lab clients and missed map deltas. Assert acquisition never waits indefinitely; fixed item/byte/age memory bounds; no false complete recording; no falsely valid deskew or map insertion across motion gaps; no silently lost graph factors; snapshot resync and bounded UI lag. Compare LZ4/Zstd and 1 s sync/60 s/256 MiB rotation on **target Raspberry Pi + selected SD/SSD under worst-case load**, recording actual rates, tails, CPU/RSS, disk bytes and p50/p95/p99 latencies. Tests are **required but not yet run**; adjust thresholds only from recorded evidence.
+
+**Consequences:** OD-016 topology and OD-020 global-recovery safety remain unchanged. OD-021 fixes the *initial* isolation and overload choices while leaving quantitative calibration open; **OD-023** still defines MCAP channel/schema specifics, **OD-024** replay seek/checkpoints, and **OD-022** localization-state hysteresis/pose thresholds. Neither an unbounded stall nor a partially recovered file can be represented as a guaranteed lossless valid session.
 
 ### OD-022 — Tracking-state thresholds and pose publication
 
