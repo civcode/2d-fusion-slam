@@ -1,6 +1,6 @@
 # 2D Fusion SLAM
 
-**Status: C0 complete for core primitives; early C1 sensor/mapping slice implemented.** Time/SE(2), deterministic synthetic fixtures, timestamp-aware scan assembly and a 2D occupancy grid exist; **this is not yet a working SLAM system**. See [implementation status](docs/implementation-status.md).
+**Status: C0 foundations and initial C1 sensor/motion primitives implemented.** The portable core now includes synthetic scenes, scan assembly, an occupancy grid, an LD19 packet decoder and a minimal trajectory/deskew library. **This is not yet a working SLAM system.** See [implementation status](docs/implementation-status.md).
 
 The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optional **actually measured** wheel odometry. Three target modes share a portable core:
 
@@ -18,9 +18,11 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_fixtures`: deterministic apartment (15 × 12 m, doorway gaps) and warehouse (30 × 20 m, repeated shelves) with exact ground-truth moving-ray acquisition times and hit/no-return classification.
 - `slam_sensors`: time-aware, source/calibration-consistent angular-seam assembly, full/partial classification, actual acquisition bounds and observed-sector coverage; invalid/missing/no-return remain distinct.
 - `slam_mapping`: bounded rotated-origin log-odds occupancy with independent known mask, clipping, one update per touched cell, hit-over-free priority and default-safe no-return policy. Callers supply trusted world-space rays; no automatic deskew is implied.
-- Local CMake/Ninja build and **three** network-free CTest tests pass under GCC 14, including strict warnings and UBSan. Pinned Catch2 v3 remains **unverified in this offline environment**.
+- `slam_ld19`: 47-byte LD19 packet decoding, CRC-8, corrupted-stream recovery, raw frame preservation, bounded 30-second counter unwrapping and **provisional** angle/speed timing. Receipt time and acquisition time remain distinct.
+- `slam_motion`: sampled SE(2) interpolation and midpoint deskew diagnostics with laser mounting offset, explicit gyro-only/full-SE(2) capability and acquisition-time validity gates.
+- Local CMake/Ninja build and **four** network-free CTest tests pass under GCC 14, strict warnings, UBSan and ASan+UBSan. Pinned Catch2 v3 remains **unverified in this offline environment**.
 
-The synthetic fixtures are initial geometry test inputs, not an LD19 packet simulator or an accuracy benchmark yet. There is **no Ceres/GTSAM pipeline, Pi driver, recorder, ROS adapter or Web UI** implemented.
+LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no Ceres/GTSAM pipeline, Pi driver, recorder, ROS adapter or Web UI** implemented.
 
 ## Build and test
 
@@ -52,4 +54,4 @@ If Eigen3 is not discoverable, supply `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3`
 - [Implementation status and local test evidence](docs/implementation-status.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
-**Next:** LD19 packet/clock modeling and validated scan-to-world trajectory/deskew boundaries, followed by immutable map snapshots/EDT, Ceres matching, workstation GTSAM and known-map localization. A minimal Web Lab follows once mapped state and replay are available.
+**Next:** connect the physical sensor acquisition and time-calibration path in parallel, and implement immutable map snapshots/EDT and synthetic Ceres scan matching. A tested gyro predictor and verified translational motion source remain future work, followed by workstation GTSAM and known-map localization. A minimal Web Lab follows once mapped state and replay are available.

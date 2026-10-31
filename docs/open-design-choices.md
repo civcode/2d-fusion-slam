@@ -51,7 +51,7 @@ Priorities: **P0** necessary for first runnable core; **P1** first workstation o
 | OD-024 | Indexed seek/checkpoint | P1/P3 | **Reopened/deferred** | Deterministic start-to-finish replay first |
 | OD-025 | Optional ROS integration | P3 | **Selected isolation; optional build** | Standalone Jazzy adapter only after native integration need |
 
-**Implementation evidence update (2026-10-31):** C++20 checked time/SE(2), synthetic ray-casting fixtures, typed source/calibration-consistent scan assembly and a basic known-mask/log-odds occupancy grid are implemented. Three local CTest suites passed, partly exercising B01/B03/B06; full B02 packet parsing, scan deskew, submaps, a SLAM pipeline, pinned public benchmarks, Pi profiling and real calibration remain unverified. See [implementation status](implementation-status.md). See [implementation status](implementation-status.md). No candidate numerical performance guarantee is accepted.
+**Implementation evidence update (2026-10-31):** Checked time/SE(2), synthetic scenes, scan assembly, known-mask occupancy, native LD19 47-byte/CRC parser with nominal counter unwrap, and interpolation-only motion/deskew code are implemented. Four local CTest suites pass under strict warnings, UBSan and ASan+UBSan. They partially exercise B01–B06, **not** calibrated physical packet timing, gyro-bias/wheel motion estimation, hardware or public benchmarks. The full SLAM pipeline, submaps, Pi profiling and real calibration remain unverified; see [implementation status](implementation-status.md). See [implementation status](implementation-status.md). No candidate numerical performance guarantee is accepted.
 
 ## 3. Source time, motion and scan decisions
 
