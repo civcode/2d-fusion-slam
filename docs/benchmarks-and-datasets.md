@@ -673,6 +673,7 @@ The evaluator MUST state whether an SE(2) reference alignment was applied (initi
 | Localization health | Tracking dropout rate, uncertain/lost fractions; initial/kidnapped **verified correct recovery/time**, confident wrong-global-lock rate and duration, safe abstention fraction/time, map-search coverage and competing hypothesis retention (B28) | Known-map and held-out or clearly self-evaluated sequences; absolute false locks require independent truth. |
 | Computation | p50/p95/p99 deskew, scan match, map update, GTSAM backend and capture-to-pose latency; deadline misses | Pi 5 / x86-64 on identical prepared input. |
 | Resource use | Peak RSS, CPU utilisation, thermal throttle events, processed scans/s | Target hardware; log architecture/build/image digest. |
+| OD-021 queue/recording integrity (B29) | Per-queue item/byte/oldest-age high-water and p50/p95/p99; event sequence gaps and scan skip reasons; writer throughput, MCAP chunk/CRC, written-versus-durable source high-water, fsync failures/tails and COMPLETE/FAILED/recovered-prefix verdict; accepted graph factor audit and UI snapshot resync | Native multi-process fault injection on Docker x86/ARM64; real Pi 5 and intended storage for claimed rates and deadlines. |
 
 A benchmark report MUST include success/failure and refused/invalid measurements as well as the successful subset; excluding failures without disclosure is prohibited. Record actual sensor frequencies, dropped message counts and number of evaluated scans. A missing metric must be **null/unavailable with a reason**, never zero.
 
