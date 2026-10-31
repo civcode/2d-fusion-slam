@@ -23,7 +23,18 @@ target_include_directories(slam_core PUBLIC
 target_link_libraries(slam_core PUBLIC Eigen3::Eigen)
 set_target_properties(slam_core PROPERTIES CXX_EXTENSIONS OFF)
 
+add_library(slam_fixtures STATIC src/synthetic.cpp)
+target_compile_features(slam_fixtures PUBLIC cxx_std_20)
+target_include_directories(slam_fixtures PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_fixtures PUBLIC slam::core)
+set_target_properties(slam_fixtures PROPERTIES CXX_EXTENSIONS OFF)
+
 if(BUILD_TESTING)
+  add_executable(slam_fixtures_smoke tests/fixtures_smoke.cpp)
+  target_link_libraries(slam_fixtures_smoke PRIVATE slam_fixtures)
+  add_test(NAME fixtures_smoke COMMAND slam_fixtures_smoke)
+
   add_executable(slam_core_smoke tests/core_smoke.cpp)
   target_link_libraries(slam_core_smoke PRIVATE slam::core)
   add_test(NAME core_smoke COMMAND slam_core_smoke)
