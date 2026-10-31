@@ -47,7 +47,7 @@ C++20; CMake; Catch2 v3 and cxxopts via pinned FetchContent; Docker for builds/t
 | OD-021 | Bounded independent queues, loss-detectable durable MCAP, freshness SLAM and latest-state UI | P1 | Fault handling | **Accepted** (B29/Pi calibration pending) |
 | OD-022 | Four-state tracking, covariance/quality hysteresis and explicit global-pose validity | P2 | Downstream safety | **Accepted** (B30 tuning/tests pending) |
 | OD-023 | Native Protobuf MCAP raw LD19/Pico, sync, event and configuration schemas | P1 | Recording/replay | **Accepted** (B31 schema/replay validation pending) |
-| OD-024 | Replay checkpoints, seek and reproducibility | P1 | Benchmarks/Web Lab | Open |
+| OD-024 | Indexed MCAP seek, versioned semantic checkpoints and deterministic forward replay | P1 | Benchmarks/Web Lab | **Accepted** (B32 implementation/benchmarks pending) |
 | OD-025 | ROS 2 distro, QoS and adapter interface | P3 | Nav2/RViz integration | Open |
 
 Recommended **implementation order**: accepted OD-017 + OD-001 (buildable core), then OD-002/003/005/023/024 (recording), OD-004/006 (motion), OD-007/008/010/011 (frontend), OD-012/013/014/015/018 (offline mapping), OD-009/020 accepted coarse search and persistent global hypotheses, then OD-022 (tracking state thresholds), then **accepted OD-016** four-process deployment, OD-019/025 (full online/ROS). Accepted OD-016 fixes process boundaries and nonblocking IPC requirements; accepted OD-021 now defines provisional per-subsystem queue, backpressure and recording-durability policies; B29 must validate numeric limits on the Pi.
@@ -1863,13 +1863,81 @@ Honor accepted **OD-021**: independent bounded recorder input, one native C++ wr
 
 **Consequences:** Native Protobuf is an implementation dependency localized in **\`slam_storage\`**, MCAP remains the **single authoritative raw evidence file format**, OD-012 map/checkpoint bundles remain separate map artifacts, OD-021 owns durability and overflow, OD-024 owns seek/checkpoint policy, and OD-025 governs optional ROS distro/QoS/TF adapters. Accepted schema choice does not imply tests, implementation or Pi measurements are complete.
 
-### OD-024 — Deterministic replay seek and checkpointing
+### OD-024 — Hybrid indexed MCAP seeking, semantic checkpoints and deterministic forward replay
 
-**Question:** Replay from start on every seek, periodic full estimator checkpoints, or hybrid indexing plus state rebuild?
+**State:** **Accepted** (initial 30 s interval and performance budgets unmeasured; B32 implementation/tests pending)  
+**Decision date:** 2026-10-31  
+**Decision authority:** User's explicit hybrid indexed-seek and semantic-checkpoint selection  
+**Priority:** P1
 
-**Provisional preference:** first implement deterministic start-to-finish replay and step; seek initially rebuilds state from start. Add checkpoints when profiling proves necessary for the Web Lab.
+**Decision:** Use MCAP's **native chunk/message indexes** for efficient file access, a **separate atomically published, versioned sidecar of selective semantic checkpoints**, and **deterministic forward replay from an exact consumed-event frontier** to the requested position. Raw, native-Protobuf **OD-023 MCAP is the sole authoritative recording**; a checkpoint is a disposable acceleration artifact, **not** a raw data source or a second recording format. Always retain a correct **session-start replay fallback** if checkpoints or MCAP indexes are absent, corrupt, stale or incompatible. Distinguish **historical as-of-time** (what the live system could know at the chosen frontier, no future evidence) from **offline globally optimized** map/trajectory reconstruction (later evidence allowed and explicitly labeled).
 
-**Decision gate:** identical output hashes/metrics after pause/seek/step compared with straight replay, including gyro bias, active maps, graph states and random seeds. Document floating-point tolerance and thread-order constraints.
+**Alternatives:** (A) session-start replay for every seek — correct baseline/fallback but can be slow; (B) opaque periodic full-process/GTSAM iSAM2 dumps — rejected as unportable, stale across solver versions and resource-heavy; (C) **MCAP indexed lookup + versioned semantic checkpoint + ordered forward replay — accepted**. Persist essential mutable/decision state and immutable map references; recompute OD-011 EDT/OD-009 pyramid caches as needed. Keep optional checkpoint performance refinements deferred until B32 measures Pi overhead.
+
+#### Checkpoint cadence and storage policy (initial, unmeasured)
+
+| Parameter | Initial setting and rule |
+| --- | --- |
+| Replay interval | **30 s of recorded replay/event time**, only at a **safe deterministic commit boundary** at or after the target; capture the actual frontier and cadence variance |
+| Additional boundary | After a **completed OD-010 submap freeze**, once graph/map admission and publication reach a coherent committed frontier |
+| Baseline | Uninterrupted **OD-023 raw MCAP replay from session start** |
+| Seek | Find **latest compatible checkpoint at or before** requested logical frontier, restore, then deterministically replay through target |
+| Normal warm-up | Aim for **≤30 s of recorded events** with regular compatible checkpoints; **not guaranteed** if missing, delayed or incompatible |
+| Storage | Bounded count/bytes/pinned-map generations, configurable retention/pruning; no unbounded checkpoint frequency or memory |
+| Persistence | Separate versioned `recording/checkpoints/` sidecar, staged writes, checksums, fsync and **OD-012-style atomic publication** |
+| Cache state | Save source revisions/hash and pin immutable references; regenerate derived EDT/score pyramids when absent/incompatible |
+| Validation | Exact hashes for canonical discrete state; calibrated **numerical tolerances** for floating-point estimation on known platforms |
+
+MCAP indexes accelerate locating time windows, but **do not restore application state or guarantee original ingest order**. Generate and validate **chunk indexes, message indexes, summary/footer** in finalized segmented recordings; enable chunking and message indexing in the native writer. For truncated/incomplete MCAP or absent/unusable indexes, a safe sequential reader may scan verified records from a known boundary; do not invent a complete index or ignore OD-021 **FAILED/INCOMPLETE** session status. Index use must be compatible with recording-session-relative `log_time` and OD-023's separate **authoritative ingest/order IDs**. If multiple sources share a timestamp, process the recorded causal order; neither `log_time` sort nor `(segment, source_sequence)` alone supplies a total order across sources.
+
+#### Minimum portable semantic checkpoint
+
+| Component | Essential semantic state at checkpoint frontier |
+| --- | --- |
+| Identity/cursor | Raw recording and manifest/schema hashes, segment ID, **global next-ingest index / last consumed event ID**, per-source position/sequence/clock epoch, index hint/offset, duplicate/tie handling; distinguish **consumed**, **buffered unprocessed**, and **accepted async work pending** |
+| Clock/synchronization (OD-001/002/003/023) | Host/device domain/epoch mapping, clock generations, **fitted offset/drift and estimator history sufficient to continue the fit**, rejected/outlier evidence window, sync outstanding exchanges and calibration-effective boundaries |
+| LD19 scan assembly (OD-003/005) | Angular unwrap, seam, incomplete revolution, buffered raw packet/beam IDs, invalid returns, coverage/missing sectors and timing state |
+| Motion and deskew (OD-004/006) | Current SE(2), wheel/gyro/IMU preprocessing, bias/filter/integration state, covariance/cross-correlations, supported historical trajectory knots and pending interpolation buffers |
+| Tracking and recovery (OD-009/020/022) | State and reason, last accepted global fix, rejection window/hysteresis streak, full covariance/quality/validity and map correction generation; **persistent top-K** candidate tracks, coverage/frontier, pending scan evidence and deterministic work slice decisions |
+| Keyframes/submaps (OD-010/015) | Selector history, source membership/IDs, live active log-odds+observed masks, counts and insertion/lifecycle state; frozen submap **immutable content-addressed references** and graph anchor revisions |
+| Graph/backend (OD-013/018/019) | Portable variables, factor IDs/values/information/provenance and admission order, current valid estimates/graph revision, loop verification/journal decisions, marginalized information if enabled and pending **accepted-but-not-yet-applied** work |
+| Async/scheduler (OD-011/016/021) | Deterministic committed graph/cache/map publication events, pending worker requests and ordering, bounded input/reorder/scan queues with their exact members, source/epoch provenance and replay deadlines; trace nondeterministic online outcomes when historical fidelity requires them |
+| Config and randomness | Effective calibrations, source maps, algorithm/build and schema feature versions, map generation, PRNG seeds/states, dynamic config/control event history and config hash |
+| Derived caches | OD-011/009 cache **identity/revision/hash** and regeneration contract only; native Ceres/GTSAM/ROS memory or binary pointers **never** the portable schema |
+
+Checkpoint must represent the **same next-observable computation** as uninterrupted replay, not just the published pose. Stable serialization uses explicit portable C++20 domain records and versioned fields, **not** `ISAM2` pointers or opaque Boost serialization of native solver internals. Restore a compatible GTSAM graph by reconstructing native factors/values and deterministic update order; if exact active optimizer/scheduler state cannot be recreated within documented floating tolerance, reject the checkpoint or fall back to an earlier compatible frontier/session start. Preserve OD-020 pending search coverage and OD-022 hysteresis; omitting these can cause a false relock or map insertion after seek. Map/cache references remain pinned until no published checkpoint requires them, with bounded retention and deliberate invalidation on map revision change.
+
+#### Sidecar publication and seek algorithm
+
+Example layout (illustrative; distinct from the OD-012 **map bundle** format):
+
+~~~text
+recording/
+  raw/
+    segment_0001.mcap
+    segment_0002.mcap
+  checkpoints/
+    index.json                     # atomically published sidecar index
+    checkpoint_000001/
+      manifest.json                # version, config/map/recording IDs, cursor and hashes
+      state.bin                    # portable versioned semantic state
+    checkpoint_000002/
+      manifest.json
+      state.bin
+  manifest.json                    # authoritative OD-021 recording status
+~~~
+
+1. **Resolve seek semantics:** Historical requests identify **recording session, requested time/domain, mode and inclusive/exclusive event-frontier rule**, plus canonical tie ordering; offline optimized requests identify a separate **completed OD-014 reconstruction/map generation**, not a retroactively rewritten historical session.
+2. Validate OD-021/023 manifest and MCAP segment identity/checksum/clock epoch; find the latest checkpoint whose **consumed-event frontier is ≤ requested replay frontier** and whose state schema, algorithm/solver version, build compatibility policy, config, calibration, graph/map, source sessions and referenced immutable blobs match. An indexed time filter is a **locator only**; resolve the exact global ingestion ID/cursor and buffered state.
+3. **Restore** semantic scan, time fit, OD-006 state/trajectory, OD-010 active/immutable submaps, graph and pending accepted factors, tracking state and OD-020 candidates, worker queues/scheduler order and PRNG state. Rebuild derived EDT/search caches against the correct immutable revision before any dependent match.
+4. **Seek MCAP at or before** the checkpoint's recorded segment/chunk/offset, using verified native indexes where possible, then discard already-consumed **event IDs** and resume at its **first unconsumed** raw/control/sync event; buffered events are restored **exactly once**, never re-fed or dropped. Follow **recorded global ingest/order IDs** and clock/session transitions, not time-only sorting. Apply asynchronous graph/map results at logged deterministic logical **commit points**, or use a deterministic scheduler whose equivalence to uninterrupted historical execution has been verified; never let host execution race invent earlier knowledge.
+5. Advance through the target **logical frontier** (explicit rule for tied times/partial scans). Publish **state at T** with its actual state/fix timestamp, covariance, OD-022 status, graph/map/correction generation and provenance; distinguish historical as-of-time from offline finalized reconstruction. No future loop closure may contaminate an earlier historical pose. Checkpoint corruption, missing source event or incompatible reference triggers earlier checkpoint/start fallback with diagnostic reason, **not** silent reconstruction from inconsistent state.
+
+**Durability and safety:** Follow OD-012 generation-style staged writes + checksum/integrity/size/path validation, bounded checkpoint fsync + durable parent-directory/index pointer update, recover last fully published generation, never load half-written files. Use OD-021 resource/queue limits to avoid stalling acquisition; build checkpoints off immutable committed snapshots only, with bounded work/memory. Explicitly mark checkpoint build failure; never modify original raw MCAP, reinterpret its recording completeness or delete referenced frozen submaps prematurely. New map or algorithm version may invalidate checkpoints without invalidating raw replay. Segment breaks, clock resets, input gaps and session restarts require explicit frontier and completeness handling.
+
+**Staged delivery and B32 (not yet executed):** Stage I deterministic full-session raw MCAP forward replay with exact source/event IDs and replay-cursor state; Stage II index generation, compatible semantic checkpoints and verified seek/restore; Stage III measured size/interval/async build/cache reuse optimizations. **B32** compares uninterrupted, checkpoint-restored, earlier-checkpoint fallback and from-start paths across random and exact-boundary seeks, ties and reordered sources, 30 s+freeze checkpoint cadence, partial LD19 seam, moving gyro-bias/clock fits, active+frozen submaps, graph pending work/loop closures, top-K OD-020 recovery and OD-022 status, corrupt sidecar/crash, map/calibration/algorithm incompatibility and retrospective OD-014 reconstruction. Compare **exact hashes** for integer IDs/event decisions and **tolerance-bounded** Ceres/GTSAM floating results; record reasons when bitwise equality cannot be guaranteed. Profile seek wall time, warm-up span, checkpoint bytes/RSS, CPU, cache rebuild time and Pi disk contention. **Never label numeric 30 s as a guaranteed latency bound**.
+
+**Consequences:** OD-023 raw MCAP remains sufficient and authoritative; OD-012 map bundles/immutable generations provide distinct referenced map content; OD-021 protects recorder durability and acquisition isolation; OD-020/022 safety and state are faithfully restored; OD-014 optimized replay remains explicitly different from online-history replay. OD-025 ROS adapter scope stays open. No checkpoint implementation or benchmark execution is implied.
 
 ### OD-025 — ROS 2 distributions and adapter deployment
 
@@ -1913,6 +1981,6 @@ Copy this into this register when accepting one of the entries; retain history o
 
 ## 8. Immediate design workshop order
 
-**OD-001 through OD-023 are Accepted** (implementation/tests pending). **Accepted OD-017** fixes native module/target and installed SDK boundaries before implementation. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and implement accepted OD-023 Protobuf MCAP recording and validate it with B31, then produce the synthetic fixtures and deterministic replay (**OD-024**). **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
+**OD-001 through OD-024 are Accepted** (implementation/tests pending). **Accepted OD-017** fixes native module/target and installed SDK boundaries before implementation. Implement signed-nanosecond clock interfaces and Pi host-side timestamping first; design source metadata and transport so a custom Raspberry Pi Pico firmware source can be added later without changing estimator APIs. Next implement the accepted acquisition/beam timing contracts (OD-002, OD-003) and implement accepted OD-023 Protobuf MCAP recording and validate it with B31, then implement accepted OD-024 sequential/indexed checkpoint replay and validate B32. **Accepted OD-007** establishes the initial Ceres EDT objective; implement accepted OD-008 robust LiDAR-only rank/uncertainty assessment and implement accepted OD-013 keyframe/submap graph and conservative factor admission, with cross-factor covariance model refinement deferred until measured evidence warrants it. Remaining submap/graph decisions are evidence driven.
 
 **Suggested first concrete experiment:** Verify accepted OD-004 midpoint reference, piecewise SE(2) interpolation and 10 ms extrapolation gate using a 15 m × 12 m apartment and 30 m × 20 m warehouse with exact beam times, 200 Hz yaw rate, wheel ticks and known extrinsics. Compare uncorrected, gyro-only and full wheel+gyro deskew, then measure Ceres convergence under initial-pose perturbations and warehouse symmetry. This single fixture suite verifies accepted **OD-004/OD-006/OD-007** and informs **OD-008 and OD-009** without relying on a large public dataset.
