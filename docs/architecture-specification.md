@@ -186,7 +186,7 @@ Preserve raw timestamps, arrival times, device clock IDs, alignment version and 
 
 ### 3.4 Clock source injection and ROS 2 `/clock` behavior
 
-The core MUST accept an **injected, ROS-neutral time source** or equivalent typed `ClockReading` / `ClockEvent` interface, with an initialized/ready flag, active clock domain, epoch and nanosecond value. The optional `fusion_slam_ros` adapter owns subscription to `rosgraph_msgs/msg/Clock` on `/clock`, `use_sim_time` configuration, conversion to/from `builtin_interfaces/msg/Time`, and ROS time-jump notifications. No ROS headers or clock types enter the core.
+The core MUST accept an **injected, ROS-neutral time source** or equivalent typed `ClockReading` / `ClockEvent` interface, with an initialized/ready flag, active clock domain, epoch and nanosecond value. The optional `slam2d_ros` adapter owns subscription to `rosgraph_msgs/msg/Clock` on `/clock`, `use_sim_time` configuration, conversion to/from `builtin_interfaces/msg/Time`, and ROS time-jump notifications. No ROS headers or clock types enter the core.
 
 ~~~text
 live sensors / host steady timestamp -- explicit conversion --> canonical acquisition ns
@@ -1374,7 +1374,7 @@ Implementation priority: **P0** toolchain/geometry/synthetic fixtures -> **P1** 
 
 ## 13. Decision links and references
 
-The companion [open design choices register](open-design-choices.md) contains **OD-001–OD-025** with priority, alternatives, evidence and decision gates. Proposed defaults here are **not approved decisions** until marked Accepted there.
+The companion [open design choices register](open-design-choices.md) contains **OD-001–OD-025** with priority, alternatives, evidence and decision gates. All 25 choices are now **Accepted in the decision register**; numerical budgets, calibration and implementation performance still require the named benchmarks.
 
 External technical references:
 
