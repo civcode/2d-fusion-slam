@@ -51,6 +51,19 @@ int main() {
   require((found.map_from_laser.translation-correct.translation).norm()<0.025 &&
           std::abs(found.map_from_laser.yaw_rad)<0.008,"pose converges near ground truth");
 
+#ifdef SLAM_HAS_CERES
+  const auto ceres_found=match_ceres(field,points,seed);
+  require(ceres_found.status==MatchStatus::accepted,"Ceres scan matching improved");
+  require(ceres_found.diagnostics.source_fingerprint==snap->fingerprint(),"Ceres pinned source");
+  require(ceres_found.diagnostics.overlap>=0.65 && ceres_found.diagnostics.full_rank,
+          "Ceres geometry support and observability");
+  require(ceres_found.diagnostics.robust_cost < seed_quality.robust_cost,
+          "Ceres improves robust geometric cost");
+  require((ceres_found.map_from_laser.translation-correct.translation).norm()<0.025 &&
+          std::abs(ceres_found.map_from_laser.yaw_rad)<0.008,
+          "Ceres converges near synthetic truth");
+#endif
+
   std::vector<Eigen::Vector2d> impossible(20,{50.0,60.0});
   const auto reject=match_reference(field,impossible,{});
   require(reject.status==MatchStatus::insufficient_support &&
