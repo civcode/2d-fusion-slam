@@ -45,6 +45,9 @@ target_include_directories(slam_mapping PUBLIC
 target_link_libraries(slam_mapping PUBLIC slam::core slam::sensors)
 
 if(BUILD_TESTING)
+  add_executable(slam_scan_mapping_test tests/scan_mapping_test.cpp)
+  target_link_libraries(slam_scan_mapping_test PRIVATE slam::mapping slam_fixtures)
+  add_test(NAME scan_mapping COMMAND slam_scan_mapping_test)
   add_executable(slam_fixtures_smoke tests/fixtures_smoke.cpp)
   target_link_libraries(slam_fixtures_smoke PRIVATE slam_fixtures)
   add_test(NAME fixtures_smoke COMMAND slam_fixtures_smoke)
