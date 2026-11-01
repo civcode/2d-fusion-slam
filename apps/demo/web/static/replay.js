@@ -99,7 +99,9 @@ function updateFrameInfo(){
   const m=frame.matching;
   if(!m){
     label("replay-matching", frame.matching_state==="invalid" ? "Invalid Ceres sidecar (refused)" :
-      ceresAvailable ? "Not processed at this frame (sampled)" : "No Ceres results loaded");
+      ceresAvailable ? "Not processed at this frame (sampled)" :
+      session.source.pose_kind==="estimated_fr079_odometry_scan_matched_not_ground_truth"?
+      "FR079 SLAM estimate (see .matches.json for scan decisions)":"No Ceres results loaded");
     label("replay-match-metrics","—");
   } else {
     label("replay-matching", `${m.status.replaceAll("_"," ")} · ${m.iterations} iterations`);
@@ -157,7 +159,10 @@ async function loadSession(name){
         `cost ${holdout.mean_initial_robust_cost.toFixed(2)} → ${holdout.mean_final_robust_cost.toFixed(2)} · `+
         `no independent ground truth / no per-beam timing`;
     }
-    label("replay-ceres-source",ceresAvailable?
+    const fr079Slam=session.source.pose_kind==="estimated_fr079_odometry_scan_matched_not_ground_truth";
+    label("replay-ceres-source",fr079Slam?
+      "Incremental FR079 SLAM: trajectory already scan-corrected; matching decisions are in its .matches.json artifact":
+      ceresAvailable?
       `${session.ceres.processed} matched scan attempts · ${session.ceres.accepted} accepted · frozen ${session.ceres.map_name}`:
       session.ceres?.status==="invalid" ? session.ceres.error : "No native Ceres sidecar found");
     label("replay-dataset",session.source.dataset);
