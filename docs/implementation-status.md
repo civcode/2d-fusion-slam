@@ -227,3 +227,35 @@ compatibility of the distro-version APIs remains to be confirmed using
 
 No GitHub Actions workflow was modified or run. See
 [Docker development instructions](docker-development.md).
+
+
+## 2026-11-01 — Linux persistent map generations
+
+Added \`slam_map_registry\`: Linux-only standalone FUSMAP2D generation
+store with advisory flock, fsync-then-rename publication of immutable
+map files and an atomic checksummed \`CURRENT\` pointer. The store
+records active/previous IDs and fingerprints and rejects stale
+compare-and-swap publishers, malformed pointer data and corrupt maps.
+Startup \`recover()\` can durably fall back to the previously selected
+valid map; explicit rollback never rewrites either generation.
+
+The optional GTSAM graph-to-map layer now exposes
+\`publish_approved_generation\`. It checks the selected candidate is
+the **quality-gate-approved** map and that the persistent incumbent
+fingerprint exactly matches the evaluation's incumbent. Rejected
+candidates produce **no disk publication**. The focused integration
+test persists a synthetic approved result, rejects stale re-publication
+and rolls back to the original immutable map.
+
+**Local validation:** a focused C++20/GCC14 build linked to real GTSAM
+4.3.0 ran **2/2 CTests**, both in Release and with strict warnings
+(\`-Wall -Wextra -Wpedantic -Werror\`) and UBSan. Tests simulate
+corrupt active map, corrupt registry, orphaned/pending files, restart
+recovery, stale writes, explicit rollback and two concurrent writers.
+
+**Unverified:** complete repository CMake/CTest, Ubuntu 24.04 Docker
+runtime (no Docker engine available), actual power-loss fault injection,
+network filesystem semantics, and real-data ground-truth-qualified map
+promotion. This is a local Linux filesystem design and its integrity
+checks are not an authenticity/security mechanism. GitHub Actions were
+neither run nor modified. See [persistent registry guide](map-generation-registry.md).

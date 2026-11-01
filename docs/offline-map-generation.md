@@ -90,6 +90,18 @@ and mapping implementation files. Full repo CI validation remains
 pending. Prebuilt GTSAM with mismatched Eigen alignment fails ASan
 during library initialization; do not claim sanitizer completeness.
 
+## Durable publication
+
+The Linux-only [map-generation registry](map-generation-registry.md)
+now stores immutable FUSMAP2D generations behind a checksummed,
+atomically replaced active/previous pointer. The
+`publish_approved_generation` bridge will persist the selected
+candidate **only** when the same incumbent fingerprint is still active
+on disk. Rejected results cannot alter the authoritative map; explicit
+rollback and restart recovery are covered by focused tests.
+This does not create independent ground truth or automatically
+authenticate source provenance.
+
 ## Next gate
 
 Provide independent factor evidence (calibrated gyro/wheel sources and

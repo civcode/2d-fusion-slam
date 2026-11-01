@@ -180,4 +180,18 @@ MapGenerationResult evaluate_map_generation(
   return result;
 }
 
+std::optional<mapping::GenerationRef> publish_approved_generation(
+    mapping::GenerationStore& store, const MapGenerationResult& evaluated) {
+  if(!evaluated.promoted())return std::nullopt;
+  if(!evaluated.incumbent.snapshot || !evaluated.candidate.snapshot ||
+     evaluated.authoritative != evaluated.candidate.snapshot ||
+     evaluated.incumbent.snapshot->fingerprint()==evaluated.candidate.snapshot->fingerprint())
+    throw std::invalid_argument("invalid promoted map-generation evidence");
+  const auto current=store.recover();
+  if(!current.active ||
+     current.active->fingerprint!=evaluated.incumbent.snapshot->fingerprint())
+    throw std::runtime_error("durable incumbent differs from evaluated snapshot");
+  return store.publish(evaluated.candidate,evaluated.incumbent.snapshot->fingerprint());
+}
+
 } // namespace slam::offline

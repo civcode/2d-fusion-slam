@@ -1,6 +1,7 @@
 #pragma once
 
 #include "slam/graph/pose_graph.hpp"
+#include "slam/mapping/generation_store.hpp"
 #include "slam/mapping/map_bundle.hpp"
 #include "slam/matching/geometry.hpp"
 
@@ -88,5 +89,12 @@ struct MapGenerationResult {
     const std::vector<VerifiedKeyframe>& mapping_frames,
     const HeldoutReference& reserved_reference,
     const PromotionOptions& options);
+
+// Durable promotion is a separate explicit action. A selected candidate can
+// be committed only if the store's active generation matches the exact
+// incumbent snapshot used by the evaluation; otherwise it fails closed.
+// A rejected candidate never writes or switches the authoritative map.
+[[nodiscard]] std::optional<mapping::GenerationRef> publish_approved_generation(
+    mapping::GenerationStore& store, const MapGenerationResult& evaluated);
 
 } // namespace slam::offline

@@ -99,7 +99,7 @@ download; `FETCHCONTENT_FULLY_DISCONNECTED=ON` adds protection.
 
 Before executing CTest, the runner also asserts that the expected
 `match_ceres`, `core_catch2`, `pose_graph`,
-`offline_map_promotion` and `map_bundle` CTests are registered. It
+`offline_map_promotion`, `map_registry` and `map_bundle` CTests are registered. It
 will not print a misleading green test run after silently skipping a
 solver or the detailed tests.
 

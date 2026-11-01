@@ -190,6 +190,16 @@ if(ZLIB_FOUND)
     slam::map_bundle slam::fr079_train_only ZLIB::ZLIB)
 endif()
 
+# Linux-only durable map generation registry. Does not require GTSAM or hardware.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(slam_map_registry STATIC src/generation_store.cpp)
+  add_library(slam::map_registry ALIAS slam_map_registry)
+  target_compile_features(slam_map_registry PUBLIC cxx_std_20)
+  target_include_directories(slam_map_registry PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+  target_link_libraries(slam_map_registry PUBLIC slam::map_bundle)
+endif()
+
 # Workstation-only GTSAM 4.2+ Pose2 batch reference, never linked to Pi runtime.
 # A locally installed GTSAM package is preferred; the uploaded full source
 # can also be supplied explicitly without any download or vendoring.
@@ -235,17 +245,22 @@ endif()
 
 # Deliberately not linked to Raspberry Pi known-map localization. A verified
 # offline graph is necessary for candidate generation and held-out promotion.
-if(TARGET slam_offline_graph)
+if(TARGET slam_offline_graph AND TARGET slam_map_registry)
   add_library(slam_offline_generation STATIC src/map_generation.cpp)
   add_library(slam::offline_generation ALIAS slam_offline_generation)
   target_compile_features(slam_offline_generation PUBLIC cxx_std_20)
   target_include_directories(slam_offline_generation PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
   target_link_libraries(slam_offline_generation PUBLIC
-    slam::offline_graph slam::map_bundle slam::match_geometry)
+    slam::offline_graph slam::map_bundle slam::map_registry slam::match_geometry)
 endif()
 
 if(BUILD_TESTING)
+  if(TARGET slam_map_registry)
+    add_executable(slam_map_registry_test tests/generation_store_test.cpp)
+    target_link_libraries(slam_map_registry_test PRIVATE slam::map_registry)
+    add_test(NAME map_registry COMMAND slam_map_registry_test)
+  endif()
   if(TARGET slam_offline_generation)
     add_executable(slam_map_generation_test tests/map_generation_test.cpp)
     target_link_libraries(slam_map_generation_test PRIVATE slam::offline_generation)

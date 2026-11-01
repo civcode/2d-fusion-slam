@@ -1,6 +1,8 @@
 #include "slam/offline/map_generation.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <unistd.h>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -175,5 +177,28 @@ int main() {
   auto untrusted=data.input.loops[0].edge;
   untrusted.provenance.independent_of_initial_trajectory=false;
   rejects([&]{(void)qualified_frontend_loop(untrusted,match,12345);},"correlated tracking pose not a loop factor");
+  // The selected candidate must pass an explicit, durable CAS transaction.
+  // Rejected results cannot touch the active map; stale promotion refuses.
+  char temp[]="/tmp/slam-offline-publish-XXXXXX";
+  const char* path=::mkdtemp(temp);
+  if(!path)throw std::runtime_error("mkdtemp failed");
+  {
+    mapping::GenerationStore store(path);
+    const auto initial=store.publish(result.incumbent,std::nullopt);
+    const auto rejected_persist=publish_approved_generation(store,degraded_result);
+    check(!rejected_persist && store.state().active->id==initial.id,
+          "rejected graph never becomes authoritative on disk");
+    const auto approved=publish_approved_generation(store,result);
+    check(approved && approved->id>initial.id &&
+          store.load_active().snapshot->fingerprint()==result.candidate.snapshot->fingerprint(),
+          "approved graph publishes durable candidate");
+    bool staleRejected=false;
+    try{(void)publish_approved_generation(store,result);}catch(const std::runtime_error&){staleRejected=true;}
+    check(staleRejected,"stale or duplicate graph output cannot overwrite current");
+    const auto rolled=store.rollback(approved->fingerprint);
+    check(rolled.active && rolled.active->fingerprint==result.incumbent.snapshot->fingerprint(),
+          "rollback of promoted graph returns incumbent");
+  }
+  std::filesystem::remove_all(path);
   std::cout<<"graph-to-map promotion/rollback and source provenance passed\n";
 }

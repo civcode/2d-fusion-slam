@@ -24,6 +24,7 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_match_geometry`: geometry-only robust Huber scan-to-EDT reference matcher with synthetic pose recovery, overlap and LiDAR Hessian-rank diagnostics, and conservative rejection of unknown/truncated evidence.
 - `slam_offline_graph` (optional, workstation only): GTSAM 4.3 Pose2 batch optimizer with fixed first pose, sequential verified odometry, robust and provenance-gated loop closures, rejected-loop diagnostics and deterministic synthetic regression. Its GTSAM backend was compiled and **2/2 tests passed locally**, including strict warnings/UBSan. **No FR079 or real-wheel graph-factor accuracy is claimed.**
 - `slam_offline_generation` (optional with GTSAM): source-qualified frontend loop admission, graph optimization, two immutable occupancy/map-bundle rebuilds, **separate synthetic held-out map quality evaluation**, and fail-closed candidate selection that keeps the incumbent on rejection. GTSAM, map export and mapping do not run on the Pi known-map localizer.
+- `slam_map_registry` (Linux): **durable FUSMAP2D map-generation selection** with atomic file/pointer publication, expected-incumbent checks, restart recovery, corruption fallback and explicit rollback. The optional offline graph bridge publishes only after the existing quality gate accepts the candidate; see [map-generation registry](docs/map-generation-registry.md).
 - `slam_match_ceres` (optional): Ceres cost-function/solver adapter. Its byte-identical source compiled and was **exercised at runtime** against Ceres 2.2.0 using an isolated analytic distance-field harness; the *complete repository Ceres CTest remains unverified*.
 - `slam_carmen`, `slam_carmen_geometry` and `slam_carmen_inspect`: strict FR079 `FLASER`/`RLASER`/`ODOM` parsing, 180° half-open angular layout, source scan IPC/logger times, conservative invalid-range classification, and native geometry-only matcher input without inventing per-beam times.
 - **Catch2 3.16.1**: user-provided release extracted, compiled and used for CARMEN parsing/geometry tests. CMake accepts `SLAM_CATCH2_SOURCE_DIR`, otherwise uses pinned upstream commit `08092139210881f01a34e60c5f2fd6afa0ea4024`.
@@ -105,6 +106,8 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Docker build/test using Ubuntu APT packages](docs/docker-development.md)
 - [Offline GTSAM 4.3 pose-graph integration](docs/offline-pose-graph.md)
 - [Offline map candidate rebuilding, comparison and rollback](docs/offline-map-generation.md)
+- [Persistent map-generation registry and recovery](docs/map-generation-registry.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
-**Next:** make replay inputs traceable to recorded, calibrated sensor packets and independently justified loop constraints; test held-out traversal quality and false-positive loops on non-synthetic data. The current candidate-map promotion test uses synthetic exact evidence and does not justify changing the FR079 map or publishing real-world localization accuracy. GTSAM remains workstation-only.
+**Next:** verify the new durable map registry in the complete Docker/Ubuntu build and add independent, calibrated sensor packet lineage before attempting real-data map promotion. Then add measured fault-injection/power-loss tests and retention policy. The current graph/map quality gate is still synthetic-only; real-world accuracy and FR079 map-frame truth remain unresolved.
+
