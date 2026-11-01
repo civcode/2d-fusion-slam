@@ -175,3 +175,42 @@ Native CTest `fusion_replay_http` runs the real C++ offline fusion CLI,
 loads its output through the native HTTP server, checks frame/matcher
 totals and map fingerprints, and verifies corrupted files, symlinks and
 writes fail closed. See [Fusion Replay protocol](../../docs/fusion-replay.md).
+
+
+## Fusion results in the Map Explorer and SLAM profiling
+
+The main / Map Explorer now lists the final authoritative occupancy
+maps for every valid run inside --fusion-dir. For example,
+"apartment-001 / fused_scan_matched" and "warehouse-001 / graph_optimized"
+can be opened with the normal PNG viewer and cell inspector. Results are
+read from the run directory, **not copied into the map directory**.
+The C++ server verifies map fingerprints against the matching fusion
+report; the workshop fallback is not preferred when a fusion map exists.
+
+The recorded-LiDAR /replay page remains dedicated to FUSREPLAY1 recorded
+sessions; apartment and warehouse simulated scans and matcher decisions
+are available in /fusion, with links between the views.
+
+New offline runs export fusion_profile.json with measured native processing
+stage timings (integration, deskew, matching, graph, and occupancy
+building), p50/p95, a synthetic offline compute FPS estimate, and an
+input-rate budget comparison. /fusion displays the profile from the
+read-only /api/fusion/runs/{id}/profile endpoint. Missing profiles on
+older runs do not prevent map/replay viewing; regenerate the run for
+profiling data.
+
+Manual Docker benchmarking with BUILD_JOBS=28:
+
+~~~sh
+export BUILD_JOBS=28 SLAM_DOCKER_JOBS=28 SLAM_PROFILE_FUSION=ON
+docker compose build test demo
+mkdir -p benchmarks
+docker compose run --rm -v "$PWD/benchmarks:/results" \
+  --entrypoint python3 test scripts/benchmark-fusion.py \
+  --binary ./build-docker/slam_offline_fusion \
+  --scene both --warmup 1 --runs 5 \
+  --csv /results/fusion-profiled-001.csv
+~~~
+
+This is NOT an online scheduling/real-time validation. See
+[profiling methodology](../../docs/fusion-profiling.md).
