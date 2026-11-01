@@ -78,6 +78,37 @@ class OfflineFusionExperiment(unittest.TestCase):
         self.assertEqual(rejected, report["heldout_rejected"])
         self.assertEqual(loop_accepted, report["graph_accepted_loops"])
 
+        profiling = json.loads((folder / "fusion_profile.json").read_text())
+        self.assertEqual(profiling["format"], "FUSPROFILE1")
+        self.assertEqual(profiling["scene"], report["scene"])
+        self.assertEqual(profiling["matcher"], report["matcher"])
+        self.assertEqual(profiling["frames"], report["frames"])
+        self.assertFalse(profiling["realtime_capability_verified"])
+        self.assertAlmostEqual(profiling["scan_period_ms"],
+                               report["scan_period_ns"] * 1e-6, places=6)
+        self.assertAlmostEqual(profiling["input_rate_fps"],
+                               1000 / profiling["scan_period_ms"], places=6)
+        if profiling["profiled"]:
+            self.assertGreater(profiling["fusion_compute_ms"], 0)
+            self.assertGreater(profiling["effective_processing_fps"], 0)
+            self.assertGreater(profiling["frame_proxy_p95_ms"], 0)
+            self.assertLessEqual(profiling["frame_proxy_p50_ms"],
+                                 profiling["frame_proxy_p95_ms"])
+            self.assertLessEqual(profiling["frame_proxy_p95_ms"],
+                                 profiling["frame_proxy_max_ms"])
+            for name, calls in (("sensor_integration", 1),
+                                ("scan_deskew", report["frames"]),
+                                ("heldout_scan_match",
+                                 report["heldout_attempted"]),
+                                ("fused_map_insert", report["frames"]),
+                                ("fused_map_build", 1)):
+                self.assertEqual(profiling["stages"][name]["calls"], calls)
+                self.assertGreaterEqual(profiling["stages"][name]["total_ms"], 0)
+        else:
+            self.assertIsNone(profiling["fusion_compute_ms"])
+            self.assertIsNone(profiling["effective_processing_fps"])
+            self.assertIsNone(profiling["frame_proxy_p95_ms"])
+
         self.assertGreater(report["heldout_attempted"], 10)
         self.assertEqual(report["heldout_attempted"],
                          report["heldout_accepted"] + report["heldout_rejected"])
