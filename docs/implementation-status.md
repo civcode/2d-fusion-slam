@@ -758,3 +758,35 @@ session because GitHub is unavailable to the local container.
 No accuracy or throughput measurements are invented.
 
 See [full FR079 implementation protocol](fr079-offline-slam.md).
+
+
+## 2026-11-01 — Fix FR079 recorded-replay playback and map response latency
+
+- Root cause of apparently frozen Play button: the browser requested one
+  individual scan per animation step; the single-threaded native server
+  re-opened and re-validated all 3,118 frames on *every* request.
+  Newer in-flight seek requests invalidated earlier responses and could
+  prevent any frame from becoming visible.
+- Added native and Python read-only FUSREPLAYFRAMES1 endpoint at
+  /api/replays/{session}/frames: one validated collection for local
+  browser animation. Playback, seeking and end-of-session restart
+  now perform no individual frame HTTP requests. Session/map switching
+  cancels stale asynchronous responses.
+- Added in-process single-map immutable snapshot/PNG cache guarded by
+  fresh lstat file identity and nanosecond mtime/ctime, without
+  weakening symlink refusal or content validation on first load.
+  Faster PNG zlib level-1 compression and log-odds-based occupancy
+  classification preserve the authoritative map cell values.
+- Added FR079-specific labels for estimated SLAM trajectory and
+  reconstructed final map, not independent reference/laser pose truth.
+  Added 8x, 16x and 32x timestamp replay choices.
+- Regression coverage extended in native_web_api, fr079_offline_http,
+  web_ui_unit, plus optional Node replay_browser_runtime (if node
+  already present). A V8 browser-mock execution demonstrated advancing
+  from frame 1 to the last frame using exactly one session frame
+  batch and no per-frame network traffic.
+- Local C++ compile, Docker CTest and measured map load latency
+  remain unverified because the checkout is not accessible in this
+  sandbox. No GitHub Actions were dispatched.
+
+See [replay performance fix and Docker commands](replay-performance.md).
