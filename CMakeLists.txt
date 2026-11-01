@@ -86,6 +86,16 @@ target_include_directories(slam_motion PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_motion PUBLIC slam::sensors slam::core)
 
+# Trust-gated timestamped gyro/wheel integration. No workstation solver
+# dependency: the same sensor frontend can support a later Pi recorder.
+add_library(slam_fusion_frontend STATIC src/gyro_wheel.cpp)
+add_library(slam::fusion_frontend ALIAS slam_fusion_frontend)
+target_compile_features(slam_fusion_frontend PUBLIC cxx_std_20)
+target_include_directories(slam_fusion_frontend PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_fusion_frontend PUBLIC slam::motion)
+
+
 add_library(slam_mapping STATIC src/occupancy.cpp)
 add_library(slam::mapping ALIAS slam_mapping)
 target_compile_features(slam_mapping PUBLIC cxx_std_20)
@@ -362,6 +372,37 @@ if(SLAM_ENABLE_GTSAM)
     message(FATAL_ERROR "GTSAM >= ${_slam_gtsam_min_version} required: set GTSAM_DIR or SLAM_GTSAM_SOURCE_DIR")
   else()
     message(STATUS "GTSAM >= ${_slam_gtsam_min_version} unavailable: optional workstation graph target skipped")
+  endif()
+endif()
+
+# Full deterministic *moving-scan* sensor-fusion experiment.
+# Uses the exact same simulator for all baselines, without feeding reference
+# poses to the estimator or rebuilding an oracle-pose map.
+add_executable(slam_offline_fusion src/offline_fusion.cpp)
+target_compile_features(slam_offline_fusion PRIVATE cxx_std_20)
+target_link_libraries(slam_offline_fusion PRIVATE
+  slam::fusion_frontend slam::mapping slam::map_bundle
+  slam::match_geometry slam::map_accuracy slam_fixtures)
+if(TARGET slam_match_ceres)
+  target_link_libraries(slam_offline_fusion PRIVATE slam::match_ceres)
+  target_compile_definitions(slam_offline_fusion PRIVATE SLAM_FUSION_WITH_CERES=1)
+endif()
+if(TARGET slam_offline_graph)
+  target_link_libraries(slam_offline_fusion PRIVATE slam::offline_graph)
+  target_compile_definitions(slam_offline_fusion PRIVATE SLAM_FUSION_WITH_GTSAM=1)
+endif()
+if(BUILD_TESTING)
+  add_executable(slam_gyro_wheel_test tests/gyro_wheel_test.cpp)
+  target_compile_features(slam_gyro_wheel_test PRIVATE cxx_std_20)
+  target_link_libraries(slam_gyro_wheel_test PRIVATE slam::fusion_frontend)
+  add_test(NAME gyro_wheel_fusion COMMAND slam_gyro_wheel_test)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME offline_fusion
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/offline_fusion_test.py"
+        "$<TARGET_FILE:slam_offline_fusion>"
+        "$<TARGET_FILE:slam_map_accuracy_cli>")
+    set_tests_properties(offline_fusion PROPERTIES TIMEOUT 240)
   endif()
 endif()
 
