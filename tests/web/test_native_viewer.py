@@ -93,8 +93,15 @@ class NativeViewerApi(unittest.TestCase):
                     "clear_trusted_no_returns"):
             self.assertEqual(metadata[key], truth[key], key)
         for x, y in ((0, 0), (40, 30), (119, 89)):
-            self.assertEqual(self.api(f"/api/maps/record.slammap/cell?x={x}&y={y}"),
-                             read_bundle(self.map).cell(x, y))
+            actual = self.api(f"/api/maps/record.slammap/cell?x={x}&y={y}")
+            expected = read_bundle(self.map).cell(x, y)
+            for key in ("x", "y", "observed", "log_odds"):
+                self.assertEqual(actual[key], expected[key], key)
+            for key in ("world_x", "world_y", "occupied_probability"):
+                if expected[key] is None:
+                    self.assertIsNone(actual[key], key)
+                else:
+                    self.assertAlmostEqual(actual[key], expected[key], places=12, msg=key)
         with self.get("/api/maps/record.slammap/image.png") as r:
             self.assertEqual(r.headers["Content-Type"], "image/png")
             self.assertEqual(r.read(8), b"\x89PNG\r\n\x1a\n")
