@@ -23,3 +23,8 @@ Testing/
 *.webp
 .vscode/
 .idea/
+
+# Recorded sessions are mounted, never baked into container layers.
+*.slamreplay.json
+# Never bake recorded scan sessions into image layers.
+*.slamreplay.json

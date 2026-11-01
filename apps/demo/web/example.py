@@ -92,7 +92,7 @@ def data_dir_or_example(directory: Path, use_example: bool = False):
     user_dir = directory.resolve(strict=True)
     if not user_dir.is_dir():
         raise ValueError('map directory is not a directory')
-    has_data = any(p.name == 'CURRENT' or p.name.endswith('.slammap')
+    has_data = any(p.name == 'CURRENT' or p.name.endswith('.slammap') or p.name.endswith('.slamreplay.json')
                    for p in user_dir.iterdir())
     if not use_example or has_data:
         yield user_dir

@@ -1,5 +1,15 @@
 # Offline map Web UI — FUSMAP2D and map generations
 
+**Recorded LiDAR replay is implemented:** open `/replay` from the
+map explorer. Convert FLASER/FR079 logs with
+`python3 apps/demo/convert_carmen.py INPUT.log.gz OUTPUT.slamreplay.json`.
+The browser displays a timestamped logged-pose trajectory, sampled scan
+hits, valid beam counts, pause/play/seek/speed and an optional
+**unverified** same-frame map overlay. The [replay format and usage
+guide](recorded-replay.md) documents the bounds, security and current
+limitations. No Ceres scan matching is executed and there is no
+independent truth or live robot source.
+
 **Status:** Available now as a **local, read-only map console** backed by
 the project's existing authoritative FUSMAP2D v1 export and FUSGEN1
 persistent-generation registry. This UI does **not** implement live

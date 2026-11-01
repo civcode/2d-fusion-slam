@@ -3,3 +3,5 @@
 CURRENT
 .pending-*
 .lock
+*.slamreplay.json
+*.slamreplay.json

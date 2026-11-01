@@ -341,3 +341,41 @@ CTest and actual Docker image build remain unverified because a Docker
 engine is unavailable; no GitHub Actions were invoked.
 See [demo instructions](../apps/demo/README.md) and
 [web UI documentation](web-ui.md).
+
+## 2026-11-01 — Interactive LiDAR session replay
+
+Added a bounded, strictly validated `FUSREPLAY1` read-only format and
+CARMEN FLASER/`fr079.log.gz` conversion command under
+`apps/demo/convert_carmen.py`. The converter preserves scan-level IPC
+timestamps, full hit/beam counts, logged laser pose and logged odometry
+pose, and a SHA-256 description of the original source. It samples beams
+only for browser rendering and explicitly marks unknown per-beam timing,
+map-frame registration, and scan matching. The browser page at `/replay`
+provides a timeline slider, variable-speed playback, stepping, scan
+endpoints, the full logged trajectory, pose provenance and an optional
+same-declared-frame occupancy overlay with a visible alignment warning.
+The viewer, converter and server remain Python standard-library only.
+
+The read-only HTTP API provides session names, recording provenance,
+timestamped trajectory and individually requested frames. Bounded paths,
+record count, data size, finite numbers and symlink rejection are tested.
+When the demo directory is empty, `--example-if-empty` supplies a
+*temporary synthetic* replay alongside the synthetic workshop map.
+A real replay/map/registry always takes precedence, even if malformed.
+User replay JSON is excluded from Git and Docker image contexts.
+
+**Local evidence:** 27/27 focused Python/HTTP regression tests passed.
+A real FR079 file produced 3,118 scans in a 3,835,941-byte replay at
+beam-stride 6. Chromium fixture-backed rendering of that real converted
+session advanced from frame 1 to 148 by slider and to 152 using
+playback, with no reported JavaScript page exceptions. Actual HTTP
+requests against the Python server passed separately; direct Chromium
+navigation to loopback was blocked by this platform. `node --check`
+for the new frontend passed.
+
+**Limitations:** FR079 logged poses are not calibrated independent truth,
+a matching frame label cannot verify coordinate registration, and
+no per-scan Ceres match metrics or per-beam timestamps exist in this
+export. Docker/Ubuntu full-build/CTest is still unverified due to
+an unavailable Docker engine; no GitHub Actions workflow was run or
+changed. See [recorded replay documentation](recorded-replay.md).

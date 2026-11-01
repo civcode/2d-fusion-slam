@@ -18,21 +18,27 @@ from urllib.parse import parse_qs, urlsplit
 
 from .bundle import BundleError, parse_registry, read_bundle
 from .example import data_dir_or_example
+from .replay import SAFE_NAME as SAFE_REPLAY, read_replay, ReplayError, create_synthetic_replay, validate
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / "static"
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.slammap\Z")
 MAP_ENDPOINT = re.compile(r"/api/maps/([A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.slammap)(?:/(image\.png|cell))?\Z")
 MAX_ENTRIES = 512
+REPLAY_ENDPOINT = re.compile(r"/api/replays/([A-Za-z0-9][A-Za-z0-9_.-]{0,140}\.slamreplay\.json)(?:/frame/([0-9]{1,4}))?\Z")
 
 
 class Dashboard:
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, replay_dir: Path | None = None):
         root = data_dir.resolve(strict=True)
         if not root.is_dir():
             raise ValueError("--data-dir must be an existing directory")
         self.root = root
+        self.replay_root = (replay_dir or data_dir).resolve(strict=True)
+        if not self.replay_root.is_dir():
+            raise ValueError("--replay-dir must be an existing directory")
         self.lock = threading.Lock()
+        self.synthetic_replay = None
 
     @lru_cache(maxsize=12)
     def _read_cached(self, name: str, inode: int, size: int, mtime_ns: int, ctime_ns: int):
@@ -50,6 +56,32 @@ class Dashboard:
         # replacements. Each cached bundle is immutable and fully verified.
         with self.lock:
             return self._read_cached(name, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    @lru_cache(maxsize=3)
+    def _replay_cached(self, name: str, inode: int, size: int, mtime_ns: int, ctime_ns: int):
+        del inode, size, mtime_ns, ctime_ns
+        return read_replay(self.replay_root / name)
+
+    def replay(self, name: str):
+        if not SAFE_REPLAY.fullmatch(name):
+            raise FileNotFoundError("invalid replay filename")
+        if name == "sample-synthetic-workshop.slamreplay.json" and self.synthetic_replay is not None:
+            return self.synthetic_replay
+        p = self.replay_root / name
+        st = p.lstat()
+        if not stat.S_ISREG(st.st_mode):
+            raise ReplayError("replay must be a regular file, not a symlink")
+        with self.lock:
+            return self._replay_cached(name, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def replays(self) -> dict:
+        names = sorted(p.name for p in self.replay_root.iterdir()
+                       if SAFE_REPLAY.fullmatch(p.name) and p.is_file() and not p.is_symlink())
+        if self.synthetic_replay is not None and not names:
+            names = ["sample-synthetic-workshop.slamreplay.json"]
+        if len(names) > MAX_ENTRIES:
+            raise ReplayError("too many replay sessions")
+        return {"sessions": names, "read_only": True, "live_tracking": False}
 
     def registry(self) -> dict:
         try:
@@ -129,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
             self._route()
         except (FileNotFoundError, IsADirectoryError):
             self._json(404, {"error": "map not found"})
-        except (BundleError, ValueError, IndexError, OSError) as e:
+        except (BundleError, ReplayError, ValueError, IndexError, OSError) as e:
             self._json(422, {"error": str(e)})
         except Exception:
             self.log_error("unexpected viewer exception")
@@ -147,6 +179,22 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/api/health":
             return self._json(200, {"status": "ok", "mode": "read-only-offline"})
+        if path == "/api/replays":
+            return self._json(200, self.viewer.replays())
+        replay_match = REPLAY_ENDPOINT.fullmatch(path)
+        if replay_match:
+            name, frame_text = replay_match.groups()
+            replay = self.viewer.replay(name)
+            if frame_text is not None:
+                idx = int(frame_text)
+                if idx >= len(replay["frames"]):
+                    raise ValueError("frame index out of range")
+                return self._json(200, replay["frames"][idx])
+            frames = replay["frames"]
+            return self._json(200, {"name": name, "format": replay["format"],
+                "source": replay["source"], "frame_count": len(frames),
+                "first_t": frames[0]["t"], "last_t": frames[-1]["t"],
+                "trajectory": [[f["t"], *f["pose"]] for f in frames]})
         if path == "/api/maps":
             return self._json(200, self.viewer.index())
         match = MAP_ENDPOINT.fullmatch(path)
@@ -163,11 +211,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("cell coordinates must be nonnegative integers")
                 return self._json(200, m.cell(int(query["x"][0]), int(query["y"][0])))
             return self._json(200, m.metadata())
-        if path in ("/", "/index.html", "/app.js", "/styles.css"):
-            filename = "index.html" if path == "/" else path[1:]
+        if path in ("/", "/index.html", "/app.js", "/styles.css", "/replay", "/replay.html", "/replay.js", "/replay.css"):
+            filename = "index.html" if path == "/" else ("replay.html" if path == "/replay" else path[1:])
             mime = {"index.html": "text/html; charset=utf-8",
                     "app.js": "text/javascript; charset=utf-8",
-                    "styles.css": "text/css; charset=utf-8"}[filename]
+                    "styles.css": "text/css; charset=utf-8",
+                    "replay.html": "text/html; charset=utf-8",
+                    "replay.js": "text/javascript; charset=utf-8",
+                    "replay.css": "text/css; charset=utf-8"}[filename]
             return self._send(200, (STATIC / filename).read_bytes(), mime)
         return self._json(404, {"error": "not found"})
 
@@ -176,6 +227,8 @@ def run(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True,
                         help="directory containing FUSMAP2D .slammap files or FUSGEN1 CURRENT")
+    parser.add_argument("--replay-dir", type=Path, default=None,
+                        help="directory containing .slamreplay.json sessions (default: map data directory)")
     parser.add_argument("--example-if-empty", action="store_true",
                         help="show a disposable labeled synthetic map only when the map directory is empty")
     parser.add_argument("--port", type=int, default=8765)
@@ -189,7 +242,11 @@ def run(argv: list[str] | None = None):
     if args.host == "0.0.0.0" and not args.allow_network:
         parser.error("binding to all interfaces requires explicit --allow-network")
     with data_dir_or_example(args.data_dir, args.example_if_empty) as directory:
-        viewer = Dashboard(directory)
+        viewer = Dashboard(directory, args.replay_dir)
+        # The synthetic map and virtual scans are both temporary and served
+        # only when the explicit --example-if-empty path was selected.
+        if args.example_if_empty and directory != args.data_dir.resolve() and args.replay_dir is None:
+            viewer.synthetic_replay = create_synthetic_replay()
         server = ThreadingHTTPServer((args.host, args.port), Handler)
         server.viewer = viewer
         print(f"Read-only SLAM map dashboard: http://127.0.0.1:{server.server_port}", flush=True)

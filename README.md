@@ -75,6 +75,27 @@ The [versioned dependency Release](https://github.com/civcode/2d-fusion-slam/rel
 CMake prefers an installed Catch2 package; it does not fetch Catch2 if
 the restored package is available.
 
+## Interactive recorded LiDAR replay — available now
+
+The [apps/demo replay viewer](docs/recorded-replay.md) now supports
+**recorded FLASER sessions** with a timeline, play/pause/speed, frame-by-frame
+logged trajectory, LiDAR endpoints, valid-hit counts, optional explicitly
+unverified occupancy-map overlay, and recorded source provenance.
+
+```sh
+python3 apps/demo/convert_carmen.py /path/to/fr079.log.gz \
+  apps/demo/maps/fr079.slamreplay.json --beam-stride 6 \
+  --frame-id fr079_logged_laser_frame_UNVERIFIED
+python3 apps/demo/main.py --data-dir apps/demo/maps --example-if-empty
+# Open http://127.0.0.1:8765/replay
+```
+
+The default Docker demo also supplies **a synthetic replay** when its map
+folder is completely empty. The FR079 converter does **not** execute Ceres,
+derive scan-matching quality, deskew scans, verify map registration or
+produce ground truth. All recorded poses remain explicitly labeled
+**logged estimates**.
+
 ## Local web UI — available now
 
 The offline map console needs **Python 3.10+ only**, not Ceres, GTSAM,
@@ -149,6 +170,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Offline map candidate rebuilding, comparison and rollback](docs/offline-map-generation.md)
 - [Persistent map-generation registry and recovery](docs/map-generation-registry.md)
 - [Offline map Web UI: launch, Docker and API](docs/web-ui.md)
+- [Interactive recorded LiDAR replay and FUSREPLAY1](docs/recorded-replay.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
 **Next:** verify the new durable map registry in the complete Docker/Ubuntu build and add independent, calibrated sensor packet lineage before attempting real-data map promotion. Then add measured fault-injection/power-loss tests and retention policy. The current graph/map quality gate is still synthetic-only; real-world accuracy and FR079 map-frame truth remain unresolved.

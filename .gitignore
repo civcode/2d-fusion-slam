@@ -12,3 +12,6 @@
 
 # Docker / APT build outputs are host-local, not checked in.
 /.build/
+
+# Session replay outputs are generated dataset artifacts, not code.
+*.slamreplay.json
