@@ -96,6 +96,42 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## FR079 recorded LiDAR + odometry: end-to-end incremental SLAM
+
+A new **slam_fr079_offline** native C++20 executable processes all
+FR079 CARMEN FLASER scans in timestamp order, predicts poses using
+embedded scan-time odometry, corrects selected scans using a bounded
+Ceres scan-to-historical-map matcher, and inserts every valid scan
+into an initially empty FUSMAP2D occupancy grid. The logged laser-pose
+estimates are **not** used to generate its trajectory or map. It exports
+a validated binary .slammap, a browser-readable estimated-trajectory
+.slamreplay.json, per-frame matcher evidence, and p50/p95/p99 native
+processing times with offline processing FPS.
+
+The result appears in the **standard** Map Explorer and LiDAR Replay
+when written under apps/demo/maps; it is NOT a synthetic Fusion Replay
+run. FR079 supplies no verified IMU stream or per-beam scan timings,
+and the first experiment assumes identity laser extrinsics.
+**There is no independently verified map-frame registration, loop
+closure, pose-graph result or FR079 ground-truth IoU/ATE.**
+
+~~~sh
+export BUILD_JOBS=28 SLAM_DOCKER_JOBS=28
+docker compose build test demo
+export FR079_LOG=/absolute/path/to/fr079.log.gz
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-slam
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker -R fr079_offline_slam --output-on-failure
+docker compose up -d demo
+~~~
+
+See the full [FR079 offline SLAM protocol](docs/fr079-offline-slam.md)
+for artifact formats, provenance and limitations.
+
 ## Apartment/warehouse maps and native SLAM performance
 
 The main **Map Explorer** at http://127.0.0.1:8765/ now discovers
