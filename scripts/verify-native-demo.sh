@@ -35,13 +35,23 @@ cmake -S . -B "$build_dir" -G Ninja \
   -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 
 cmake --build "$build_dir" --parallel "$jobs" --target \
-  fusion_slam_demo slam_map_inspect
+  fusion_slam_demo slam_map_inspect slam_native_viewer_json_test
 
 # Execute the native API end-to-end regression, cross-language binary-map
 # parity fixture, and all existing offline Python viewer tests.
 ctest --test-dir "$build_dir" \
   --output-on-failure --timeout 90 \
-  -R '^(native_web_api|demo_fixture_native|web_ui_unit)$'
+  -R '^(native_web_api|native_viewer_json|demo_fixture_native|web_ui_unit)
+
+echo "Native viewer local verification passed."
+echo "Run the compiled viewer:"
+echo "  ./$build_dir/fusion_slam_demo --data-dir apps/demo/maps --example-if-empty"
+
+# Docker remains an explicit, separate opt-in validation:
+# docker build --target demo -t fusion-slam-native-demo .
+# docker run --rm -p 127.0.0.1:8765:8765 \
+#   -v "$PWD/apps/demo/maps:/maps:ro" fusion-slam-native-demo
+
 
 echo "Native viewer local verification passed."
 echo "Run the compiled viewer:"
