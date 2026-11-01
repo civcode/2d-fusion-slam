@@ -67,7 +67,7 @@ int main() {
   must_refuse([&]{(void)integrate_sensors(bad,anchor,true);});
   bad=data;bad[0].stationary_calibration=false;
   must_refuse([&]{(void)integrate_sensors(bad,anchor,true);});
-  bad=data;bad[0].gyro_z_rad_s=.5;
+  bad=data;bad[0].gyro_z_rad_s=3.5; // mean bias exceeds configured .25 rad/s
   must_refuse([&]{(void)integrate_sensors(bad,anchor,true);});
   bad=data;bad[15].wheel_valid=false;
   must_refuse([&]{(void)integrate_sensors(bad,anchor,true);});
