@@ -197,6 +197,19 @@ class FusionHTTP(unittest.TestCase):
             self.assertEqual(raised.exception.code, 422)
         finally:
             map_file.write_bytes(previous_map)
+        profile_file = self.run_dir / "fusion_profile.json"
+        previous_profile = profile_file.read_bytes()
+        try:
+            invalid = json.loads(previous_profile)
+            invalid["frames"] = 999999
+            profile_file.write_text(json.dumps(invalid))
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + base + "/profile")
+            self.assertEqual(raised.exception.code, 422)
+        finally:
+            profile_file.write_bytes(previous_profile)
+        self.assertEqual(self.get_json(base + "/profile")["format"],
+                         "FUSPROFILE1")
         self.assertEqual(self.get_json(base + "/frame/1")["index"], 1)
 
 
