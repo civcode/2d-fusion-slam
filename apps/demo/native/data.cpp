@@ -193,11 +193,12 @@ std::string png(const mapping::MapSnapshot& snapshot) {
     for(std::size_t x=0;x<w;++x){
       const auto ix=std::min(x*step,g.width-1);
       const auto& c=snapshot.cells()[iy*g.width+ix];
-      const double p=1.0/(1.0+std::exp(-c.log_odds));
+      // The 0.65/0.35 occupancy thresholds in log-odds space.
+      constexpr double threshold=0.6190392084062235;
       const std::array<unsigned char,4> rgba_pixel=
           !c.observed?std::array<unsigned char,4>{21,34,54,255}:
-          p>=.65?std::array<unsigned char,4>{70,211,184,255}:
-          p<=.35?std::array<unsigned char,4>{225,237,241,255}:
+          c.log_odds>=threshold?std::array<unsigned char,4>{70,211,184,255}:
+          c.log_odds<=-threshold?std::array<unsigned char,4>{225,237,241,255}:
                  std::array<unsigned char,4>{131,155,175,255};
       for(auto channel:rgba_pixel)rgba+=static_cast<char>(channel);
     }
@@ -205,7 +206,7 @@ std::string png(const mapping::MapSnapshot& snapshot) {
   uLongf compressed_bound=compressBound(static_cast<uLong>(rgba.size()));
   std::string compressed(compressed_bound,'\0');
   if(::compress2(reinterpret_cast<Bytef*>(compressed.data()),&compressed_bound,
-      reinterpret_cast<const Bytef*>(rgba.data()),static_cast<uLong>(rgba.size()),6)!=Z_OK)
+      reinterpret_cast<const Bytef*>(rgba.data()),static_cast<uLong>(rgba.size()),1)!=Z_OK)
     throw std::runtime_error("PNG zlib compression failed");
   compressed.resize(static_cast<std::size_t>(compressed_bound));
   std::string output="\x89PNG\r\n\x1a\n";
@@ -399,9 +400,44 @@ ViewerData::ViewerData(std::filesystem::path maps,std::filesystem::path replays,
 mapping::MapBundle ViewerData::map(const std::string& name) const {
   need(map_name(name),"invalid map filename");
   if(synthetic_map_ && name==kExample)return *synthetic_map_;
+#ifdef __unix__
+  const auto file=maps_/name;
+  struct stat st{};
+  // lstat on each request means a swapped-in symlink cannot hit the cache.
+  need(::lstat(file.c_str(),&st)==0 && S_ISREG(st.st_mode) && st.st_size>=0 &&
+       static_cast<std::uint64_t>(st.st_size)<=150*1024*1024,
+       "not a bounded regular map file");
+  const auto same=[&](const CachedMap& c) {
+    return c.name==name && c.device==static_cast<std::uint64_t>(st.st_dev) &&
+           c.inode==static_cast<std::uint64_t>(st.st_ino) &&
+           c.bytes==static_cast<std::uint64_t>(st.st_size) &&
+           c.mtime_s==st.st_mtim.tv_sec && c.mtime_ns==st.st_mtim.tv_nsec &&
+           c.ctime_s==st.st_ctim.tv_sec && c.ctime_ns==st.st_ctim.tv_nsec;
+  };
+  if(map_cache_ && same(*map_cache_))return map_cache_->bundle;
+#endif
   const auto bytes=read_safe(maps_/name,150*1024*1024);
   std::istringstream stream(bytes,std::ios::binary);
-  return mapping::read_map_bundle(stream);
+  auto bundle=mapping::read_map_bundle(stream);
+#ifdef __unix__
+  struct stat after{};
+  need(::lstat(file.c_str(),&after)==0 && S_ISREG(after.st_mode) &&
+       st.st_dev==after.st_dev && st.st_ino==after.st_ino &&
+       st.st_size==after.st_size &&
+       st.st_mtim.tv_sec==after.st_mtim.tv_sec &&
+       st.st_mtim.tv_nsec==after.st_mtim.tv_nsec &&
+       st.st_ctim.tv_sec==after.st_ctim.tv_sec &&
+       st.st_ctim.tv_nsec==after.st_ctim.tv_nsec,
+       "map changed during validation");
+  map_cache_=CachedMap{name,
+    static_cast<std::uint64_t>(after.st_dev),
+    static_cast<std::uint64_t>(after.st_ino),
+    static_cast<std::uint64_t>(after.st_size),
+    after.st_mtim.tv_sec,after.st_mtim.tv_nsec,
+    after.st_ctim.tv_sec,after.st_ctim.tv_nsec,
+    bundle,std::nullopt};
+#endif
+  return bundle;
 }
 Json ViewerData::registry() const {
   const auto file=maps_/"CURRENT";
@@ -496,7 +532,13 @@ Json ViewerData::map_cell(const std::string& name,std::size_t x,std::size_t y) c
   return j;
 }
 std::string ViewerData::map_png(const std::string& name) const {
-  const auto m=map(name);return png(*m.snapshot);
+  const auto m=map(name);
+  if(map_cache_ && map_cache_->name==name &&
+     map_cache_->bundle.snapshot==m.snapshot){
+    if(!map_cache_->png)map_cache_->png=png(*m.snapshot);
+    return *map_cache_->png;
+  }
+  return png(*m.snapshot);
 }
 Json ViewerData::list_replays() const {
   auto files=names(replays_,replay_name);
