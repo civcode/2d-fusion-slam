@@ -23,6 +23,7 @@ def run(*argv, timeout=180):
 class OfflineFusionExperiment(unittest.TestCase):
     def scene(self, scene, root):
         folder = pathlib.Path(root) / scene
+        folder.parent.mkdir(parents=True, exist_ok=True)
         result = run(EXE, scene, str(folder))
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads((folder / "fusion_report.json").read_text())
