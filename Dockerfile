@@ -45,6 +45,7 @@ PY
 
 FROM dependencies AS build
 ARG SLAM_DOCKER_JOBS=2
+ARG SLAM_PROFILE_FUSION=ON
 WORKDIR /workspace
 COPY . /workspace
 RUN cmake -S . -B build-docker -G Ninja \
@@ -54,6 +55,7 @@ RUN cmake -S . -B build-docker -G Ninja \
       -DSLAM_ENABLE_GTSAM=ON -DSLAM_REQUIRE_GTSAM=ON \
       -DSLAM_ENABLE_CATCH2=ON -DSLAM_REQUIRE_SYSTEM_CATCH2=ON \
       -DSLAM_BUILD_NATIVE_DEMO=ON -DSLAM_REQUIRE_NATIVE_DEMO=ON \
+      -DSLAM_PROFILE_FUSION=${SLAM_PROFILE_FUSION} \
       -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
   && cmake --build build-docker --parallel "${SLAM_DOCKER_JOBS}"
 
