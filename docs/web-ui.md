@@ -19,9 +19,10 @@ no real robot session API to connect to yet.
 
 ## Use the dashboard
 
-Requires **Python 3.10+** only (standard library; no pip/npm, ROS, Ceres
-or GTSAM needed to *view an already exported map*). From the repository
-checkout:
+The **default demo server is now C++20**, using native FUSMAP2D parsing,
+zlib PNG rendering and OpenSSL SHA-256 sidecar provenance checks. It does
+not link Ceres, GTSAM or Python to serve exported maps. From the repository
+checkout (after building `fusion_slam_demo` with the commands below):
 
 ~~~sh
 # Generate a real map using the existing native FR079 exporter
@@ -29,9 +30,9 @@ mkdir -p /tmp/slam-maps
 ./build/slam_fr079_map_export /path/to/fr079.log.gz /tmp/slam-maps/fr079-training
 
 # Start read-only viewer; choose a directory containing *.slammap
-python3 apps/demo/main.py --data-dir /tmp/slam-maps --port 8765
+./build-demo/fusion_slam_demo --data-dir /tmp/slam-maps --port 8765
 # Or, if no map export is available yet, show a labeled synthetic example:
-python3 apps/demo/main.py --data-dir apps/demo/maps --example-if-empty
+./build-demo/fusion_slam_demo --data-dir apps/demo/maps --example-if-empty
 ~~~
 
 Open **http://127.0.0.1:8765/**. The UI shows the available maps on the
@@ -56,16 +57,17 @@ logged poses are **not external trajectory ground truth**.
 
 ## Application layout and Docker — no host toolchain
 
-The Web UI lives entirely under [apps/demo](../apps/demo/README.md):
-`apps/demo/main.py` launches the Python standard-library HTTP
-server in `apps/demo/web/`, and its HTML/CSS/JS lives in
-`apps/demo/web/static/`. The prior top-level `web/` package and
-`scripts/web-ui.py` launcher have been removed. The native C++ SLAM
-libraries are not needed to display an exported map.
+The Web UI lives under [apps/demo](../apps/demo/README.md):
+`apps/demo/native/main.cpp` and `data.cpp` provide the native C++20
+read-only HTTP API; `apps/demo/web/static/` retains the **same**
+HTML/CSS/JavaScript browser application. The server uses the native
+`slam::mapping::read_map_bundle` checksum/fingerprint verification.
+The old Python `apps/demo/main.py` remains available as a temporary
+fallback and for parity comparisons; it is no longer the Docker runtime.
 
 Like [hybrid-astar-cpp](https://github.com/civcode/hybrid-astar-cpp),
-the root [Dockerfile](../Dockerfile) has distinct stages for the Python
-demo and native build/tests, and [compose.yaml](../compose.yaml) starts
+the root [Dockerfile](../Dockerfile) has a **lightweight native C++ demo
+build**, a Python-free native runtime and separate heavy solver build/tests, and [compose.yaml](../compose.yaml) starts
 the demo or runs tests explicitly.
 
 ```sh
@@ -77,8 +79,10 @@ docker compose up --build demo
 docker compose run --build --rm test
 ```
 
-The demo stage installs **Python only**, not Ceres/GTSAM/Catch2, because
-it is a read-only map viewer. Its `--example-if-empty` option supplies a
+The demo runtime installs **neither Python nor Ceres/GTSAM/Catch2**.
+Its separate native builder needs Eigen3, zlib and OpenSSL development
+headers. The built C++ binary reads a read-only mount and serves fixed
+browser assets; Python is retained only for offline conversion and testing. Its `--example-if-empty` option supplies a
 deterministic **synthetic** workshop when the read-only mounted map
 directory contains neither a .slammap file nor a CURRENT registry.
 The map is created only in an isolated temporary directory. Any real
@@ -102,8 +106,8 @@ docker run --rm -p 127.0.0.1:8765:8765 \
 The Docker service binds all **container** interfaces to permit port
 forwarding, but the **host** port is explicitly loopback-only.
 The server has no authentication or TLS; never expose it on a public
-interface. Bare-metal Python launches bind to `127.0.0.1` by default,
-and `--allow-network` is still needed for an explicit broad bind.
+interface. Bare-metal native launches bind to `127.0.0.1` by default,
+and `--allow-network` is still required for explicit broad binding.
 
 ## Read-only HTTP API
 
@@ -139,8 +143,11 @@ node --check apps/demo/web/static/app.js   # optional JavaScript syntax check
 
 If Python 3.10+ is available at CMake configure time and \`BUILD_TESTING=ON\`,
 the \`web_ui_unit\` CTest is registered and runs with the native suite.
-The root Dockerfile's native `test` target includes Python and its CTest
-entry; the minimal `demo` target needs only Python to serve maps.
+The root Dockerfile's opt-in `test` target includes Python as a test
+driver. The `demo` runtime is now compiled native C++, and
+`native_web_api` verifies C++ HTTP endpoints, binary-map metadata,
+PNG, replay, SHA-bound Ceres sidecars and rejection of write requests.
+Python is **not** required on the demo host/container.
 
 **Initial local evidence (2026-11-01):** 11/11 unittest cases passed. The
 real FR079 FUSMAP2D export was decoded with its known/unknown counts,
@@ -177,3 +184,41 @@ precedence and frontend-safe-browsing assertions.
 loopback HTTP, Node JavaScript syntax and C++/Python native-format
 parity passed. The actual Ubuntu Docker build and complete repository
 CTest matrix remain unverified in this workspace.
+
+
+## Native C++20 server build and migration status
+
+~~~sh
+cmake -S . -B build-demo -G Ninja -DBUILD_TESTING=ON \
+  -DSLAM_ENABLE_CERES=OFF -DSLAM_ENABLE_GTSAM=OFF \
+  -DSLAM_ENABLE_CATCH2=OFF \
+  -DSLAM_BUILD_NATIVE_DEMO=ON -DSLAM_REQUIRE_NATIVE_DEMO=ON
+cmake --build build-demo --target fusion_slam_demo --parallel 2
+ctest --test-dir build-demo -R '^native_web_api$' --output-on-failure
+./build-demo/fusion_slam_demo \
+  --data-dir apps/demo/maps --example-if-empty
+~~~
+
+The native data module enforces bounded, regular, no-symlink reads,
+rejects duplicate JSON keys and invalid/non-finite observation fields,
+checks FUSGEN1 pointers and resolved map fingerprints and verifies
+FUSMATCH1 against the replay's exact SHA-256 bytes, source identity,
+map revision/fingerprint/frame and conservative acceptance contract.
+It never runs SLAM, changes maps or exposes control/mutation endpoints.
+The native JSON parser retains 64-bit map fingerprints as strings rather
+than converting them through floating point.
+
+The C++ path is **committed but full native CMake/CTest and Docker
+execution are not verified in the current environment** because a full
+local repository checkout is unavailable. Treat the Python server as
+the operational fallback until the native CTest and replay parity checks
+pass on a full checkout; no automatic GitHub Actions were run. The
+Docker demo has been switched to the native binary, so validate that
+new image before replacing a working deployed demo.
+
+The server remains a deliberately small *single-threaded developer
+offline viewer* with bounded request sizes and per-client timeouts,
+similar to the native model in hybrid-astar-cpp. It is not an
+internet-facing HTTP service or a real-time SLAM telemetry interface.
+Replay and binary map files are reparsed on demand, which is safe but
+not optimized for high-frequency streaming.
