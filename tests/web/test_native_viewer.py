@@ -24,10 +24,17 @@ from web.bundle import read_bundle
 from web.replay import create_synthetic_replay
 
 
+# The old web_ui_unit CTest discovers test_*.py with unittest discover.
+# Native HTTP tests require an executable and are only activated by their
+# dedicated native_web_api CTest. Do not treat "discover"/flags as a binary.
+_NATIVE_EXE = sys.argv[1] if __name__ == "__main__" and len(sys.argv) == 2 else None
+
+
+@unittest.skipUnless(_NATIVE_EXE is not None, "native HTTP tests run via native_web_api CTest")
 class NativeViewerApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.executable = sys.argv[1]
+        cls.executable = _NATIVE_EXE
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
