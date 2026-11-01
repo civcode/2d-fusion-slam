@@ -101,6 +101,12 @@ int main() {
           worse.symmetric_p95_wall_distance_m,
           "symmetric wall error detects geometric distortion");
 
+  // A map estimated from synthetic measurements is not itself exact truth.
+  auto estimated_label = map;
+  estimated_label.provenance.truth_class = "synthetic_estimated";
+  require(evaluate_map_accuracy(estimated_label, ap).occupied_iou == ideal.occupied_iou,
+          "estimated synthetic map can be evaluated against exact reference");
+
   // Observed near-neutral is still ambiguous, not fake observed free.
   cells = map.snapshot->cells();
   cells[wall_index] = {0.0, true};
