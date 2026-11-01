@@ -180,6 +180,27 @@ async function loadSession(name){
         `no independent ground truth / no per-beam timing`;
     }
     const fr079Slam=session.source.pose_kind==="estimated_fr079_odometry_scan_matched_not_ground_truth";
+    label("replay-map-select-label",fr079Slam?
+      "Final reconstructed occupancy map (optional)":"Reference occupancy map (optional)");
+    label("replay-trajectory-label",fr079Slam?
+      "Estimated SLAM trajectory":"Logged trajectory");
+    label("replay-robot-label",fr079Slam?"Estimated robot pose":"Logged pose");
+    label("replay-pose-label",fr079Slam?"Estimated SLAM pose":"Logged laser pose");
+    label("replay-odom-label","Logged odometry pose");
+    label("replay-matching-label",fr079Slam?"Incremental SLAM matcher":"Ceres solver status");
+    if(fr079Slam)
+      $("replay-caution").textContent=
+        "⚠ FR079 SLAM replay shows estimated odometry + LiDAR scan-corrected poses, " +
+        "not externally measured truth. The overlaid map was built from this " +
+        "trajectory and is not an independent reference. The recorded laser " +
+        "pose fields were deliberately excluded from reconstruction; laser " +
+        "extrinsics and global map frame alignment remain unverified.";
+    else
+      $("replay-caution").innerHTML=
+        "⚠ Logged laser and odometry poses are recorded estimates, <strong>not independently measured truth</strong>. " +
+        "Even a matching map frame label does not establish calibrated alignment. " +
+        "Ceres is only run by an offline native exporter. Optimization against a " +
+        "training map does not prove metric accuracy, independent support, or calibration.";
     label("replay-ceres-source",fr079Slam?
       "Incremental FR079 SLAM: trajectory already scan-corrected; matching decisions are in its .matches.json artifact":
       ceresAvailable?
