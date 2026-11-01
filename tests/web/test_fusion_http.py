@@ -76,6 +76,17 @@ class FusionHTTP(unittest.TestCase):
         self.assertEqual([x["id"] for x in listed["runs"]], ["apartment_001"])
         base = "/api/fusion/runs/apartment_001"
         report = self.get_json(base)
+        profiling = self.get_json(base + "/profile")
+        self.assertEqual(profiling["format"], "FUSPROFILE1")
+        self.assertEqual(profiling["frames"], report["frames"])
+        self.assertEqual(profiling["scene"], report["scene"])
+        self.assertEqual(profiling["matcher"], report["matcher"])
+        self.assertFalse(profiling["realtime_capability_verified"])
+        if profiling["profiled"]:
+            self.assertGreater(profiling["effective_processing_fps"], 0)
+            self.assertGreaterEqual(profiling["frame_proxy_p95_ms"], 0)
+        else:
+            self.assertIsNone(profiling["effective_processing_fps"])
         poses = self.get_json(base + "/trajectories")
         replay = self.get_json(base + "/replay")
         self.assertEqual(report["format"], "FUSFUSION1")
@@ -115,13 +126,28 @@ class FusionHTTP(unittest.TestCase):
     def test_map_fingerprint_png_assets_and_no_mutation(self):
         base = "/api/fusion/runs/apartment_001"
         report = self.get_json(base)
+        merged = self.get_json("/api/maps")
+        fusion_rows = [x for x in merged["maps"]
+                       if x["role"] == "fusion"]
+        self.assertEqual(len(fusion_rows), len(report["results"]))
+        self.assertEqual({x["id"] for x in fusion_rows},
+                         {"fusion@apartment_001@" + method
+                          for method in report["results"]})
         for method in report["results"]:
             metadata = self.get_json(base + f"/maps/{method}")
+            explorer = "/api/maps/fusion@apartment_001@" + method
+            self.assertEqual(self.get_json(explorer), metadata)
+            cell = self.get_json(explorer + "/cell?x=0&y=0")
+            self.assertEqual((cell["x"], cell["y"]), (0, 0))
+            self.assertIn("observed", cell)
             self.assertEqual(metadata["truth_class"], "synthetic_estimated")
             self.assertEqual(metadata["frame_id"], "map")
             self.assertEqual(metadata["source_id"], report["scene"])
             self.assertEqual(metadata["fingerprint"],
                              str(report["results"][method]["map"]["map_fingerprint"]))
+            with request.urlopen(self.base + explorer + "/image.png") as r:
+                self.assertEqual(r.headers["Content-Type"], "image/png")
+                self.assertEqual(r.read(8), b"\x5cx89PNG\x5cr\x5cn\x5cx1a\x5cn")
             with request.urlopen(self.base + base + f"/maps/{method}/image.png") as r:
                 self.assertEqual(r.headers["Content-Type"], "image/png")
                 self.assertEqual(r.read(8), b"\x89PNG\r\n\x1a\n")
