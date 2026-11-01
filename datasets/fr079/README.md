@@ -60,7 +60,7 @@ ranging from -90 degrees to +89.5 degrees.
   float values; axis conventions, registration against the scan/log pose frame,
   import into authoritative occupancy snapshots and metric comparison remain future work.
   The GIF alone is a qualitative reference, not numerical ground truth.
-- **No replay/SLAM benchmark claimed.** Full file parsing is only the
+- **No independently validated public SLAM accuracy benchmark claimed.** Full file parsing is only the
   first public-dataset integration test. The next experiments must hold
   out scans and report pose/mapping error where an independently verified
   truth source exists.
@@ -189,3 +189,34 @@ Outputs are /tmp/fr079-training.slammap, .pgm, and .yaml. The binary is verified
 With SLAM_FR079_LOG configured, CTest registers fr079_map_export followed by fr079_map_import using fixture ordering. These real-data checks are optional because recordings are kept outside Git.
 
 Locally observed: 391 × 539 cells, 57,529 known, 153,220 unknown, revision 416 and fingerprint 13991754243820308900. See [bundle format](../../docs/map-bundle-v1.md).
+
+
+## NEW: incremental FR079 LiDAR + odometry SLAM from an empty map
+
+The C++20 slam_fr079_offline executable now replays the full CARMEN
+recording in timestamp order, with per-FLASER odometry as its motion
+prior, a source-excluded Ceres matcher against earlier map snapshots,
+and incremental occupancy updates. Unlike train-only FR079 mapping,
+this process **does not read the logged laser pose estimates to locate
+any scan** and does not read the archived reference map. It exports
+the map, a corrected trajectory, a replay, per-frame decisions and
+offline frame-timing/FPS diagnostics. The generated binary can be
+viewed alongside its estimated scan replay in the existing Map
+Explorer and LiDAR Replay.
+
+The initial gauge is the first recorded odometry pose. **Laser
+extrinsics are assumed identity, not verified; no per-beam timestamps,
+gyro stream, loop-closure sensor or independent absolute pose truth
+exist in FR079.** The current implementation is an incremental
+LiDAR+odom frontend, not a global loop-closing or physically
+registered map evaluation. It is not valid to report ATE/RPE against
+logged laser poses as independent truth.
+
+The synthetic local CTest tests all artifact outputs and independently
+mutates logged laser pose fields to verify that they cannot influence
+the occupancy map. The optional FR079 full-log CTest runs only if the
+dataset is provided with SLAM_FR079_LOG. It is not a claim that a
+published full-log experiment has already passed.
+
+For native and Docker commands, including BUILD_JOBS=28, see
+[FR079 offline SLAM protocol](../../docs/fr079-offline-slam.md).
