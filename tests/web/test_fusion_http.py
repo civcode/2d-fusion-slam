@@ -147,7 +147,7 @@ class FusionHTTP(unittest.TestCase):
                              str(report["results"][method]["map"]["map_fingerprint"]))
             with request.urlopen(self.base + explorer + "/image.png") as r:
                 self.assertEqual(r.headers["Content-Type"], "image/png")
-                self.assertEqual(r.read(8), b"\x5cx89PNG\x5cr\x5cn\x5cx1a\x5cn")
+                self.assertEqual(r.read(8), b"\x89PNG\r\n\x1a\n")
             with request.urlopen(self.base + base + f"/maps/{method}/image.png") as r:
                 self.assertEqual(r.headers["Content-Type"], "image/png")
                 self.assertEqual(r.read(8), b"\x89PNG\r\n\x1a\n")
