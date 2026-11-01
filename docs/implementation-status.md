@@ -699,3 +699,62 @@ establish live real-time capability or device-level worst-case latency.
 No GitHub Actions were executed.
 
 See [Fusion profiling and benchmark reproducibility](fusion-profiling.md).
+
+
+## 2026-11-01 — FR079 end-to-end incremental LiDAR + odometry SLAM
+
+Implemented native C++20 slam_fr079_slam_frontend and slam_fr079_offline
+directly on the latest main (base commit a1c9cb8525635e09ffee8e90c34d4f3c2ecef242).
+This milestone connects previously separate CARMEN parsing, occupancy,
+EDT/Ceres matching and map exporting into a single time-ordered
+FR079 LiDAR+odometry SLAM process:
+
+- Read all FLASER scans and validate accompanying ODOM records; use
+  the embedded **scan-time logged odometry**, but **never logged laser
+  poses**, as motion prior. First scan anchors an arbitrary gauge.
+  No synthetic truth or archived reference map is provided.
+- Preallocate bounded grid from odometry extent only, with margin;
+  every scan starts from odometry delta propagated from last accepted
+  scan-corrected estimate. Query snapshots are constructed from
+  *previously inserted scans*, with configurable EDT refresh cadence.
+  Source-revision, overlap, support, rank and innovation gates guard
+  all accepted scan corrections.
+- Insert valid finite in-range LiDAR rays into a freshly initialized
+  occupancy grid. Zero, invalid and over-range beams do not create
+  false occupancy or free-space observations.
+- Export FUSMAP2D binary map with read-back verification, PGM/YAML
+  visualization, FUSREPLAY1 estimated trajectory and hits, FUSFR079POSE1
+  per-frame odometry/prior/corrected trajectory, FUSFR079MATCH1
+  decisions and native timing, and FUSFR079SLAM1 full report.
+  The native read-only Map Explorer and LiDAR Replay now accept the
+  estimated FR079 replay provenance without representing it as
+  logged laser ground truth.
+- New CTest fr079_offline_slam generates synthetic CARMEN raw scans,
+  validates artifact identity and timing, asserts laser pose
+  *nonleakage*, odometry sensitivity and earlier-frame independence
+  from later LiDAR observations, and refuses out-of-order/overwrite
+  inputs. fr079_offline_http validates output through actual native
+  HTTP endpoints. Optional fr079_offline_real_data runs on the
+  complete local 3,118-scan FR079 input only when SLAM_FR079_LOG is set.
+  No GitHub Actions are used.
+
+**Limits:** This is a working native *implementation* of an
+incremental LiDAR+odometry frontend, not a verified FR079 accuracy
+result and not an online robot daemon. CARMEN lacks calibrated
+laser-to-odometry extrinsics (identity assumed here), verified beam
+timing, raw gyro and independent external trajectory truth. The
+reference maps lack proven metric alignment. There are **no
+independently sourced loop closures or GTSAM graph factors** in
+the FR079 run. Initial global frame is arbitrary; known-map
+localization, calibrated ATE/RPE and wall IoU cannot be claimed.
+Profiling yields offline wall-clock frame-work latency and FPS,
+not live queue deadlines.
+
+**Validation status:** The source and native routes were reviewed
+against latest GitHub headers, JavaScript syntax checked and source
+checks added. Full checkout compilation, CTest with Ceres and
+authoritative 3,118-scan execution remain unverified in this tool
+session because GitHub is unavailable to the local container.
+No accuracy or throughput measurements are invented.
+
+See [full FR079 implementation protocol](fr079-offline-slam.md).
