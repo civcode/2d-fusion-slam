@@ -19,6 +19,7 @@ docker compose build test demo
 
 # Replace with your actual local dataset location.
 export FR079_LOG=/absolute/path/to/fr079.log.gz
+test -f "$FR079_LOG" || { echo "Set FR079_LOG to an existing regular file" >&2; exit 1; }
 mkdir -p apps/demo/maps
 
 docker compose run --rm \
@@ -28,7 +29,7 @@ docker compose run --rm \
   test /input/fr079.log.gz /output/fr079-slam
 
 docker compose run --rm --entrypoint ctest test \
-  --test-dir build-docker -R fr079_offline_slam --output-on-failure
+  --test-dir build-docker -R 'fr079_offline_slam|fr079_offline_http' --output-on-failure
 
 docker compose up -d demo
 ~~~
@@ -139,7 +140,48 @@ the map to change, and rejects malformed timestamp order and
 overwriting existing output. With SLAM_FR079_LOG configured,
 fr079_offline_real_data runs the full 3,118-scan recording separately.
 
-The authoritative experiment must still be built, run and measured
-locally on the actual data. No unpublished FR079 accuracy or measured
-speedup is assumed by this document. Tests are manual; no GitHub
-Actions are enabled or executed.
+## Verified local real-data run
+
+Built both Compose images on `main` with 28 build/test jobs. The two requested
+FR079 CTests passed, followed by **35/35** complete-suite CTests. The regression
+fixtures use the reference matcher; the separate full-recording run below
+explicitly used **Ceres**.
+
+The public [MIT/Radish FR079 recording](https://dspace.mit.edu/entities/publication/2fe88c52-8693-4343-add4-b09f07257f94)
+was retrieved using its [bitstream API](https://dspace.mit.edu/server/api/core/bitstreams/00c362cb-47de-4d02-ae06-3814c038c1ea/content)
+and stored outside Git at `.build/datasets/fr079.log.gz`. The ordinary download
+URL returned HTTP 429; the API download succeeded. Its compressed-file SHA-256
+matches `datasets/fr079/SHA256SUMS` exactly:
+`4500f9c9791d16a1698ccdff90b66655506dfd0696b6f7bfd1d463e74e695361`.
+For this checkout, set `FR079_LOG="$PWD/.build/datasets/fr079.log.gz"`.
+No build automatically downloads datasets.
+
+The requested prefix `apps/demo/maps/fr079-slam` produced all seven artifacts:
+
+| Measurement | Observed value |
+| --- | ---: |
+| Scans / inserted scans | 3,118 / 3,118 |
+| Ceres attempts / accepted / rejected | 623 / 575 / 48 |
+| Rejection reasons | 6 insufficient support, 42 no improvement |
+| Map size / resolution | 655 x 749 / 0.10 m |
+| Native SLAM compute time | 1,825.26 ms |
+| Offline compute throughput | 1,708.25 scans/s |
+| Per-scan p95 / maximum compute latency | 6.66 / 8.43 ms |
+| Recorded input scan rate | 4.57 Hz |
+
+These are one-run host measurements, **not a speedup comparison, live deadline
+validation, or map-accuracy score**. Ceres emitted rejected trial-evaluation
+warnings; the process completed successfully and kept its normal acceptance
+gates. The uncompressed-source SHA-256 was independently checked against the
+report; all 3,118 trajectory/replay/match records passed artifact validation.
+The native API passed map-fingerprint, PNG, cell, replay-source and sampled-frame
+checks. Chromium decoded the real map, selected the matching estimated replay
+and overlay, and exercised frames 1, 501 and 3,118 without JavaScript errors.
+
+`docker compose up -d demo` succeeded and the demo was left running. In this
+sandbox, commands also require a writable `DOCKER_CONFIG` and
+`docker compose --env-file /dev/null ...` to bypass the unreadable pre-existing
+`.env`; see [Docker development](docker-development.md). Repeating the export
+with the same output prefix intentionally fails rather than overwriting data.
+No independent accuracy ground truth, calibrated extrinsics, loop closure or
+real-time capability is established. No GitHub Actions were invoked.

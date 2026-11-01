@@ -4,6 +4,12 @@ CURRENT
 .pending-*
 .lock
 *.slamreplay.json
-*.slamreplay.json
 *.slamreplay.json.ceres.json
 *.holdout-report.json
+
+# Generated SLAM visualizations, trajectories and diagnostic reports.
+*.pgm
+*.yaml
+*.trajectory.json
+*.matches.json
+*.report.json
