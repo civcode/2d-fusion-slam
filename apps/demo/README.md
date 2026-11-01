@@ -113,3 +113,65 @@ viewer** with bounded request size and timeouts; it is not a real-time
 SLAM service and must not be internet-exposed. HTTP writes remain
 disabled, and paths are fixed basenames or bundled asset allowlists.
 See [the Web UI guide](../../docs/web-ui.md) for verification status.
+
+
+## Fusion process replay (native C++)
+
+The **Fusion Replay** page at **http://127.0.0.1:8765/fusion** visualizes
+an actual completed `slam_offline_fusion` run, rather than pretending
+to show a live robot. It supports timeline scrub/play/pause/step, speed
+adjustment, 2D zoom/pan, optional final-map overlay, method-by-method
+trajectories, sampled moving LiDAR returns, cumulative scan-hit
+observations, held-out Ceres/reference matcher status, source-exclusion
+decisions, GTSAM independent-sensor loop events and per-method final
+trajectory RMSE/map IoU. Graph and synthetic truth overlays are explicitly
+labeled as post-run information.
+
+Generate a run from the repository root, with an output directory that
+does **not** already exist:
+
+~~~sh
+cmake --build build --target slam_offline_fusion
+./build/slam_offline_fusion apartment apps/demo/fusion/apartment-001
+
+# Native demo on the host; no Python required for the server:
+./build-demo/fusion_slam_demo \
+  --data-dir apps/demo/maps --fusion-dir apps/demo/fusion --port 8765
+# Open http://127.0.0.1:8765/fusion
+~~~
+
+Alternatively, `docker compose up --build demo` mounts
+`apps/demo/fusion` at `/fusion:ro` as well as the separate map
+directory at `/maps:ro`. Generate any number of clearly named run
+subdirectories and select them in the Fusion Replay dropdown. Allowed
+run IDs contain ASCII letters, digits, underscores or hyphens.
+
+New read-only native endpoints:
+
+- `GET /api/fusion/runs`: discover direct child run directories
+- `GET /api/fusion/runs/{id}`: validated FUSFUSION1 report
+- `GET /api/fusion/runs/{id}/trajectories`: validated FUSPOSES1
+- `GET /api/fusion/runs/{id}/replay`: full validated FUSFUSREPLAY1
+- `GET /api/fusion/runs/{id}/frame/{index}`: one validated replay frame
+- `GET /api/fusion/runs/{id}/maps/{method}`: authoritative map metadata
+- `GET /api/fusion/runs/{id}/maps/{method}/image.png`: authoritative
+  fingerprint-checked *final* occupancy PNG
+
+All artifacts are read from disk, not generated in HTTP handlers. The
+server refuses symlinked run directories/files, missing or contradictory
+metadata/clock/match events, changed map fingerprints and path traversal.
+No HTTP POST/PUT controls are supported. The file formats provide
+integrity/provenance checks but **not cryptographic authenticity**.
+
+**Interpretation:** the replay projects precomputed deskewed scan samples
+using the scan-matched trajectory. The accumulating green dots represent
+**observed hit endpoints, not the time-varying occupancy probability
+grid**. An optional occupancy raster shows the *final* map, and GTSAM
+poses show the *post-run* graph solution; those final results did not
+necessarily exist at the replayed instant. The browser never reruns
+Ceres, GTSAM or SLAM and does not claim real hardware calibration.
+
+Native CTest `fusion_replay_http` runs the real C++ offline fusion CLI,
+loads its output through the native HTTP server, checks frame/matcher
+totals and map fingerprints, and verifies corrupted files, symlinks and
+writes fail closed. See [Fusion Replay protocol](../../docs/fusion-replay.md).
