@@ -222,3 +222,18 @@ similar to the native model in hybrid-astar-cpp. It is not an
 internet-facing HTTP service or a real-time SLAM telemetry interface.
 Replay and binary map files are reparsed on demand, which is safe but
 not optimized for high-frequency streaming.
+
+
+## Manual full-checkout verification
+
+Run `bash scripts/verify-native-demo.sh` from the repository root. It
+configures a **local, disconnected CMake build**, builds the C++ viewer,
+and runs the native JSON/HTTP API tests, native-versus-Python FUSMAP2D
+fixture parity, and the original Python Web UI unit tests.
+
+The JSON parser regression was compiled separately in the current
+container using GCC 14, `-Wall -Wextra -Werror -Wpedantic` and
+UndefinedBehaviorSanitizer; all parser tests passed. This is focused
+evidence, **not** a full-repository build or validation of the
+native HTTP server / Docker runtime.
+
