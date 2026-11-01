@@ -37,11 +37,16 @@ struct Observations {
   std::vector<slam::fusion::SensorTick> ticks;
   std::vector<slam::sensors::AssembledScan> scans;
 };
+struct IndependentSyntheticLoop {
+  std::size_t from{}, to{};
+  Pose2 measured_from_to{};
+};
 struct Simulation {
   slam::fixtures::Scene scene;
   slam::mapping::GridConfig grid;
   Observations sensors;
-  std::vector<Pose2> reference; // post-hoc accuracy and explicit synthetic loop sensor only
+  std::vector<Pose2> reference; // withheld post-hoc scoring only
+  std::vector<IndependentSyntheticLoop> independent_loop_measurements;
   Pose2 initial_anchor;
   bool warehouse{};
 };
@@ -128,6 +133,23 @@ Simulation generate(const std::string& label) {
     scan.partial=false;
     d.sensors.scans.push_back(std::move(scan));
     d.reference.push_back(exact.pose);
+  }
+  // Simulate a distinct, externally produced *relative pose sensor*. This
+  // generator alone has oracle simulator access. The graph optimizer receives
+  // only measured relative transforms; it never reads a reference trajectory.
+  for(std::size_t i=19;i<d.reference.size();i+=2){
+    if(i%4!=1)continue;
+    for(std::size_t j=0;j+15<i;++j){
+      if((d.reference[i].translation-d.reference[j].translation).norm()>=.65)
+        continue;
+      auto measurement=slam::compose(slam::inverse(d.reference[j]),d.reference[i]);
+      measurement.translation.x()+=.012*std::sin(double(i));
+      measurement.translation.y()+=.012*std::cos(double(i));
+      measurement.yaw_rad=slam::wrap_yaw(measurement.yaw_rad+
+                                        .004*std::sin(double(i)*.3));
+      d.independent_loop_measurements.push_back({j,i,measurement});
+      break;
+    }
   }
   return d;
 }
@@ -326,26 +348,22 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
     const slam::graph::FactorProvenance loop_source{
       slam::graph::EvidenceClass::synthetic_exact,
       "independent_simulated_loop_sensor_v1",true,true};
-    for(std::size_t i=19;i<matcher.poses.size();i+=2) {
+    for(const auto& measurement:sim.independent_loop_measurements){
+      const auto i=measurement.to,j=measurement.from;
+      if(i>=matcher.outcomes.size()||i<=j+15)
+        continue;
+      // Existing geometry diagnostics and source fingerprint of the fixed
+      // training map must corroborate independently sourced loop proposals.
       const auto& result=matcher.outcomes[i];
       if(result.status!=slam::matching::MatchStatus::accepted||
          result.diagnostics.supported_hits<25||
          result.diagnostics.overlap<.65||!result.diagnostics.full_rank)
         continue;
-      std::optional<std::size_t> earlier;
-      for(std::size_t j=0;j+15<i;++j) {
-        if((matcher.poses[i].translation-matcher.poses[j].translation).norm()<.60){
-          earlier=j;break;
-        }
-      }
-      if(!earlier)continue;
-      Pose2 measured=slam::compose(slam::inverse(sim.reference[*earlier]),
-                                   sim.reference[i]);
-      measured.translation.x()+=.012*std::sin(double(i));
-      measured.translation.y()+=.012*std::cos(double(i));
-      measured.yaw_rad=slam::wrap_yaw(measured.yaw_rad+.004*std::sin(double(i)*.3));
-      input.loops.push_back({{*earlier,i,measured,.04,.04,.025,loop_source},
-            result.diagnostics.supported_hits,result.diagnostics.overlap,true});
+      // Do not construct a loop constraint from a map-match output; use
+      // the independent sensor's raw, bounded relative observation.
+      input.loops.push_back({{j,i,measurement.measured_from_to,
+        .04,.04,.025,loop_source},
+        result.diagnostics.supported_hits,result.diagnostics.overlap,true});
     }
   }
   output.loop_candidates=input.loops.size();
