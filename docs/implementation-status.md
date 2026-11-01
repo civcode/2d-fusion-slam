@@ -537,3 +537,21 @@ See [native synthetic mapping benchmark](synthetic-mapping-benchmark.md).
 
 See [native demo instructions](../apps/demo/README.md) and [web UI
 architecture](web-ui.md).
+
+
+### Native Web UI verification follow-up
+
+Added `scripts/verify-native-demo.sh` for manual, fully disconnected local
+build and CTest verification (native HTTP, native JSON, binary map parity,
+legacy Python viewer tests). Corrected a test-discovery regression: Python
+`unittest discover` now skips native HTTP checks unless the dedicated
+`native_web_api` test supplies the compiled executable. Added the
+`native_viewer_json` C++20 regression for large 64-bit fingerprints,
+floating-point precision, duplicate keys, malformed/overflowing JSON and
+Unicode escapes; the parser now rejects non-finite exponent values at parse
+time. Included explicit `libstdc++6` in the lightweight Docker runtime.
+GCC 14, strict warning flags and UBSan passed the focused locally reproduced
+C++ JSON test. A full native web-server CMake/CTest and Docker build remain
+**unverified** because GitHub cannot be cloned into the current container;
+no GitHub Actions were run.
+
