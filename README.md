@@ -96,6 +96,17 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## Ground-truth synthetic map accuracy
+
+`slam_map_accuracy_cli` compares an exported FUSMAP2D binary map to the
+**exact synthetic apartment/warehouse wall layout** and emits a deterministic
+`FUSMAPACC1` JSON report: occupied IoU, precision, recall, known/unknown
+coverage, and symmetric mean/p95 wall distance in metres. It refuses cropped,
+mismatched or unverified frames; FR079 is **not** accepted as independent
+ground truth. The separate oracle-pose fixture exercises the full export/import
+path but is **not** a SLAM-accuracy benchmark. See
+[map accuracy instructions](docs/map-accuracy.md).
+
 ## Local web UI — available now
 
 The offline map console needs **Python 3.10+ only**, not Ceres, GTSAM,
@@ -185,6 +196,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Training-excluded FR079 Ceres evaluation and report](docs/heldout-ceres-evaluation.md)
 - [Interactive recorded LiDAR replay and FUSREPLAY1](docs/recorded-replay.md)
 - [P2 read-only known-map tracking trust gate (synthetic foundation)](docs/known-map-tracker.md)
+- [Ground-truth map accuracy: synthetic IoU, coverage and wall distance](docs/map-accuracy.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
 **Next:** source-rebuilt train-only map evaluation now checks that every Ceres query scan was excluded from the FR079 training map. See [held-out Ceres evaluation](docs/heldout-ceres-evaluation.md). This still does not provide independent physical ground truth, verified extrinsics or per-beam timestamps. A calibrated independent traversal is the next real-data gate.
