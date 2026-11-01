@@ -31,9 +31,9 @@ ctest --test-dir build -R 'gyro_wheel_fusion|offline_fusion' --output-on-failure
   --synthetic-independent-loops
 ~~~
 
-To run without heavy solvers, set both \`SLAM_ENABLE_CERES=OFF\` and
-\`SLAM_ENABLE_GTSAM=OFF\`. The CLI then reports
-\`matcher=geometry_reference_fallback\` and \`graph_status=gtsam_not_built\`
+To run without heavy solvers, set both `SLAM_ENABLE_CERES=OFF` and
+`SLAM_ENABLE_GTSAM=OFF`. The CLI then reports
+`matcher=geometry_reference_fallback` and `graph_status=gtsam_not_built`
 rather than pretending that either solver ran.
 
 The CLI refuses an existing output directory; choose a new path for each run.
@@ -43,7 +43,7 @@ The CLI refuses an existing output directory; choose a new path for each run.
 - Synthetic apartment/warehouse fixtures generate **moving** 240-beam scans
   with **exact simulated per-beam acquisition timestamps** and a nonzero
   laser mounting translation/yaw; timestamps are in one explicit
-  \`clock_domain=101, epoch=1\`. Synthetic truth is used *by the simulator*
+  `clock_domain=101, epoch=1`. Synthetic truth is used *by the simulator*
   to generate physical measurements, not by the estimator to reconstruct
   map poses.
 - A deterministic 40 Hz gyro/wheel stream supplies angular rate with
@@ -53,7 +53,7 @@ The CLI refuses an existing output directory; choose a new path for each run.
   this status is an explicit simulator attestation, not inferred from
   gyro samples alone. The first exact synthetic pose establishes a single
   global gauge/initial anchor.
-- The portable \`slam::fusion::integrate_sensors\` library refuses mixed
+- The portable `slam::fusion::integrate_sensors` library refuses mixed
   clock domain/epoch, nonmonotonic timestamps, gaps above the configured
   maximum, absent/implausible gyro, unsupported stationary calibration,
   out-of-bound bias, and missing wheel translation. Its **optional**
@@ -61,7 +61,7 @@ The CLI refuses an existing output directory; choose a new path for each run.
   It never interpolates missing measurements.
 - The estimator uses the library's timestamped, integrated full-SE(2)
   odometry trajectory to deskew each hit with the existing
-  \`slam::motion::deskew_hits\` and the simulated laser extrinsics.
+  `slam::motion::deskew_hits` and the simulated laser extrinsics.
   All scan and beam calibration/source/timing claims must agree;
   provisional LD19 packet timing would be refused for mapping.
 
@@ -91,14 +91,14 @@ quality may remain low because some walls are never observed.
    scans, so is explicitly a disadvantaged stationary-scan approximation;
    critically, rejected scans are not silently inserted into the map.
 5. When the offline GTSAM target is built, create sequential
-   \`PoseEdge\` factors from the *pre-matching* gyro/wheel stream (not from
+   `PoseEdge` factors from the *pre-matching* gyro/wheel stream (not from
    accepted map-match pose deltas). Graph initial poses may be
    scan-matched predictions, but edge provenance remains independent of
    those predictions. No LiDAR matcher result is promoted to an independent
    loop measurement or an empirically measured covariance.
 6. By default the graph contains **no loop closure**, since LD19/MPU6050
    alone do not provide an independent relative-pose sensor. The explicit
-   \`--synthetic-independent-loops\` option generates a separately sourced
+   `--synthetic-independent-loops` option generates a separately sourced
    relative-pose sensor **inside the simulator**; its measurements,
    not the oracle trajectory, enter the graph. A candidate still requires
    eligible source-excluded LiDAR geometry and is subject to GTSAM's
@@ -117,24 +117,25 @@ The new directory contains:
 
 | File | Contents |
 | --- | --- |
-| \`wheel_only.slammap\` | Raw wheel-only odometry map, with wheel-derived moving-scan deskew |
-| \`lidar_only.slammap\` | Raw, non-deskewed, accepted-only LiDAR scan-to-local-map baseline |
-| \`gyro_wheel.slammap\` | Bias-calibrated gyro + wheel estimated-pose map |
-| \`fused_scan_matched.slammap\` | Gyro + wheel + accepted Ceres/reference scan corrections |
-| \`graph_optimized.slammap\` | Optional GTSAM-optimized map when GTSAM is compiled |
-| \`fusion_report.json\` | FUSFUSION1 with every method's fixed-gauge translation RMSE, p95, yaw RMSE and embedded independent FUSMAPACC1 ground-truth metrics |
+| `wheel_only.slammap` | Raw wheel-only odometry map, with wheel-derived moving-scan deskew |
+| `lidar_only.slammap` | Raw, non-deskewed, accepted-only LiDAR scan-to-local-map baseline |
+| `gyro_wheel.slammap` | Bias-calibrated gyro + wheel estimated-pose map |
+| `fused_scan_matched.slammap` | Gyro + wheel + accepted Ceres/reference scan corrections |
+| `graph_optimized.slammap` | Optional GTSAM-optimized map when GTSAM is compiled |
+| `trajectories.json` | FUSPOSES1 timestamped estimated pose paths, nanosecond timestamps as strings and separately labeled synthetic reference for scoring |
+| `fusion_report.json` | FUSFUSION1 with every method's fixed-gauge translation RMSE, p95, yaw RMSE and embedded independent FUSMAPACC1 ground-truth metrics |
 
-The generated map's provenance is \`synthetic_estimated\`, and the
-separate **reference** is \`synthetic_exact\`. Evaluation uses the exact
+The generated map's provenance is `synthetic_estimated`, and the
+separate **reference** is `synthetic_exact`. Evaluation uses the exact
 fixture walls and common declared map frame with **no best-fit map
 registration**. The report preserves regressions, so there are no
 fabricated improvement percentages or real-world accuracy claims.
 
-CTest \`gyro_wheel_fusion\` exercises gyro bias, wheel-only yaw, gyro-only
+CTest `gyro_wheel_fusion` exercises gyro bias, wheel-only yaw, gyro-only
 missing-translation trust, clock epoch/domain failures and missing
-samples. The Python-driven native \`offline_fusion\` CTest executes the
+samples. The Python-driven native `offline_fusion` CTest executes the
 C++ program in both scenes and compares its embedded map scores to
-those produced independently by \`slam_map_accuracy_cli\`, checks
+those produced independently by `slam_map_accuracy_cli`, checks
 deterministic repeatability and tests exclusive-output refusal. No
 GitHub Actions need to be run.
 
