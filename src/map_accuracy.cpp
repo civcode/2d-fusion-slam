@@ -269,8 +269,8 @@ void write_map_accuracy_json(std::ostream& out, const MapAccuracyReport& r,
       << ",\n  \"map_revision\": " << r.map_revision
       << ",\n  \"width\": " << r.width << ",\n  \"height\": " << r.height
       << ",\n  \"resolution_m\": " << r.resolution_m
-      << ",\\n  \\"occupied_threshold_log_odds\\": " << r.occupied_threshold_log_odds
-      << ",\\n  \\"free_threshold_log_odds\\": " << r.free_threshold_log_odds
+      << ",\n  \"occupied_threshold_log_odds\": " << r.occupied_threshold_log_odds
+      << ",\n  \"free_threshold_log_odds\": " << r.free_threshold_log_odds
       << ",\n  \"wall_raster_rule\": \"cell_center_within_half_diagonal\",\n"
       << "  \"confusion\": {\"tp\": " << r.true_positive
       << ", \"fp\": " << r.false_positive
