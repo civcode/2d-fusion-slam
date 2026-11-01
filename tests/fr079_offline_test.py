@@ -16,7 +16,7 @@ import tempfile
 
 
 def carmen_fixture(*, corrupt_laser=False, perturb_odom=False,
-                   reverse_time=False) -> str:
+                   perturb_future_scan=False, reverse_time=False) -> str:
     lines = ["PARAM fixture=offline_slam"]
     walls = (0.0, 6.0, 0.0, 5.0)
     for i in range(55):
@@ -46,6 +46,8 @@ def carmen_fixture(*, corrupt_laser=False, perturb_odom=False,
             dist = min(hits) if hits else 0.0
             if j % 47 == 0:
                 dist = 0.0  # explicit invalid / no-return sample
+            if perturb_future_scan and i >= 36:
+                dist *= 0.88
             ranges.append(f"{dist:.6f}")
         t = 1710000000 + (54 - i if reverse_time else i) * 0.15
         # Logged laser poses are deliberately not relied upon as truth.
@@ -168,6 +170,18 @@ def main():
         other = validate(odom_prefix, 55)
         assert original["map"]["fingerprint"] != other["map"]["fingerprint"], \
             "changing raw odometry had no effect on map"
+
+        future = root / "future-scan-changed.log"
+        future.write_text(carmen_fixture(perturb_future_scan=True))
+        future_prefix = root / "future-perturbed"
+        run(binary, future, future_prefix, "--reference", "--match-every", "3",
+            "--field-every", "5")
+        future_report = validate(future_prefix, 55)
+        assert original["map"]["fingerprint"] != future_report["map"]["fingerprint"]
+        a = json.loads(prefix.with_suffix(".trajectory.json").read_text())
+        b = json.loads(future_prefix.with_suffix(".trajectory.json").read_text())
+        assert a["poses"][:36] == b["poses"][:36], (
+            "future laser geometry leaked into earlier pose estimates")
 
         reversed_log = root / "reversed.log"
         reversed_log.write_text(carmen_fixture(reverse_time=True))
