@@ -596,3 +596,20 @@ physical loop observation or measured hardware accuracy is claimed.
 No GitHub Actions workflows were executed.
 
 See [full protocol](offline-fusion.md).
+
+
+### Focused local verification evidence for fusion
+
+A standalone GCC C++20 test reusing the fusion integration algorithm with
+compatible time/SE(2)/trajectory interfaces compiled locally with Eigen
+headers, `-Wall -Wextra -Wpedantic -Werror`, UndefinedBehaviorSanitizer
+and no sanitizer failures. It exercised positive clock-domain integration,
+gyro-bias calibration, missing-wheel refusal and gyro-only no-XY fallback.
+This is **not** a compile or native CTest run of the full GitHub source tree,
+nor a substitute for Ceres/GTSAM map/pose accuracy benchmarks. The local
+development environment cannot resolve GitHub for a full checkout and does
+not have installed solver headers. No GitHub Actions were used.
+
+Manual reproducibility entrypoint: `bash scripts/verify-offline-fusion.sh`
+with offline Ceres and GTSAM already installed. `SLAM_FUSION_REQUIRE_SOLVERS=OFF`
+explicitly switches to the unoptimized geometry fallback test path.
