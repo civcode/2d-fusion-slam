@@ -96,6 +96,38 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## Fusion Replay — watch completed SLAM runs in the browser
+
+The native C++20 dashboard now has a dedicated **[Fusion Replay](docs/fusion-replay.md)**
+page at **http://127.0.0.1:8765/fusion**. It replays the real *recorded
+estimator events* of a completed synthetic offline run: per-frame sampled
+deskewed LiDAR returns, held-out Ceres/reference matcher decisions and
+rank/overlap diagnostics, map insertion events, optional independent
+synthetic loop closures, and interactive wheel-only/LiDAR-only/gyro-wheel/
+scan-matched/graph trajectories. It also shows completed method metrics
+and optional **final** FUSMAP2D occupancy overlays.
+
+~~~sh
+# Build the native offline pipeline and the standalone C++ Web UI.
+cmake --build build --target slam_offline_fusion fusion_slam_demo
+./build/slam_offline_fusion apartment apps/demo/fusion/apartment-001
+./build/fusion_slam_demo --data-dir apps/demo/maps \
+  --fusion-dir apps/demo/fusion --example-if-empty
+# Open http://127.0.0.1:8765/fusion
+~~~
+
+Docker Compose mounts apps/demo/fusion read-only and serves the same page.
+A FUSFUSREPLAY1 trace is written alongside the existing fusion report,
+timed trajectories and maps. **Accumulated dots are sampled measured
+endpoints, not a replay of intermediate occupancy probabilities**; maps
+and optimized graph paths are labeled final post-run artifacts. The native
+HTTP layer never runs the estimator or accepts robot commands.
+
+New CTest **fusion_replay_http** runs the real native pipeline and checks
+run discovery, replay/timeline parity, map fingerprints, corruption and
+symlink refusal. Full workstation verification remains required;
+see [Fusion Replay protocol](docs/fusion-replay.md).
+
 ## Moving-scan offline gyro/wheel SLAM experiment
 
 The new **C++20 `slam_offline_fusion`** executable connects verified
