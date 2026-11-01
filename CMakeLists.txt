@@ -404,6 +404,14 @@ if(BUILD_TESTING)
         "$<TARGET_FILE:slam_offline_fusion>"
         "$<TARGET_FILE:slam_map_accuracy_cli>")
     set_tests_properties(offline_fusion PROPERTIES TIMEOUT 240)
+    if(TARGET fusion_slam_demo)
+      add_test(NAME fusion_replay_http
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_fusion_http.py"
+          "$<TARGET_FILE:fusion_slam_demo>"
+          "$<TARGET_FILE:slam_offline_fusion>")
+      set_tests_properties(fusion_replay_http PROPERTIES TIMEOUT 240)
+    endif()
   endif()
 endif()
 
