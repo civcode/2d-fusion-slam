@@ -555,3 +555,44 @@ C++ JSON test. A full native web-server CMake/CTest and Docker build remain
 **unverified** because GitHub cannot be cloned into the current container;
 no GitHub Actions were run.
 
+
+## 2026-11-01 — Moving-scan synthetic sensor-fusion offline SLAM
+
+Implemented a new source-controlled portable C++20 `slam_fusion_frontend`
+and `slam_offline_fusion` executable on `main`:
+
+- Timestamped gyro and optional independent wheel measurements in one
+  declared clock domain/epoch, stationary gyro bias calibration with
+  bounded physical measurement/gap limits and a strict missing-wheel
+  policy. Gyro-only diagnostics cannot be used for moving map insertion.
+- A deterministic **moving** 240-beam LiDAR simulator with verified exact
+  per-beam synthetic timestamps and nonzero extrinsics. Deskew uses
+  `slam::motion::deskew_hits` with the new full-SE(2) integrated trajectory;
+  mixed beam source/time/calibration is refused before insertion.
+- Frozen even-index gyro/wheel map as source of truth for held-out
+  odd-index Ceres (or explicitly labeled reference matcher) corrections.
+  Accepted results are fingerprint/rank/overlap/innovation-gated and
+  cannot become independent graph constraints.
+- Optional workstation GTSAM graph with sequential *raw sensor-derived*
+  odometry edges. **No default loop closures**: an independent source
+  would be required. An explicit simulated separate relative-pose
+  instrument can optionally produce source-qualified loop proposals;
+  this is never represented as an available physical sensor.
+- Independent **wheel-only, LiDAR-only (without moving deskew),
+  gyro/wheel, scan-corrected and optional GTSAM** maps and fixed-frame
+  synthetic position/yaw errors. Exports per-method FUSMAP2D bundles,
+  `FUSFUSION1` numerical report and time-indexed `FUSPOSES1`
+  trajectories with reference poses separately labeled as simulator truth.
+- C++ `gyro_wheel_fusion` and native-executable Python
+  `offline_fusion` CTests, with deterministic runs, the external
+  map-accuracy CLI cross-check, provenance rejection, exact sample
+  counts and overwrite refusal.
+
+**Validation limitation:** The new Ceres/GTSAM/native CTest execution is
+not yet verified in the current runtime because a full local GitHub
+checkout and optional solver headers are unavailable. No real LiDAR
+or MPU6050 calibration, clock sync, dynamic sensor dropouts, independent
+physical loop observation or measured hardware accuracy is claimed.
+No GitHub Actions workflows were executed.
+
+See [full protocol](offline-fusion.md).
