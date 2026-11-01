@@ -17,6 +17,9 @@ import unittest
 from urllib import request, error
 
 
+_FUSION_BINARIES = (__name__ == "__main__" and len(sys.argv) == 3)
+
+@unittest.skipUnless(_FUSION_BINARIES, "native fusion HTTP tests require explicit CTest executables")
 class FusionHTTP(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
