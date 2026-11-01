@@ -15,6 +15,9 @@ namespace slam::mapping {
 class MapSnapshot final {
  public:
   [[nodiscard]] static std::shared_ptr<const MapSnapshot> capture(const OccupancyGrid& grid);
+  // Reconstruct authoritative cells from a validated, versioned bundle.
+  [[nodiscard]] static std::shared_ptr<const MapSnapshot> from_cells(
+      GridConfig config, std::uint64_t revision, std::vector<Cell> cells);
   [[nodiscard]] const GridConfig& config() const noexcept { return config_; }
   [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
   [[nodiscard]] std::uint64_t fingerprint() const noexcept { return fingerprint_; }

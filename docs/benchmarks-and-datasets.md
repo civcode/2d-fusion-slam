@@ -222,3 +222,10 @@ mapped training scans: 42 improved, 10 unchanged; overlap
 0.840449 → 0.851909. These are **geometric fit statistics**, not
 independent pose errors. See
 [training-only reproducible evidence](../datasets/fr079/train-only-evidence.json).
+
+
+### Immutable map-export integrity verification (2026-11-01)
+
+FUSMAP2D-v1 exports/imports a training-only FR079 occupancy map without known-mask or log-odds loss. The binary import regenerates identical EDT cell distances and preserves the immutable map fingerprint. The actual dataset export was byte-for-byte repeatable across runs.
+
+This is **map serialization integrity**, not independent map or localization accuracy, nor a real-world metric-frame calibration. See [map bundle](map-bundle-v1.md).

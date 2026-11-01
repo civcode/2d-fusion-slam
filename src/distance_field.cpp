@@ -87,6 +87,30 @@ std::shared_ptr<const MapSnapshot> MapSnapshot::capture(const OccupancyGrid& gri
       grid.config(), grid.revision(), grid.snapshot_cells()));
 }
 
+std::shared_ptr<const MapSnapshot> MapSnapshot::from_cells(
+    GridConfig config, std::uint64_t revision, std::vector<Cell> cells) {
+  if(config.width==0||config.height==0||config.width>16'000'000||
+     config.height>16'000'000/config.width||
+     cells.size()!=config.width*config.height||
+     !std::isfinite(config.resolution_m)||config.resolution_m<=0||
+     !std::isfinite(static_cast<double>(config.width)*config.resolution_m)||
+     !std::isfinite(static_cast<double>(config.height)*config.resolution_m)||
+     !std::isfinite(config.map_from_grid.yaw_rad)||
+     !config.map_from_grid.translation.allFinite()||
+     !std::isfinite(config.hit_log_odds)||config.hit_log_odds<=0||
+     !std::isfinite(config.free_log_odds)||config.free_log_odds>=0||
+     !std::isfinite(config.min_log_odds)||config.min_log_odds>=0||
+     !std::isfinite(config.max_log_odds)||config.max_log_odds<=0||
+     config.min_log_odds>=config.max_log_odds)
+    throw std::invalid_argument("invalid imported occupancy map configuration");
+  for(const auto& c:cells)
+    if(!std::isfinite(c.log_odds)||c.log_odds<config.min_log_odds||
+       c.log_odds>config.max_log_odds||(!c.observed&&c.log_odds!=0))
+      throw std::invalid_argument("invalid imported occupancy cell");
+  return std::shared_ptr<const MapSnapshot>(new MapSnapshot(
+      config,revision,std::move(cells)));
+}
+
 std::optional<Cell> MapSnapshot::cell(std::size_t x, std::size_t y) const noexcept {
   if (x >= config_.width || y >= config_.height) return std::nullopt;
   return cells_[y * config_.width + x];

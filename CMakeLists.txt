@@ -159,7 +159,37 @@ if(ZLIB_FOUND)
     slam::fr079_train_only ZLIB::ZLIB)
 endif()
 
+# Authoritative versioned map bundle and visualization-only PGM/YAML export.
+add_library(slam_map_bundle STATIC src/map_bundle.cpp)
+add_library(slam::map_bundle ALIAS slam_map_bundle)
+target_compile_features(slam_map_bundle PUBLIC cxx_std_20)
+target_include_directories(slam_map_bundle PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_map_bundle PUBLIC slam::distance_field)
+
+add_executable(slam_map_inspect src/map_inspect.cpp)
+target_compile_features(slam_map_inspect PRIVATE cxx_std_20)
+target_link_libraries(slam_map_inspect PRIVATE slam::map_bundle)
+if(ZLIB_FOUND)
+  add_executable(slam_fr079_map_export src/fr079_map_export.cpp)
+  target_compile_features(slam_fr079_map_export PRIVATE cxx_std_20)
+  target_link_libraries(slam_fr079_map_export PRIVATE
+    slam::map_bundle slam::fr079_train_only ZLIB::ZLIB)
+endif()
+
 if(BUILD_TESTING)
+  add_executable(slam_map_bundle_test tests/map_bundle_test.cpp)
+  target_link_libraries(slam_map_bundle_test PRIVATE slam::map_bundle)
+  add_test(NAME map_bundle COMMAND slam_map_bundle_test)
+  if(TARGET slam_fr079_map_export AND SLAM_FR079_LOG)
+    add_test(NAME fr079_map_export
+      COMMAND slam_fr079_map_export "${SLAM_FR079_LOG}"
+      "${CMAKE_CURRENT_BINARY_DIR}/fr079-training")
+    set_tests_properties(fr079_map_export PROPERTIES FIXTURES_SETUP fr079_exported_map)
+    add_test(NAME fr079_map_import
+      COMMAND slam_map_inspect "${CMAKE_CURRENT_BINARY_DIR}/fr079-training.slammap")
+    set_tests_properties(fr079_map_import PROPERTIES FIXTURES_REQUIRED fr079_exported_map)
+  endif()
   add_executable(slam_fr079_train_only_test tests/fr079_train_only_test.cpp)
   target_link_libraries(slam_fr079_train_only_test PRIVATE slam::fr079_train_only)
   add_test(NAME fr079_train_only_unit COMMAND slam_fr079_train_only_test)

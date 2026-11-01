@@ -111,3 +111,14 @@ See [FR079 training-only evidence](../datasets/fr079/train-only-evidence.json).
 **Remaining gates:** full source-tree Ceres/Catch2 test matrix, a
 measured independent pose reference or separate traversal, detailed
 false-lock/bias profiling, then deterministic offline map export/graph.
+
+
+## 2026-11-01 — Versioned offline map export
+
+Implemented FUSMAP2D-v1 authoritative binary export and import. It serializes a deep-copy immutable map snapshot, its separate known mask and exact log odds, revision/fingerprint, grid origin and resolution, integration policy, and descriptive coordinate-frame provenance. Import validates version, bounds, flags, finite cells, checksum and content fingerprint. The FNV-1a footer is **only accidental corruption detection**, not authentication.
+
+The new slam_fr079_map_export CLI generates a binary map plus visualization-only PGM/YAML from the original **training-only** FR079 split. A full local run exported a **391 × 539** grid at 0.10 m, with **57,529 known / 153,220 unknown cells**, revision **416**, and fingerprint **13991754243820308900**. Repeated exports produced byte-identical binary maps and PGM rasters. Binary SHA-256: `fa6e9107b1eee7408f31c0bd0f3006b36de852a0bb67ed4ac5f81b20e11c7f5d`.
+
+**Local validation:** A focused CMake build linked to Ceres 2.2.0; **3/3 CTest passed** normally and with GCC 14 warnings-as-errors and UBSan. Tests cover binary roundtrip, unknown/known separation, immutable fingerprint, EDT equality, corrupted/truncated versions and real-data export/inspect. The complete repository CI matrix has **not** been run after this change. The user reported a successful earlier manual CI run; no workflow was triggered for this step.
+
+**Limitations:** The PGM/YAML loses authoritative known-mask/log-odds precision; use the binary snapshot for localization. FR079 map origin is not physically verified, its logged poses are estimates, and the bundle does not contain a pose graph, submap lifecycle, loop constraints or GTSAM results. See [format contract](map-bundle-v1.md).

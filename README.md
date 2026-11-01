@@ -32,6 +32,13 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 
 LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no fully verified Ceres-based SLAM pipeline**, GTSAM optimizer, Pi driver, recorder, ROS adapter or Web UI implemented.
 
+## Deterministic offline map export
+
+- **slam_map_bundle** imports and exports a versioned FUSMAP2D v1 binary map with the full known/unknown mask, exact log-odds values, grid frame, revision/fingerprint, metadata and corruption checks.
+- **slam_map_inspect** verifies and reports a saved bundle without requiring Ceres or GTSAM.
+- **slam_fr079_map_export** (zlib required) builds a map from the training-only FR079 split and writes a verified .slammap bundle plus visualization-only .pgm and .yaml files. The original logged-laser map frame is explicitly **unverified**, not calibrated ground truth.
+- See [map bundle format and usage](docs/map-bundle-v1.md) and [FR079 reproduction](datasets/fr079/README.md).
+
 ## Build and test
 
 Install CMake 3.25+, C++20 compiler, Eigen3 (3.3+), Ninja (recommended). Network-free smoke tests:

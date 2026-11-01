@@ -173,3 +173,19 @@ matching, and adjacent scans share geometry. **This is not external
 ground-truth accuracy or a statistically independent traversal.**
 Do not report ATE/RPE or physical beam-time claims from this test.
 See [versioned result evidence](train-only-evidence.json).
+
+
+## Export the training-only map
+
+The optional zlib-enabled slam_fr079_map_export CLI exports the 416-scan **training-only** map to an authoritative versioned binary bundle and a lossy PGM/YAML visualization pair. It never uses held-out observations to compute map bounds or occupancy.
+
+~~~sh
+./build/slam_fr079_map_export /path/to/fr079.log.gz /tmp/fr079-training
+./build/slam_map_inspect /tmp/fr079-training.slammap
+~~~
+
+Outputs are /tmp/fr079-training.slammap, .pgm, and .yaml. The binary is verified by a roundtrip import before the CLI reports success. The FR079 logged-laser coordinate origin remains **unverified** and is labeled accordingly in the bundle. The supplied full-recording reference map is **not** used.
+
+With SLAM_FR079_LOG configured, CTest registers fr079_map_export followed by fr079_map_import using fixture ordering. These real-data checks are optional because recordings are kept outside Git.
+
+Locally observed: 391 × 539 cells, 57,529 known, 153,220 unknown, revision 416 and fingerprint 13991754243820308900. See [bundle format](../../docs/map-bundle-v1.md).
