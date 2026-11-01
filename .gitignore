@@ -9,3 +9,6 @@
 
 # Compiled dependency-cache release archives belong on GitHub Releases, not in Git.
 *.tar.zst
+
+# Docker / APT build outputs are host-local, not checked in.
+/.build/

@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.25)
 project(fusion_slam VERSION 0.1.0 LANGUAGES CXX)
 
+# Ubuntu 24.04's stable APT packages contain GTSAM 4.2 and Catch2 3.4.
+# Keep the existing GTSAM 4.3 / Catch2 3.16 development baseline unless
+# the distro-profile is explicitly selected (for example, by Docker).
+option(SLAM_APT_DEPENDENCIES
+  "Use Ubuntu 24.04 APT-compatible minimum GTSAM/Catch2 versions" OFF)
+if(SLAM_APT_DEPENDENCIES)
+  set(_slam_gtsam_min_version "4.2")
+  set(_slam_catch2_min_version "3.4")
+else()
+  set(_slam_gtsam_min_version "4.3")
+  set(_slam_catch2_min_version "3.16")
+endif()
+
 include(CTest)
 
 # System/toolchain-provided Eigen only: core builds never download dependencies.
@@ -177,7 +190,7 @@ if(ZLIB_FOUND)
     slam::map_bundle slam::fr079_train_only ZLIB::ZLIB)
 endif()
 
-# Workstation-only GTSAM 4.3 Pose2 batch reference, never linked to Pi runtime.
+# Workstation-only GTSAM 4.2+ Pose2 batch reference, never linked to Pi runtime.
 # A locally installed GTSAM package is preferred; the uploaded full source
 # can also be supplied explicitly without any download or vendoring.
 option(SLAM_ENABLE_GTSAM "Enable offline GTSAM Pose2 batch graph when available" ON)
@@ -187,7 +200,7 @@ if(SLAM_REQUIRE_GTSAM AND NOT SLAM_ENABLE_GTSAM)
   message(FATAL_ERROR "SLAM_REQUIRE_GTSAM requires SLAM_ENABLE_GTSAM=ON")
 endif()
 if(SLAM_ENABLE_GTSAM)
-  find_package(GTSAM 4.3 QUIET CONFIG)
+  find_package(GTSAM ${_slam_gtsam_min_version} QUIET CONFIG)
   if(NOT GTSAM_FOUND AND SLAM_GTSAM_SOURCE_DIR)
     if(NOT EXISTS "${SLAM_GTSAM_SOURCE_DIR}/CMakeLists.txt")
       message(FATAL_ERROR "SLAM_GTSAM_SOURCE_DIR is not an extracted GTSAM source root")
@@ -214,9 +227,9 @@ if(SLAM_ENABLE_GTSAM)
     add_executable(slam_pose_graph_demo src/pose_graph_demo.cpp)
     target_link_libraries(slam_pose_graph_demo PRIVATE slam::offline_graph)
   elseif(SLAM_REQUIRE_GTSAM)
-    message(FATAL_ERROR "GTSAM 4.3 required: set GTSAM_DIR or SLAM_GTSAM_SOURCE_DIR")
+    message(FATAL_ERROR "GTSAM >= ${_slam_gtsam_min_version} required: set GTSAM_DIR or SLAM_GTSAM_SOURCE_DIR")
   else()
-    message(STATUS "GTSAM 4.3 unavailable: optional workstation graph target skipped")
+    message(STATUS "GTSAM >= ${_slam_gtsam_min_version} unavailable: optional workstation graph target skipped")
   endif()
 endif()
 
@@ -322,11 +335,20 @@ if(BUILD_TESTING)
 
   # Required Catch2 v3 suite is pinned and opt-out only for offline bootstrap
   # environments that cannot fetch dependencies (smoke test remains runnable).
-  option(SLAM_ENABLE_CATCH2 "Fetch pinned Catch2 v3 for detailed tests" ON)
+  option(SLAM_ENABLE_CATCH2 "Enable Catch2 v3 detailed tests" ON)
+  option(SLAM_REQUIRE_SYSTEM_CATCH2
+    "Fail when installed Catch2 is missing instead of fetching source" OFF)
+  if(SLAM_REQUIRE_SYSTEM_CATCH2 AND NOT SLAM_ENABLE_CATCH2)
+    message(FATAL_ERROR "SLAM_REQUIRE_SYSTEM_CATCH2 requires SLAM_ENABLE_CATCH2=ON")
+  endif()
   if(SLAM_ENABLE_CATCH2)
     # Prefer restored CMake package to avoid unnecessary fetch/build work.
-    find_package(Catch2 3.16 QUIET CONFIG)
+    find_package(Catch2 ${_slam_catch2_min_version} QUIET CONFIG)
     if(NOT TARGET Catch2::Catch2WithMain)
+      if(SLAM_REQUIRE_SYSTEM_CATCH2)
+        message(FATAL_ERROR
+          "Catch2 >= ${_slam_catch2_min_version} required as an installed CMake package; refusing source download")
+      endif()
       include(FetchContent)
     # Prefer the user-supplied complete release for air-gapped builds. Never
     # commit/download a vendored copy simply to run tests.

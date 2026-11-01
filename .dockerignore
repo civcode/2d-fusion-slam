@@ -1,0 +1,6 @@
+# Dockerfile only installs APT packages; source is mounted read-only at runtime.
+# Avoid accidentally shipping large FR079 logs, release assets, and build trees
+# to the Docker daemon during image construction.
+**
+!docker/
+!docker/Dockerfile.apt

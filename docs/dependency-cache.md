@@ -27,21 +27,15 @@ Relevant repository files: [pinned versions/source hashes](../deps/lock.json),
 [rebuild fallback](../scripts/deps/build-from-sources.sh),
 [smoke test](../tests/deps/dependency_smoke.cpp).
 
-**GitHub Release publication is outstanding.** The GitHub connection used for
-this milestone supports source commits, not uploading binary Release assets.
-Download the prepared archive and accompanying manifest, checksum, and
-`SHA256SUMS` files from the originating development chat, then open the
-repository's **Releases → Draft a new release**. Create the tag
-`deps-debian13-x86_64-gcc14-v1` on `main` and attach all four files:
+**Published and verified:** The [GitHub dependency Release](https://github.com/civcode/2d-fusion-slam/releases/tag/deps-debian13-x86_64-gcc14-v1)
+contains the compiled archive, its `.sha256` sidecar, the build
+manifest and `SHA256SUMS`. GitHub's SHA-256 digests match the committed
+checksums for all four uploaded assets. The release tag points to
+the corresponding Stage 1 dependency-cache commit.
 
-- `slam-deps-debian13-x86_64-gcc14-v1.tar.zst`
-- `slam-deps-debian13-x86_64-gcc14-v1.tar.zst.sha256`
-- `slam-deps-debian13-x86_64-gcc14-v1.manifest.json`
-- `SHA256SUMS`
-
-Verify `sha256sum -c SHA256SUMS` before publication. Do not change assets
-under an existing tag; create v2 for another toolchain or ABI. Until the
-Release is uploaded, save the archive on your local PC as a backup.
+For future *different* toolchain or ABI builds, create a new release
+tag and attach the new package/checksums; do not replace the published
+v1 files. Keeping an additional local PC backup is optional.
 
 ## Restoring on a compatible environment
 

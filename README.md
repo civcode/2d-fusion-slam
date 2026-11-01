@@ -68,10 +68,20 @@ preserves installed Catch2 3.16.1, Ceres 2.2.0, GTSAM 4.3.0 and Eigen3 3.4.0
 across chat/workspace resets. The repo tracks the pinned source checksums,
 build scripts, restore verification, CMake smoke test and exact archive SHA-256,
 but **not** the compiled archive. See [recovery and release instructions](docs/dependency-cache.md).
-**The Release asset is prepared but not yet published** through GitHub.
+The [versioned dependency Release](https://github.com/civcode/2d-fusion-slam/releases/tag/deps-debian13-x86_64-gcc14-v1) is published for recovery in its compatible Debian 13 environment.
 
 CMake prefers an installed Catch2 package; it does not fetch Catch2 if
 the restored package is available.
+
+## Docker / APT build and tests
+
+For a self-contained **Ubuntu 24.04** build, install Docker on the host
+and run `bash scripts/docker-build-test.sh test` from the repository.
+The image uses Ubuntu APT packages (Ceres 2.2, GTSAM 4.2 and Catch2 3.4),
+requires all solvers and detailed tests, and keeps build outputs under
+`.build/docker-ubuntu24.04-apt/`. It does **not** need the Debian 13
+binary dependency Release or host-installed development libraries.
+See [Docker development and version compatibility](docs/docker-development.md).
 
 ## Manual GitHub build and tests
 
@@ -92,6 +102,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [FR079 training-only benchmark evidence](datasets/fr079/train-only-evidence.json)
 - [Air-gapped Catch2 and Ceres setup](docs/offline-source-dependencies.md)
 - [Offline dependency bundle, restore and Release setup](docs/dependency-cache.md)
+- [Docker build/test using Ubuntu APT packages](docs/docker-development.md)
 - [Offline GTSAM 4.3 pose-graph integration](docs/offline-pose-graph.md)
 - [Offline map candidate rebuilding, comparison and rollback](docs/offline-map-generation.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)

@@ -203,3 +203,27 @@ authenticate it. No durable filesystem transaction/persistent generation
 registry is implemented. The returned selected immutable snapshot keeps
 the incumbent if candidate validation fails, and any disk publication
 remains an explicit caller action. See [pipeline design](offline-map-generation.md).
+
+## 2026-11-01 — Docker APT build/test profile
+
+Added Ubuntu 24.04 APT-based container setup (`docker/Dockerfile.apt`,
+`scripts/docker-build-test.sh`, and [.dockerignore](../.dockerignore)).
+The opt-in CMake `SLAM_APT_DEPENDENCIES=ON` profile permits the
+Ubuntu-supported GTSAM **4.2** and Catch2 **3.4**, versus the existing
+4.3/3.16 development baseline. Ceres remains 2.2. The container
+requires all three dependencies, disallows Catch2 FetchContent fallback,
+and checks that the Ceres/GTSAM/Catch2/rollback tests are registered
+before invoking the full CTest suite. Build output is persisted in a
+Git-ignored host-mounted directory; source is mounted read-only.
+
+**Validation limits:** Docker is not installed in the current development
+container, so the actual Ubuntu container image and CTest matrix have
+**not** been executed. Local tests passed shell syntax and mock-Docker
+invocation checks; the relaxed minimum CMake versions resolved against
+locally available Ceres/GTSAM/Catch2 installed packages (which are
+*newer* than Ubuntu's APT Catch2/GTSAM). Therefore actual runtime
+compatibility of the distro-version APIs remains to be confirmed using
+`bash scripts/docker-build-test.sh test` on a Docker host.
+
+No GitHub Actions workflow was modified or run. See
+[Docker development instructions](docker-development.md).
