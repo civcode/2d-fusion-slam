@@ -223,9 +223,11 @@ Json map_info(const mapping::MapBundle& b) {
   std::size_t known=0,occupied=0,free=0;
   for(const auto& c:s.cells()){
     if(c.observed){
-      ++known;const double p=1.0/(1.0+std::exp(-c.log_odds));
-      if(p>=.65)++occupied;
-      else if(p<=.35)++free;
+      ++known;
+      // Same probability cutoffs as before, without per-cell exp().
+      constexpr double threshold=0.6190392084062235; // log(.65/.35)
+      if(c.log_odds>=threshold)++occupied;
+      else if(c.log_odds<=-threshold)++free;
     }
   }
   Json j=Json::dict(),origin=Json::dict();
