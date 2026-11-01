@@ -124,7 +124,8 @@ void validate_replay(const Json& j) {
     need(!s.empty()&&s.size()<=256,"missing replay provenance");
   }
   const auto kind=source.at("pose_kind").str();
-  need(kind=="logged_laser_estimate_not_ground_truth"||kind=="synthetic_exact",
+  need(kind=="logged_laser_estimate_not_ground_truth"||kind=="synthetic_exact"||
+         kind=="estimated_fr079_odometry_scan_matched_not_ground_truth",
        "unrecognized replay pose provenance");
   const auto clock=source.at("timestamp_kind").str();
   need(clock=="CARMEN_IPC_scan_level"||clock=="synthetic_scan_level",
