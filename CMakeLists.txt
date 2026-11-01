@@ -221,6 +221,7 @@ target_include_directories(slam_map_bundle PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_map_bundle PUBLIC slam::distance_field)
 
+find_package(OpenSSL QUIET COMPONENTS Crypto)
 # FR079 sequential LiDAR + embedded scan-time odometry SLAM.
 # No known-map reference or logged laser trajectory enters this estimator.
 add_library(slam_fr079_offline STATIC src/fr079_offline.cpp)
