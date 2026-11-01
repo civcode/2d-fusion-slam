@@ -379,7 +379,11 @@ endif()
 # Full deterministic *moving-scan* sensor-fusion experiment.
 # Uses the exact same simulator for all baselines, without feeding reference
 # poses to the estimator or rebuilding an oracle-pose map.
+option(SLAM_PROFILE_FUSION "Collect steady-clock native fusion profiling samples" ON)
 add_executable(slam_offline_fusion src/offline_fusion.cpp)
+if(SLAM_PROFILE_FUSION)
+  target_compile_definitions(slam_offline_fusion PRIVATE SLAM_PROFILE_FUSION=1)
+endif()
 target_compile_features(slam_offline_fusion PRIVATE cxx_std_20)
 target_link_libraries(slam_offline_fusion PRIVATE
   slam::fusion_frontend slam::mapping slam::map_bundle
