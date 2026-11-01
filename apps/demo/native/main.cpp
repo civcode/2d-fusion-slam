@@ -104,7 +104,9 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
     Json listing=data.list_maps();
     // Fusion run maps are exposed through the *same* map-inspection
     // contract, without copying artifacts or pretending they are published.
-    for(const auto& run:fusion.index().at("runs").array) {
+    // at() returns a reference: keep its owning JSON alive in C++20.
+    const auto fusion_index=fusion.index();
+    for(const auto& run:fusion_index.at("runs").array) {
       const auto id=run.at("id").str();
       try {
         const auto report=fusion.report(id);
@@ -147,6 +149,12 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
     else if(name.ends_with(cell)){name.remove_suffix(cell.size());mode="cell";}
     if(name.empty()||name.size()>200||name.find('/')!=std::string_view::npos)
       return error(404,"invalid map route");
+    // encodeURIComponent() escapes the virtual-ID delimiter as %40.
+    // Decode only this delimiter; arbitrary escapes must not become paths.
+    std::string map_id(name);
+    for(auto at=map_id.find("%40");at!=std::string::npos;at=map_id.find("%40",at+1))
+      map_id.replace(at,3,"@");
+    name=map_id;
     std::string run,method;
     if(name.starts_with("fusion@")){
       const auto id=name.substr(7);

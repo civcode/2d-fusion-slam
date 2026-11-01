@@ -64,7 +64,7 @@ bool is_regular(const std::filesystem::path& path) {
   std::error_code ec;
   return std::filesystem::is_regular_file(std::filesystem::symlink_status(path,ec));
 }
-bool is_directory(const std::filesystem::path& path) {
+bool is_plain_directory(const std::filesystem::path& path) {
   std::error_code ec;
   return std::filesystem::is_directory(std::filesystem::symlink_status(path,ec));
 }
@@ -100,7 +100,7 @@ const std::array<std::string,5> methods={
 } // namespace
 
 FusionRuns::FusionRuns(std::filesystem::path root):root_(std::filesystem::canonical(root)) {
-  need(is_directory(root_),"fusion run directory must exist");
+  need(is_plain_directory(root_),"fusion run directory must exist");
 }
 bool FusionRuns::method_name(const std::string& method) {
   return std::find(methods.begin(),methods.end(),method)!=methods.end();
@@ -108,7 +108,7 @@ bool FusionRuns::method_name(const std::string& method) {
 std::filesystem::path FusionRuns::directory(const std::string& run) const {
   need(run_name(run),"invalid fusion run identifier");
   const auto path=root_/run;
-  need(is_directory(path),"missing or symlinked fusion run directory");
+  need(is_plain_directory(path),"missing or symlinked fusion run directory");
   return path;
 }
 FusionRuns::Session FusionRuns::load(const std::string& run) const {
@@ -260,7 +260,7 @@ Json FusionRuns::index() const {
   Json out=Json::dict(),runs=Json::list();
   std::size_t dirs=0;
   for(const auto& item:std::filesystem::directory_iterator(root_)) {
-    if(!is_directory(item.path()))continue;
+    if(!is_plain_directory(item.path()))continue;
     if(++dirs>128)throw std::invalid_argument("too many fusion run directories");
     const std::string name=item.path().filename().string();
     if(!run_name(name)||

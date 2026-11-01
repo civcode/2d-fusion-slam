@@ -126,6 +126,31 @@ A run's profile must agree with its FUSFUSION1 scene, matcher, frame
 count and scan period. The native API rejects modified or non-finite
 data and does not claim live real-time verification.
 
-**Verification status:** Complete native end-to-end CTest and Docker
-execution must be performed on a full checkout. This ChatGPT runtime
-cannot clone GitHub. No GitHub Actions have been invoked.
+## Local verification
+
+Executed the Docker sequence on `main` with both build-job variables set to 28
+and `SLAM_PROFILE_FUSION=ON`. Both images built, all four selected CTests passed,
+and the complete suite passed **33/33**. Generated:
+
+- `apps/demo/fusion/apartment-profile-001/` (130 frames)
+- `apps/demo/fusion/warehouse-profile-001/` (195 frames)
+- `benchmarks/fusion-profiled-001.csv` (five measured runs per scene after one
+  discarded warmup per scene)
+
+| Scene | Median offline fused FPS | Process wall p50 | Process wall p95 |
+| --- | ---: | ---: | ---: |
+| Apartment | 601.62 | 612.31 ms | 615.67 ms |
+| Warehouse | 503.37 | 1716.72 ms | 1736.38 ms |
+
+These are single-host offline measurements, not target-device deadlines or a
+profiling ON/OFF overhead comparison. Chromium verified profile panels, replay
+stepping, final occupancy overlays and their Map Explorer deep links for both
+runs. Native HTTP tests cover browser-encoded `%40` map IDs and reject encoded
+path traversal. Compose startup and shutdown both succeeded; the demo was left
+stopped as requested. No GitHub Actions were invoked.
+
+In this sandbox, Docker required a writable `DOCKER_CONFIG` and Compose needed
+`--env-file /dev/null` to bypass the unreadable pre-existing `.env`; see
+[Docker development](docker-development.md). Reusing the `001` output paths now
+fails intentionally: use new run-directory/CSV names rather than overwriting
+existing evidence.

@@ -15,6 +15,7 @@ import tempfile
 import time
 import unittest
 from urllib import request, error
+from urllib.parse import quote
 
 
 _FUSION_BINARIES = (__name__ == "__main__" and len(sys.argv) == 3)
@@ -135,7 +136,10 @@ class FusionHTTP(unittest.TestCase):
                           for method in report["results"]})
         for method in report["results"]:
             metadata = self.get_json(base + f"/maps/{method}")
-            explorer = "/api/maps/fusion@apartment_001@" + method
+            map_id = "fusion@apartment_001@" + method
+            # The real browser uses encodeURIComponent(), including for @.
+            explorer = "/api/maps/" + quote(map_id, safe="")
+            self.assertEqual(self.get_json("/api/maps/" + map_id), metadata)
             self.assertEqual(self.get_json(explorer), metadata)
             cell = self.get_json(explorer + "/cell?x=0&y=0")
             self.assertEqual((cell["x"], cell["y"]), (0, 0))
@@ -160,6 +164,28 @@ class FusionHTTP(unittest.TestCase):
         self.assertEqual(raised.exception.code, 405)
         self.assertFalse((self.root / "CURRENT").exists())
 
+    def test_map_listing_keeps_valid_maps_when_another_run_is_broken(self):
+        broken = self.root / "broken_run"
+        broken.mkdir()
+        files = [broken / name for name in
+                 ("fusion_report.json", "trajectories.json", "fusion_replay.json")]
+        try:
+            for file in files:
+                file.write_text("{}")
+            report = self.get_json("/api/fusion/runs/apartment_001")
+            expected = {"fusion@apartment_001@" + method for method in report["results"]}
+            for _ in range(3):
+                listing = self.get_json("/api/maps")
+                self.assertEqual({row["id"] for row in listing["maps"]
+                                  if row["role"] == "fusion"}, expected)
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + "/api/fusion/runs/broken_run")
+            self.assertEqual(raised.exception.code, 422)
+        finally:
+            for file in files:
+                file.unlink(missing_ok=True)
+            broken.rmdir()
+
     def test_fail_closed_symlink_paths_and_stale_artifacts(self):
         base = "/api/fusion/runs/apartment_001"
         bad_routes = (
@@ -168,6 +194,10 @@ class FusionHTTP(unittest.TestCase):
             "/api/fusion/runs/apartment_001/frame/10000",
             "/api/fusion/runs/apartment_001/frame/-1",
             "/api/fusion/runs/apartment_001/replay?unexpected=1",
+            "/api/maps/fusion%40apartment_001%2F..%40wheel_only",
+            "/api/maps/fusion%2540apartment_001%2540wheel_only",
+            "/api/maps/fusion%40apartment_001%40wheel_only%00",
+            "/api/maps/fusion%40apartment_001%40wheel_only%2Fimage.png",
         )
         for route in bad_routes:
             with self.subTest(route=route), self.assertRaises(error.HTTPError):

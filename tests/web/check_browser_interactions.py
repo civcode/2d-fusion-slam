@@ -6,7 +6,7 @@ Not part of unittest discovery: the normal suite needs only the standard library
 """
 from __future__ import annotations
 
-import sys
+import argparse
 
 from playwright.sync_api import sync_playwright
 
@@ -127,9 +127,45 @@ def check_view(browser, base: str, replay: bool):
     page.close()
 
 
+def check_fusion(browser, base, run):
+    page = browser.new_page(viewport={"width": 1600, "height": 1200})
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    report = page.request.get(base + "/api/fusion/runs/" + run).json()
+    frames = report["frames"]
+    page.goto(base + "/fusion")
+    page.locator('#fusion-runs option[value="' + run + '"]').wait_for(state="attached")
+    page.select_option("#fusion-runs", run)
+    page.wait_for_function('n => !document.querySelector("#fusion-play").disabled && '
+                           'document.querySelector("#fusion-position").textContent.includes(" / " + n)', arg=frames)
+    page.wait_for_function('() => document.querySelector("#fusion-prof-fps").textContent !== "—"')
+    page.select_option("#fusion-map", "fused_scan_matched")
+    page.wait_for_function('() => document.querySelector("#fusion-map-note").textContent.includes("FINAL") || '
+                           '!document.querySelector("#fusion-alert").hidden')
+    assert page.locator("#fusion-alert").is_hidden(), page.locator("#fusion-alert").inner_text()
+    page.click("#fusion-next")
+    assert page.locator("#fusion-position").inner_text() == f"2 / {frames}"
+    page.click("#fusion-open-map")
+    page.wait_for_function('() => mapImage !== null || !document.querySelector("#warning").hidden')
+    assert page.locator("#warning").is_hidden(), page.locator("#warning").inner_text()
+    assert page.evaluate('() => selected') == "fusion@" + run + "@fused_scan_matched"
+    assert page.evaluate('() => mapImage !== null')
+    assert page.evaluate('() => metadata.source_id') == report["scene"]
+    assert not errors, errors
+    print(run + ": profile panel, replay step, final overlay and Map Explorer deep link passed")
+    page.close()
+
+
 if __name__ == "__main__":
-    base = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://127.0.0.1:8765"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("url", nargs="?", default="http://127.0.0.1:8765")
+    parser.add_argument("--fusion-run", action="append", default=[],
+                        help="Also verify this generated fusion run and its Map Explorer link")
+    args = parser.parse_args()
+    base = args.url.rstrip("/")
     with sync_playwright() as playwright:
         with playwright.chromium.launch() as browser:
             for replay in (False, True):
                 check_view(browser, base, replay)
+            for run in args.fusion_run:
+                check_fusion(browser, base, run)
