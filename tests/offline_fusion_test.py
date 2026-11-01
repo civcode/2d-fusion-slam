@@ -35,6 +35,19 @@ class OfflineFusionExperiment(unittest.TestCase):
         self.assertEqual(report["sensor_clock"], "synthetic_exact_single_epoch")
         self.assertEqual(report["stationary_calibration_ticks"], 12)
         self.assertGreater(report["frames"], 20)
+        pose_export = json.loads((folder / "trajectories.json").read_text())
+        self.assertEqual(pose_export["format"], "FUSPOSES1")
+        self.assertEqual(pose_export["clock_domain"], 101)
+        self.assertEqual(pose_export["clock_epoch"], "1")
+        self.assertEqual(pose_export["reference_class"], "synthetic_exact")
+        self.assertEqual(len(pose_export["timestamps_ns"]), report["frames"])
+        self.assertEqual(len(pose_export["synthetic_truth_for_scoring"]),
+                         report["frames"])
+        self.assertEqual(set(pose_export["paths"]), set(report["results"]))
+        for path in pose_export["paths"].values():
+            self.assertEqual(len(path), report["frames"])
+            self.assertTrue(all(len(p) == 3 for p in path))
+
         self.assertGreater(report["heldout_attempted"], 10)
         self.assertEqual(report["heldout_attempted"],
                          report["heldout_accepted"] + report["heldout_rejected"])
