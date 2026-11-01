@@ -1,6 +1,7 @@
 #include "slam/evaluation/map_accuracy.hpp"
 #include "slam/fixtures/synthetic.hpp"
 #include "slam/fusion/gyro_wheel.hpp"
+#include "slam/fusion/pipeline_profiler.hpp"
 #include "slam/graph/pose_graph.hpp"
 #include "slam/mapping/map_bundle.hpp"
 #include "slam/matching/geometry.hpp"
@@ -163,21 +164,27 @@ struct Prepared {
   Points gyro_deskewed,wheel_deskewed,raw_lidar;
   slam::fusion::FusionResult integrated;
 };
-Prepared prepare(const Observations& obs,Pose2 initial) {
+Prepared prepare(const Observations& obs,Pose2 initial,
+                 slam::fusion::PipelineProfiler& profiler) {
   slam::fusion::FusionOptions options;
   options.minimum_stationary_ticks=12;
   options.maximum_interval_ns=50'000'000LL;
   Prepared p;
   // The synthetic fixture's shared clock domain, epoch and base/laser frame
   // are explicitly known. This is NOT a real-hardware calibration claim.
-  p.integrated=slam::fusion::integrate_sensors(obs.ticks,initial,true,options);
+  {
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"sensor_integration");
+    p.integrated=slam::fusion::integrate_sensors(obs.ticks,initial,true,options);
+  }
   if(p.integrated.capability!=slam::motion::TrajectoryCapability::full_se2)
     throw std::runtime_error("full wheel SE2 required for moving-scan deskew");
   slam::motion::SampledTrajectory fused_track(
       p.integrated.fused,p.integrated.capability);
   slam::motion::SampledTrajectory wheel_track(
       p.integrated.wheel_only,p.integrated.capability);
-  for(const auto& scan:obs.scans) {
+  for(std::size_t scan_index=0;scan_index<obs.scans.size();++scan_index) {
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"scan_deskew",scan_index,true);
+    const auto& scan=obs.scans[scan_index];
     if(scan.time_quality!=slam::sensors::BeamTimeQuality::synthetic_exact ||
        scan.source_id!=16||scan.calibration_revision!=1)
       throw std::invalid_argument("unverified synthetic scan metadata");
@@ -223,12 +230,17 @@ void insert(slam::mapping::OccupancyGrid& grid,Pose2 base,
 slam::mapping::MapBundle make_map(const Simulation& sim,
                                   const std::vector<Pose2>& poses,
                                   const Points& scans,
-                                  const Mask& use) {
+                                  const Mask& use,
+                                  slam::fusion::PipelineProfiler* profiler=nullptr) {
   if(poses.size()!=scans.size()||poses.size()!=use.size())
     throw std::invalid_argument("map pose/ray size mismatch");
   slam::mapping::OccupancyGrid grid(sim.grid);
-  for(std::size_t i=0;i<poses.size();++i)if(use[i])
-    insert(grid,poses[i],scans[i]);
+  for(std::size_t i=0;i<poses.size();++i)if(use[i]) {
+    if(profiler) {
+      slam::fusion::PipelineProfiler::Scope sample(*profiler,"fused_map_insert",i,true);
+      insert(grid,poses[i],scans[i]);
+    } else insert(grid,poses[i],scans[i]);
+  }
   return {slam::mapping::MapSnapshot::capture(grid),
     {"map",sim.scene.id,"synthetic_estimated",true}};
 }
@@ -288,11 +300,17 @@ bool qualified(const slam::matching::MatchResult& m,
     (m.map_from_laser.translation-seed.translation).norm()<=max_delta&&
     std::abs(slam::wrap_yaw(m.map_from_laser.yaw_rad-seed.yaw_rad))<=.16;
 }
-Matched match_heldout(const Simulation& sim,const Prepared& p) {
+Matched match_heldout(const Simulation& sim,const Prepared& p,
+                      slam::fusion::PipelineProfiler& profiler) {
   Mask even(p.gyro_wheel.size(),false);
   for(std::size_t i=0;i<even.size();i+=2)even[i]=true;
-  const auto frozen=make_map(sim,p.gyro_wheel,p.gyro_deskewed,even);
-  const auto field=slam::mapping::DistanceField::build(frozen.snapshot,.7);
+  const auto prepared=[&]{
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"training_map_build");
+    const auto frozen=make_map(sim,p.gyro_wheel,p.gyro_deskewed,even);
+    return std::pair{frozen,slam::mapping::DistanceField::build(frozen.snapshot,.7)};
+  }();
+  const auto& frozen=prepared.first;
+  const auto& field=prepared.second;
   Matched result;
 #ifdef SLAM_FUSION_WITH_CERES
   result.backend="ceres";
@@ -303,6 +321,7 @@ Matched match_heldout(const Simulation& sim,const Prepared& p) {
   result.outcomes.resize(p.gyro_wheel.size());
   result.accepted_mask.assign(p.gyro_wheel.size(),false);
   for(std::size_t i=1;i<result.poses.size();i+=2) {
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"heldout_scan_match",i,true);
     const Pose2 seed=slam::compose(p.gyro_wheel[i],kBaseFromLaser);
     auto candidate=match(field,p.gyro_deskewed[i],seed);
     ++result.attempted;
@@ -326,14 +345,19 @@ struct LidarOnly {
   std::size_t accepted{},rejected{};
   std::map<std::string,std::size_t> rejections;
 };
-LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor) {
+LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
+                     slam::fusion::PipelineProfiler& profiler) {
   LidarOnly out;
   out.poses.reserve(p.raw_lidar.size());
   out.mapped.assign(p.raw_lidar.size(),false);
   slam::mapping::OccupancyGrid rolling(sim.grid);
   out.poses.push_back(first_anchor);out.mapped[0]=true;
-  insert(rolling,first_anchor,p.raw_lidar[0]);
+  {
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_only_baseline",0,true);
+    insert(rolling,first_anchor,p.raw_lidar[0]);
+  }
   for(std::size_t i=1;i<p.raw_lidar.size();++i) {
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_only_baseline",i,true);
     auto snapshot=slam::mapping::MapSnapshot::capture(rolling);
     const auto field=slam::mapping::DistanceField::build(snapshot,.7);
     // No wheel, gyro or ground-truth seed; only previous accepted laser pose.
@@ -595,22 +619,34 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
   if(!out)throw std::runtime_error("failed writing fusion replay");
 }
 void execute(const Simulation& sim,const std::filesystem::path& directory,
-             bool synthetic_loops) {
+             bool synthetic_loops,slam::fusion::PipelineProfiler& profiler) {
   if(std::filesystem::exists(directory))
     throw std::invalid_argument("output already exists; refuse to overwrite");
   if(!std::filesystem::create_directories(directory))
     throw std::runtime_error("cannot create exclusive output directory");
-  const auto p=prepare(sim.sensors,sim.initial_anchor);
-  const auto matched=match_heldout(sim,p);
-  const auto lidar=lidar_only(sim,p,p.gyro_wheel.front());
-  const auto graph=optimize_graph(sim,p,matched,synthetic_loops);
-  const auto wheel_map=make_map(sim,p.wheel_only,p.wheel_deskewed,
-                                all(p.wheel_only.size()));
-  const auto lidar_map=make_map(sim,lidar.poses,p.raw_lidar,lidar.mapped);
-  const auto fused_map=make_map(sim,p.gyro_wheel,p.gyro_deskewed,
-                                all(p.gyro_wheel.size()));
-  const auto matched_map=make_map(sim,matched.poses,p.gyro_deskewed,
-                                  all(matched.poses.size()));
+  const auto p=prepare(sim.sensors,sim.initial_anchor,profiler);
+  const auto matched=match_heldout(sim,p,profiler);
+  const auto lidar=lidar_only(sim,p,p.gyro_wheel.front(),profiler);
+  const auto graph=[&]{
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"graph_optimize");
+    return optimize_graph(sim,p,matched,synthetic_loops);
+  }();
+  const auto wheel_map=[&]{
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"wheel_map_build");
+    return make_map(sim,p.wheel_only,p.wheel_deskewed,all(p.wheel_only.size()));
+  }();
+  const auto lidar_map=[&]{
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_map_build");
+    return make_map(sim,lidar.poses,p.raw_lidar,lidar.mapped);
+  }();
+  const auto fused_map=[&]{
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"gyro_map_build");
+    return make_map(sim,p.gyro_wheel,p.gyro_deskewed,all(p.gyro_wheel.size()));
+  }();
+  const auto matched_map=[&]{
+    slam::fusion::PipelineProfiler::Scope timing(profiler,"fused_map_build");
+    return make_map(sim,matched.poses,p.gyro_deskewed,all(matched.poses.size()),&profiler);
+  }();
   export_bundle(directory/"wheel_only.slammap",wheel_map);
   export_bundle(directory/"lidar_only.slammap",lidar_map);
   export_bundle(directory/"gyro_wheel.slammap",fused_map);
@@ -619,7 +655,10 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   export_replay(directory/"fusion_replay.json",sim,p,lidar,matched,graph);
   std::optional<slam::mapping::MapBundle> graph_map;
   if(!graph.poses.empty()) {
-    graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()));
+    {
+      slam::fusion::PipelineProfiler::Scope timing(profiler,"graph_map_build");
+      graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()));
+    }
     export_bundle(directory/"graph_optimized.slammap",*graph_map);
   }
   std::ofstream out(directory/"fusion_report.json");
@@ -663,6 +702,14 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
     item(out,"graph_optimized",sim,*graph_map,error(graph.poses,sim.reference),false);
   out<<"}\n}\n";
   if(!out)throw std::runtime_error("failed writing fusion report");
+  out.close();
+  {
+    std::ofstream profile(directory/"fusion_profile.json");
+    if(!profile)throw std::runtime_error("failed opening fusion profiler output");
+    profiler.write_json(profile,sim.reference.size(),kScanNs*1e-6,
+                        matched.backend,sim.scene.id);
+    if(!profile)throw std::runtime_error("failed writing fusion profiler output");
+  }
   std::cout<<"scene="<<sim.scene.id
            <<" frames="<<sim.reference.size()
            <<" matcher="<<matched.backend
@@ -687,7 +734,12 @@ int main(int argc,char** argv) {
     if(loops)throw std::invalid_argument(
       "independent synthetic loop demonstration requires a GTSAM-enabled build");
 #endif
-    execute(generate(argv[1]),argv[2],loops);
+    slam::fusion::PipelineProfiler profiler;
+    const auto simulation=[&]{
+      slam::fusion::PipelineProfiler::Scope timing(profiler,"synthetic_generation");
+      return generate(argv[1]);
+    }();
+    execute(simulation,argv[2],loops,profiler);
     return 0;
   }catch(const std::exception& e){
     std::cerr<<"offline fusion failed: "<<e.what()<<'\n';
