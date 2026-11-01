@@ -474,3 +474,32 @@ evidence requirements and remaining hardware/software gates.
   but Docker and GitHub Actions were not run. A local strict GCC 14 C++20\n  UBSan/-Werror numeric harness exercised the new separable EDT kernel on\n  **8,613 deterministic grids** against brute-force distances (all passed);\n  this is not a substitute for compiling the repository module. See
   [ground-truth map accuracy](map-accuracy.md).
 
+
+## 2026-11-01 — Estimated-pose synthetic mapping benchmark on main
+
+- Added a native C++20 \`slam_synthetic_mapping_benchmark\` target using
+  \`slam::fixtures\` ray casting, perturbed *relative* synthetic odometry,
+  immutable \`DistanceField\`, the real \`slam::matching::match_reference\`
+  frontend and \`OccupancyGrid\` ray integration. Only the initial exact
+  synthetic pose establishes the map gauge; subsequent poses are estimated
+  from sensor-like synthetic observations and are **not** oracle-inserted.
+- A frozen occupancy map using even-index scans trains the local matcher;
+  odd-index scans are excluded and conditionally corrected with conservative
+  overlap, rank, map-fingerprint and innovation checks. A full reconstructed
+  map uses the resulting estimated trajectory, and a separate baseline uses
+  odometry-only poses. Results can improve **or regress**.
+- Both maps export authoritative \`FUSMAP2D\` bundles labelled
+  \`synthetic_estimated\`; exact synthetic geometry is used only by the
+  sensor simulator and post-hoc FUSMAPACC1 truth evaluator. The independent
+  comparison reports wall IoU/coverage/distance and the exact synthetic
+  trajectory RMSE/p95/yaw error. A reproducibility/CLI smoke test exercises
+  apartment and warehouse, verifies matching actually occurs and checks
+  bundle integrity against the standalone accuracy CLI.
+- **Execution status:** Full native build and CTest have not run in the
+  current container (no reachable GitHub checkout/network). An independent
+  local Python approximation exercised equivalent synthetic apartment and
+  warehouse route/sensor scenarios, but its numbers are **not** the native
+  C++ benchmark and are deliberately not published as source results.
+  No GitHub Actions or remote CI were dispatched.
+
+See [native synthetic mapping benchmark](synthetic-mapping-benchmark.md).
