@@ -251,6 +251,10 @@ target_link_libraries(slam_map_accuracy PUBLIC slam::fixtures slam::map_bundle)
 add_executable(slam_map_accuracy_cli src/map_accuracy_cli.cpp)
 target_compile_features(slam_map_accuracy_cli PRIVATE cxx_std_20)
 target_link_libraries(slam_map_accuracy_cli PRIVATE slam::map_accuracy)
+add_executable(slam_synthetic_eval_fixture src/synthetic_eval_fixture.cpp)
+target_compile_features(slam_synthetic_eval_fixture PRIVATE cxx_std_20)
+target_link_libraries(slam_synthetic_eval_fixture PRIVATE
+  slam::fixtures slam::map_bundle slam::mapping)
 if(ZLIB_FOUND)
   add_executable(slam_fr079_map_export src/fr079_map_export.cpp)
   target_compile_features(slam_fr079_map_export PRIVATE cxx_std_20)
@@ -346,6 +350,20 @@ if(BUILD_TESTING)
   add_executable(slam_map_accuracy_test tests/map_accuracy_test.cpp)
   target_link_libraries(slam_map_accuracy_test PRIVATE slam::map_accuracy)
   add_test(NAME map_accuracy COMMAND slam_map_accuracy_test)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME map_accuracy_fixture_export
+      COMMAND slam_synthetic_eval_fixture apartment
+        "${CMAKE_CURRENT_BINARY_DIR}/accuracy-fixture.slammap")
+    set_tests_properties(map_accuracy_fixture_export PROPERTIES
+      FIXTURES_SETUP accuracy_exported_map)
+    add_test(NAME map_accuracy_cli_smoke
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/map_accuracy_cli_test.py"
+        "$<TARGET_FILE:slam_map_accuracy_cli>"
+        "${CMAKE_CURRENT_BINARY_DIR}/accuracy-fixture.slammap")
+    set_tests_properties(map_accuracy_cli_smoke PROPERTIES
+      FIXTURES_REQUIRED accuracy_exported_map)
+  endif()
   if(TARGET slam_fr079_map_export AND SLAM_FR079_LOG)
     add_test(NAME fr079_map_export
       COMMAND slam_fr079_map_export "${SLAM_FR079_LOG}"
