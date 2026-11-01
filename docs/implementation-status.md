@@ -156,3 +156,50 @@ upload binary Release assets; the asset is **not yet on GitHub**.
 
 The existing GitHub Actions workflow remains manual-only and was not run.
 See [dependency recovery documentation](dependency-cache.md).
+
+## 2026-11-01 — graph-to-map candidate generation and rollback
+
+Implemented optional `slam_offline_generation` (requires GTSAM 4.3). The
+pipeline checks independently described odometry, mapping scans and loop
+sources before optimization, reconstructs the same verified local rays from
+the initial and optimized trajectories, and publishes **two immutable
+FUSMAP2D-compatible map candidates**. Held-out reference hit locations do
+not participate in graph optimization or either map insertion. They are
+evaluated only after both map snapshots have been frozen. Candidate
+selection requires an accepted loop, sufficient reserved reference data,
+no excessive regression in known-cell coverage and a minimum gain in
+occupied hit agreement.
+
+The separately measured `PoseEdge` and frontend match diagnostics can be
+joined via `qualified_frontend_loop`; it rejects stale map fingerprints,
+unsupported match statuses and unverified relative measurements. It never
+converts a Ceres map-from-laser tracking result or its LiDAR Hessian into
+an independent relative pose/covariance.
+
+**Focused local tests** using GTSAM 4.3 and project-compatible map and
+matcher interfaces passed **1/1 CTest** in Release and with GCC 14
+`-Wall -Wextra -Wpedantic -Werror` plus UBSan. In the synthetic test,
+independent held-out endpoint agreement increased **24.1% → 87.5%**,
+promoting the rebuilt candidate. A misleading but graph-consistent
+loop caused agreement to **fall 73.2% → 17.0%**, so the incumbent was
+retained. Tests also cover false-loop rejection, no-loop rollback,
+source double-counting, unverified beam timing, stale frontend map
+fingerprints, held-out nonleakage, determinism and binary roundtrip.
+
+**Limitations:** The focused build used equivalent local implementations
+of several core/map primitives rather than a fully reconstructed,
+byte-identical checkout. The complete repository CTest matrix is
+therefore **not yet verified** for this milestone. An AddressSanitizer
+attempt aborted at GTSAM's prebuilt shared-library initialization due
+to an Eigen aligned-allocation mismatch, before entering these tests;
+**ASan is not claimed as passing**. The UBSan build passed. The
+verified source files for the new module and tests are byte-identical to
+those compiled in the focused build.
+
+This is a **synthetic** source-guard and map-generation benchmark, not a
+real-data graph or external ATE/RPE measurement. An input provenance flag
+remains an assertion by the caller; the module cannot independently
+authenticate it. No durable filesystem transaction/persistent generation
+registry is implemented. The returned selected immutable snapshot keeps
+the incumbent if candidate validation fails, and any disk publication
+remains an explicit caller action. See [pipeline design](offline-map-generation.md).

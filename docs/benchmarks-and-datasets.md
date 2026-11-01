@@ -233,3 +233,18 @@ This is **map serialization integrity**, not independent map or localization acc
 ### Initial Pose2 GTSAM reference (synthetic-only, 2026-11-01)
 
 A five-pose square graph now runs via the optional GTSAM 4.3 workstation target with a constrained first pose, sequential synthetic-exact odometry and a verified synthetic loop. A deliberately inconsistent candidate, a correlated evidence candidate and a duplicate are refused; an unsupported proposal cannot block a later valid loop. **The synthetic internal objective decreased 20.9136 → 1.97086.** This is partial B09 graph correctness evidence, **not** independent real-dataset ATE/RPE or a proven physical odometry/loop covariance. See [GTSAM offline build and graph contract](offline-pose-graph.md).
+
+### Offline graph → map generation, synthetic held-out gate (2026-11-01)
+
+The initial graph/map bridge now rebuilds independent immutable candidate
+and incumbent occupancy snapshots from the same provenance-qualified
+synthetic training rays. A reserved synthetic reference supplies **112**
+independent endpoint comparisons. An accepted synthetic loop improved
+occupied hit agreement **0.241071 → 0.875**, and the candidate was
+selected. When a plausible but biased loop worsened agreement
+**0.732143 → 0.169643**, the incumbent was kept, even though optimization
+could reduce its internal factor objective. No-loop, false-loop,
+correlated-source, unverified timing, stale-map frontend diagnostics and
+held-out reference leakage cases are tested. This is a synthetic-only
+generation quality gate, **not** public-dataset ATE/RPE. See
+[offline map generation](offline-map-generation.md).

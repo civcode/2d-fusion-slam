@@ -220,7 +220,24 @@ if(SLAM_ENABLE_GTSAM)
   endif()
 endif()
 
+# Deliberately not linked to Raspberry Pi known-map localization. A verified
+# offline graph is necessary for candidate generation and held-out promotion.
+if(TARGET slam_offline_graph)
+  add_library(slam_offline_generation STATIC src/map_generation.cpp)
+  add_library(slam::offline_generation ALIAS slam_offline_generation)
+  target_compile_features(slam_offline_generation PUBLIC cxx_std_20)
+  target_include_directories(slam_offline_generation PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+  target_link_libraries(slam_offline_generation PUBLIC
+    slam::offline_graph slam::map_bundle slam::match_geometry)
+endif()
+
 if(BUILD_TESTING)
+  if(TARGET slam_offline_generation)
+    add_executable(slam_map_generation_test tests/map_generation_test.cpp)
+    target_link_libraries(slam_map_generation_test PRIVATE slam::offline_generation)
+    add_test(NAME offline_map_promotion COMMAND slam_map_generation_test)
+  endif()
   if(TARGET slam_offline_graph)
     add_executable(slam_pose_graph_test tests/pose_graph_test.cpp)
     target_link_libraries(slam_pose_graph_test PRIVATE slam::offline_graph)
