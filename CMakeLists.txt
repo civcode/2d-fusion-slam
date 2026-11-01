@@ -239,6 +239,18 @@ endif()
 add_executable(slam_map_inspect src/map_inspect.cpp)
 target_compile_features(slam_map_inspect PRIVATE cxx_std_20)
 target_link_libraries(slam_map_inspect PRIVATE slam::map_bundle)
+
+# Ground-truth occupancy evaluation is independent of Ceres, GTSAM, zlib
+# and network downloads. Inputs are immutable FUSMAP2D synthetic snapshots.
+add_library(slam_map_accuracy STATIC src/map_accuracy.cpp)
+add_library(slam::map_accuracy ALIAS slam_map_accuracy)
+target_compile_features(slam_map_accuracy PUBLIC cxx_std_20)
+target_include_directories(slam_map_accuracy PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_map_accuracy PUBLIC slam::fixtures slam::map_bundle)
+add_executable(slam_map_accuracy_cli src/map_accuracy_cli.cpp)
+target_compile_features(slam_map_accuracy_cli PRIVATE cxx_std_20)
+target_link_libraries(slam_map_accuracy_cli PRIVATE slam::map_accuracy)
 if(ZLIB_FOUND)
   add_executable(slam_fr079_map_export src/fr079_map_export.cpp)
   target_compile_features(slam_fr079_map_export PRIVATE cxx_std_20)
@@ -331,6 +343,9 @@ if(BUILD_TESTING)
   add_executable(slam_map_bundle_test tests/map_bundle_test.cpp)
   target_link_libraries(slam_map_bundle_test PRIVATE slam::map_bundle)
   add_test(NAME map_bundle COMMAND slam_map_bundle_test)
+  add_executable(slam_map_accuracy_test tests/map_accuracy_test.cpp)
+  target_link_libraries(slam_map_accuracy_test PRIVATE slam::map_accuracy)
+  add_test(NAME map_accuracy COMMAND slam_map_accuracy_test)
   if(TARGET slam_fr079_map_export AND SLAM_FR079_LOG)
     add_test(NAME fr079_map_export
       COMMAND slam_fr079_map_export "${SLAM_FR079_LOG}"
