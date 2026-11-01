@@ -178,6 +178,11 @@ Prepared prepare(const Observations& obs,Pose2 initial) {
     if(scan.time_quality!=slam::sensors::BeamTimeQuality::synthetic_exact ||
        scan.source_id!=16||scan.calibration_revision!=1)
       throw std::invalid_argument("unverified synthetic scan metadata");
+    for(const auto& beam:scan.beams)
+      if(beam.source_id!=scan.source_id ||
+         beam.calibration_revision!=scan.calibration_revision ||
+         beam.time_quality!=scan.time_quality)
+        throw std::invalid_argument("mixed beam source, calibration or time trust");
     const auto fused=fused_track.at(scan.midpoint);
     const auto wheel=wheel_track.at(scan.midpoint);
     const auto deskew_f=slam::motion::deskew_hits(scan,fused_track,kBaseFromLaser);
