@@ -14,7 +14,7 @@ sha256sum -c /path/to/2d-fusion-slam/datasets/fr079/SHA256SUMS
 | --- | --- |
 | `fr079.log.gz` | Main CARMEN FLASER/ODOM log, full input |
 | `fr079-sm.log.gz` | Variant with different logged pose fields, **not independent trajectory truth** |
-| `fr079-maps.tgz` | Supplied CARMEN/Bee reference maps and GIFs at 3, 5, 10 cm, **not yet ingested by the map builder** |
+| `fr079-maps.tgz` | Supplied CARMEN/Bee reference maps and GIFs at 3, 5, 10 cm; CARMEN v020 binary grids now decode, but map-frame registration and occupancy snapshot import remain pending |
 | `map05cm-path.gif` | Supplied illustration of map and a route; not machine-readable pose ground truth |
 
 ## Reproduce real-data tests
@@ -24,11 +24,17 @@ cmake -S . -B build -G Ninja \
   -DBUILD_TESTING=ON -DSLAM_ENABLE_CATCH2=ON \
   -DSLAM_CATCH2_SOURCE_DIR=/path/to/extracted/Catch2-3.16.1 \
   -DSLAM_FR079_LOG=/path/to/fr079.log.gz \
-  -DSLAM_FR079_SM_LOG=/path/to/fr079-sm.log.gz
+  -DSLAM_FR079_SM_LOG=/path/to/fr079-sm.log.gz \
+  -DSLAM_FR079_MAP=/path/to/extracted/fr079-maps/fr079-05cm.carmen.map
 cmake --build build
 ctest --test-dir build --output-on-failure
 ./build/slam_carmen_inspect /path/to/fr079.log.gz 3118
 ~~~
+
+**Observed on the supplied reference CARMEN maps:** 3 cm: 1517 × 537 cells
+(444,630 known / 369,999 unknown); 5 cm: 910 × 323 cells
+(164,728 known / 129,202 unknown); 10 cm: 455 × 162 cells
+(43,275 known / 30,435 unknown). No beam-to-map frame alignment is asserted.
 
 **Observed on the supplied inputs, for each log:**
 3,118 FLASER scans; 5,761 ODOM records; 1,122,480 range samples
@@ -49,9 +55,11 @@ ranging from -90 degrees to +89.5 degrees.
 - **No fabricated free-space returns.** Missing, zero or over-range values
   are classified as invalid. They are excluded from matcher point clouds
   and must not create free-space occupancy evidence.
-- **No map import yet.** The 5 cm reference GIF and archived CARMEN/Bee
-  map files are available as qualitative reference assets, but decoding,
-  frame registration and metric comparison are future tasks.
+- **Reference map file decoding is implemented, not full map registration.**
+  `slam_carmen_map_inspect` reads CARMENMAPFILEv020 binary grids and checks
+  float values; axis conventions, registration against the scan/log pose frame,
+  import into authoritative occupancy snapshots and metric comparison remain future work.
+  The GIF alone is a qualitative reference, not numerical ground truth.
 - **No replay/SLAM benchmark claimed.** Full file parsing is only the
   first public-dataset integration test. The next experiments must hold
   out scans and report pose/mapping error where an independently verified
