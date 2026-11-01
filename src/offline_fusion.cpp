@@ -355,8 +355,13 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor)
   }
   return out;
 }
+struct GraphLoopEvent {
+  std::size_t from{},to{};
+  std::string decision;
+};
 struct GraphOutput {
   std::vector<Pose2> poses;
+  std::vector<GraphLoopEvent> events;
   std::size_t accepted_loops{},loop_candidates{};
   std::string status;
 };
@@ -407,6 +412,20 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
   }
   output.loop_candidates=input.loops.size();
   auto graph=slam::graph::optimize_pose_graph(input);
+  if(graph.loop_decisions.size()!=input.loops.size())
+    throw std::runtime_error("GTSAM loop decision cardinality mismatch");
+  for(std::size_t k=0;k<input.loops.size();++k) {
+    const auto decision=graph.loop_decisions[k];
+    std::string label;
+    switch(decision){
+      case slam::graph::LoopDecision::accepted: label="accepted";break;
+      case slam::graph::LoopDecision::insufficient_geometry:label="insufficient_geometry";break;
+      case slam::graph::LoopDecision::unverified_or_correlated_evidence:label="unverified_evidence";break;
+      case slam::graph::LoopDecision::inconsistent_with_initial_path:label="inconsistent";break;
+      case slam::graph::LoopDecision::duplicate_or_nearby_nodes:label="duplicate_or_nearby";break;
+    }
+    output.events.push_back({input.loops[k].edge.from,input.loops[k].edge.to,label});
+  }
   if(!graph.fixed_first_pose)throw std::runtime_error("graph lost gauge anchor");
   output.poses=std::move(graph.optimized_map_from_base);
   output.accepted_loops=graph.accepted_loops;
@@ -500,6 +519,81 @@ void export_trajectories(const std::filesystem::path& output,
   out<<"]\n}\n";
   if(!out)throw std::runtime_error("failed writing trajectory JSON");
 }
+// FUSFUSREPLAY1 contains *actual* events from this run, not browser-side
+// synthesized matcher/graph outcomes. No raw oracle trajectory is included.
+void export_replay(const std::filesystem::path& output,const Simulation& sim,
+                   const Prepared& p,const LidarOnly& lidar,
+                   const Matched& matched,const GraphOutput& graph) {
+  std::ofstream out(output);
+  if(!out)throw std::runtime_error("failed opening fusion replay");
+  out<<std::setprecision(17);
+  out<<"{\"format\":\"FUSFUSREPLAY1\",\"scene\":\""<<sim.scene.id
+     <<"\",\"reference_class\":\"synthetic_exact\","
+     <<"\"source\":\"moving_synthetic_lidar_gyro_wheel\","
+     <<"\"matcher\":\""<<matched.backend<<"\","
+     <<"\"scan_frame\":\"laser_midpoint_deskewed_full_se2\","
+     <<"\"laser_from_base_translation_m\":["
+     <<kBaseFromLaser.translation.x()<<","<<kBaseFromLaser.translation.y()<<"],"
+     <<"\"base_from_laser_yaw_rad\":"<<kBaseFromLaser.yaw_rad<<","
+     <<"\"frame_count\":"<<sim.sensors.scans.size()<<",\"frames\":[\n";
+  std::size_t accepted=0,rejected=0,accepted_loops=0;
+  for(std::size_t i=0;i<sim.sensors.scans.size();++i) {
+    if(i)out<<",\n";
+    const auto& scan=sim.sensors.scans[i];
+    const bool query=i%2==1;
+    const auto& result=matched.outcomes[i];
+    const bool approved=query&&matched.accepted_mask[i];
+    if(query){if(approved)++accepted;else ++rejected;}
+    const char* status="training";
+    std::string reason="not_evaluated_training_scan";
+    if(query) {
+      status=approved?"accepted":"rejected";
+      reason=approved?"accepted":rejection_reason(result.status);
+    }
+    out<<"{\"index\":"<<i<<",\"time_ns\":\""<<scan.midpoint.ns<<"\","
+       <<"\"hits\":"<<scan.hit_count<<",\"beam_count\":"<<scan.beams.size()
+       <<",\"points_laser\":[";
+    // Bounded rendering sample; actual full-resolution mapping and matching
+    // happened before this export and are not affected by its decimation.
+    const auto& hits=p.gyro_deskewed[i];
+    for(std::size_t k=0;k<hits.size();k+=2){
+      if(k)out<<",";
+      out<<"["<<hits[k].x()<<","<<hits[k].y()<<"]";
+    }
+    out<<"],\"matching\":{\"attempted\":"<<(query?"true":"false")
+       <<",\"accepted\":"<<(approved?"true":"false")
+       <<",\"status\":\""<<status<<"\",\"reason\":\""<<reason<<"\""
+       <<",\"cumulative_accepted\":"<<accepted
+       <<",\"cumulative_rejected\":"<<rejected;
+    if(query){
+      const auto& d=result.diagnostics;
+      out<<",\"supported_hits\":"<<d.supported_hits
+         <<",\"input_hits\":"<<d.input_hits
+         <<",\"overlap\":"<<(std::isfinite(d.overlap)?d.overlap:0)
+         <<",\"full_rank\":"<<(d.full_rank?"true":"false")
+         <<",\"training_map_fingerprint\":\""<<d.source_fingerprint<<"\"";
+      if(std::isfinite(d.mean_distance_metres))
+        out<<",\"mean_distance_m\":"<<d.mean_distance_metres;
+      if(std::isfinite(d.robust_cost))
+        out<<",\"robust_cost\":"<<d.robust_cost;
+    }
+    out<<"},\"mapping\":{\"lidar_only_inserted\":"
+       <<(lidar.mapped[i]?"true":"false")
+       <<",\"gyro_wheel_inserted\":true,\"fused_scan_matched_inserted\":true}"
+       <<",\"loop_events\":[";
+    bool first=true;
+    for(const auto& event:graph.events)if(event.to==i){
+      if(!first)out<<',';
+      first=false;
+      if(event.decision=="accepted")++accepted_loops;
+      out<<"{\"from\":"<<event.from<<",\"to\":"<<event.to
+         <<",\"decision\":\""<<event.decision<<"\"}";
+    }
+    out<<"],\"cumulative_accepted_loops\":"<<accepted_loops<<"}";
+  }
+  out<<"]}\n";
+  if(!out)throw std::runtime_error("failed writing fusion replay");
+}
 void execute(const Simulation& sim,const std::filesystem::path& directory,
              bool synthetic_loops) {
   if(std::filesystem::exists(directory))
@@ -522,6 +616,7 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   export_bundle(directory/"gyro_wheel.slammap",fused_map);
   export_bundle(directory/"fused_scan_matched.slammap",matched_map);
   export_trajectories(directory/"trajectories.json",sim,p,lidar,matched,graph);
+  export_replay(directory/"fusion_replay.json",sim,p,lidar,matched,graph);
   std::optional<slam::mapping::MapBundle> graph_map;
   if(!graph.poses.empty()) {
     graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()));
