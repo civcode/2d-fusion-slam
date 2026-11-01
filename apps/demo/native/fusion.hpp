@@ -20,6 +20,8 @@ public:
   Json replay(const std::string& run) const;
   Json frame(const std::string& run,std::size_t index) const;
   Json map_metadata(const std::string& run,const std::string& method) const;
+  Json map_cell(const std::string& run,const std::string& method,
+                std::size_t x,std::size_t y) const;
   std::string map_png(const std::string& run,const std::string& method) const;
 private:
   struct Session {Json report,poses,trace;};
