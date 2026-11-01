@@ -246,10 +246,15 @@ if(ZLIB_FOUND AND OpenSSL_FOUND)
         "$<TARGET_FILE:slam_fr079_offline>")
     set_tests_properties(fr079_offline_slam PROPERTIES TIMEOUT 240)
     if(SLAM_FR079_LOG)
-      add_test(NAME fr079_offline_real_data
-        COMMAND "${Python3_EXECUTABLE}"
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_offline_test.py"
-          "$<TARGET_FILE:slam_fr079_offline>" "${SLAM_FR079_LOG}")
+      if(TARGET slam_match_ceres)
+        add_test(NAME fr079_offline_real_data
+          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_offline_test.py"
+            "$<TARGET_FILE:slam_fr079_offline>" "${SLAM_FR079_LOG}")
+      else()
+        add_test(NAME fr079_offline_real_data
+          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_offline_test.py"
+            "$<TARGET_FILE:slam_fr079_offline>" "${SLAM_FR079_LOG}" --reference)
+      endif()
       set_tests_properties(fr079_offline_real_data PROPERTIES TIMEOUT 600)
     endif()
   endif()
