@@ -57,8 +57,14 @@ def main():
             assert replay["source"]["pose_kind"] == \
                 "estimated_fr079_odometry_scan_matched_not_ground_truth"
             assert replay["ceres"]["status"] in ("absent", "unavailable", "none")
+            batch = json.loads(get(
+                "/api/replays/fr079-estimated.slamreplay.json/frames")[0])
+            assert batch["format"] == "FUSREPLAYFRAMES1"
+            assert batch["source_sha256"] == replay["source"]["source_sha256"]
+            assert len(batch["frames"]) == replay["frame_count"]
             point = json.loads(get(
                 "/api/replays/fr079-estimated.slamreplay.json/frame/10")[0])
+            assert batch["frames"][10] == point
             assert point["index"] == 10
             assert point["matching"] is None
             assert point["pose"] == replay["trajectory"][10][1:]
