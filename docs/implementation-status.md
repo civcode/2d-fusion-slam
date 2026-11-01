@@ -613,3 +613,46 @@ not have installed solver headers. No GitHub Actions were used.
 Manual reproducibility entrypoint: `bash scripts/verify-offline-fusion.sh`
 with offline Ceres and GTSAM already installed. `SLAM_FUSION_REQUIRE_SOLVERS=OFF`
 explicitly switches to the unoptimized geometry fallback test path.
+
+
+## 2026-11-01 — Native Web UI Fusion Replay
+
+- Existing C++ slam_offline_fusion emits an additional bounded
+  FUSFUSREPLAY1 per-frame artifact with sampled genuinely deskewed
+  scan endpoints, known beam counts and exact nanosecond strings.
+  Held-out odd-index matcher statuses, acceptance/rejection reason,
+  supported hits, overlap, training-map identity, cumulative counts,
+  baseline insertion flags and separately sourced optional GTSAM loop
+  decisions are exported from the estimator, not manufactured in JS.
+- Added a native read-only FusionRuns backend with isolated direct-child
+  run discovery, fixed filename/method allowlists, bounded O_NOFOLLOW
+  reads and fail-closed frame/report/trajectory/source consistency
+  validation. Exported FUSMAP2D images are served only after checking
+  the actual authoritative map fingerprint against FUSFUSION1.
+  Added HTTP /api/fusion/runs endpoints and --fusion-dir directory option.
+- Added /fusion page, fusion.js and fusion.css: zoomable canvas, method
+  toggles, source-excluded scan decision details, timeline play/pause/
+  seek/step/speed, final metric comparisons, optional synthetic scoring
+  truth, final occupancy overlays and independent simulated loop events.
+  Existing map explorer and recorded LiDAR replay both link here.
+- Docker Compose mounts apps/demo/fusion at /fusion:ro. An example run can
+  be generated exclusively with slam_offline_fusion into a subdirectory,
+  then opened in the browser without Python in the runtime.
+- Added fusion_replay_http CTest that executes the real C++ synthetic
+  pipeline, loads it through the standalone C++ HTTP server, checks all
+  method fingerprints and event parity, and rejects corrupted, symlinked
+  or mutable endpoints. Extended offline_fusion CTest to audit replay
+  counts and frame source identity. Manual verify-offline-fusion.sh now
+  includes the native Web UI tests.
+
+The UI explicitly says the *final* occupancy map and GTSAM-optimized path
+are post-run results, while accumulated scan endpoints are only a
+sampled point cloud and not an intermediate occupancy grid. The
+Web UI does not simulate a live robot or claim hardware calibration.
+
+**Verification status:** Native source paths, route registration and
+browser asset IDs were reviewed; JavaScript parsed successfully in V8.
+Complete repository CMake/CTest/Docker runtime could not be executed
+here because network restrictions prevent a local checkout. The user's
+earlier fixes on main were preserved. No GitHub Actions were configured
+or executed. See [Fusion Replay](fusion-replay.md).
