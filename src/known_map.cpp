@@ -12,7 +12,18 @@ bool finite_pose(const Pose2& pose) {
   return pose.translation.allFinite() && std::isfinite(pose.yaw_rad);
 }
 bool valid_settings(const Settings& s) {
-  return s.maximum_hits >= s.matching.min_supported_hits && s.maximum_hits <= 100'000 &&
+  const auto& m = s.matching;
+  return m.min_supported_hits >= 3 &&
+         std::isfinite(m.sigma_metres) && m.sigma_metres > 0 &&
+         std::isfinite(m.huber_delta) && m.huber_delta > 0 &&
+         std::isfinite(m.minimum_overlap) && m.minimum_overlap > 0 && m.minimum_overlap <= 1 &&
+         std::isfinite(m.minimum_relative_eigenvalue) &&
+         m.minimum_relative_eigenvalue > 0 && m.minimum_relative_eigenvalue < 1 &&
+         m.maximum_iterations > 0 && m.maximum_iterations <= 1000 &&
+         std::isfinite(m.initial_damping) && m.initial_damping > 0 &&
+         std::isfinite(m.maximum_step_translation_m) && m.maximum_step_translation_m > 0 &&
+         std::isfinite(m.maximum_step_yaw_rad) && m.maximum_step_yaw_rad > 0 &&
+         s.maximum_hits >= m.min_supported_hits && s.maximum_hits <= 100'000 &&
          s.maximum_consecutive_rejections > 0 && s.maximum_consecutive_rejections <= 100 &&
          s.maximum_scan_gap_ns > 0 && s.freshness_timeout_ns > 0 &&
          std::isfinite(s.maximum_translation_innovation_m) &&
