@@ -4,17 +4,31 @@ The application is a **local read-only viewer** for existing FUSMAP2D
 `.slammap` files and the active/previous `FUSGEN1` generation registry.
 It does **not** stream robot poses or control SLAM.
 
-From the repository root, use Python 3.10+:
+From the repository root, build the standalone C++20 server (needs
+Eigen3, zlib and OpenSSL development headers, but **not** Ceres/GTSAM):
 
 ```sh
-python3 apps/demo/main.py --data-dir apps/demo/maps
+cmake -S . -B build-demo -G Ninja -DBUILD_TESTING=ON \
+  -DSLAM_ENABLE_GTSAM=OFF -DSLAM_ENABLE_CERES=OFF \
+  -DSLAM_BUILD_NATIVE_DEMO=ON -DSLAM_REQUIRE_NATIVE_DEMO=ON \
+  -DSLAM_ENABLE_CATCH2=OFF
+cmake --build build-demo --target fusion_slam_demo --parallel 2
+./build-demo/fusion_slam_demo --data-dir apps/demo/maps --example-if-empty
+ctest --test-dir build-demo -R 'native_web_api' --output-on-failure
+```
+
+The original Python viewer remains available for comparison and rollback,
+not as the default runtime:
+
+```sh
+python3 apps/demo/main.py --data-dir apps/demo/maps --example-if-empty
 ```
 
 Open http://127.0.0.1:8765. To use a different map folder, pass its
 path to `--data-dir`.
 
-Like `civcode/hybrid-astar-cpp`, this repository also exposes a root
-Dockerfile and Compose demo:
+Like `civcode/hybrid-astar-cpp`, this repository also exposes a native
+C++ Docker demo, built without the heavyweight solver libraries:
 
 ```sh
 docker compose up --build demo
@@ -47,7 +61,7 @@ read-only replay format:
 python3 apps/demo/convert_carmen.py /path/to/fr079.log.gz \
   apps/demo/maps/fr079.slamreplay.json --beam-stride 6 \
   --frame-id fr079_logged_laser_frame_UNVERIFIED
-python3 apps/demo/main.py --data-dir apps/demo/maps --example-if-empty
+./build-demo/fusion_slam_demo --data-dir apps/demo/maps --example-if-empty
 ```
 
 The converter preserves CARMEN scan times and logged laser/odometry
@@ -76,3 +90,26 @@ shows a held-out summary (status counts, EDT overlap and cost) without
 claiming ground-truth positioning accuracy. The command also emits an
 exclusive `FUSHOLDOUT_REPORT1` JSON report. See
 [held-out evaluation instructions](../../docs/heldout-ceres-evaluation.md).
+
+## Native implementation and compatibility
+
+The C++20 offline server is `apps/demo/native/main.cpp` and
+`apps/demo/native/data.cpp`; it imports authoritative `FUSMAP2D`
+maps with the existing C++ library, validates the `FUSGEN1` pointer
+without recovery/writes, renders PNG with zlib, and parses validated
+`FUSREPLAY1` and `FUSMATCH1` without running the solver.
+
+The HTML/CSS/JavaScript under `apps/demo/web/static` is unchanged.
+The existing read-only API endpoints, metadata/cell formats,
+trajectory playback and optional Ceres overlays are preserved. Both
+the native server and the original Python server refuse unsigned,
+unregistered or stale sources; metadata labels are still declarations,
+not independent real-world truth. The native binary requires no Python
+interpreter at runtime; the Python conversion scripts and test suite
+are retained.
+
+The native HTTP server is intentionally a **local offline single-threaded
+viewer** with bounded request size and timeouts; it is not a real-time
+SLAM service and must not be internet-exposed. HTTP writes remain
+disabled, and paths are fixed basenames or bundled asset allowlists.
+See [the Web UI guide](../../docs/web-ui.md) for verification status.
