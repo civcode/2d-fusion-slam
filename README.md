@@ -96,6 +96,42 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## Apartment/warehouse maps and native SLAM performance
+
+The main **Map Explorer** at http://127.0.0.1:8765/ now discovers
+all completed fusion-run maps under the configured fusion directory:
+apartments, warehouses, and each existing wheel/LiDAR/scan-matched/
+graph-optimized method. It opens those maps directly with the existing
+cell inspector, **without copying** FUSMAP2D files to apps/demo/maps.
+When a fusion run exists it prefers a scan-matched result over the
+synthetic workshop fallback. The Fusion Replay page at /fusion also
+links directly to the selected final map in the main Map Explorer.
+
+Native profiling (SLAM_PROFILE_FUSION=ON by default) now records
+steady-clock **per-stage wall times, p50/p95, offline effective fusion
+FPS and the 300 ms/scan budget comparison** into fusion_profile.json.
+The Fusion Replay details panel shows these measured results and the
+largest stages; scripts/benchmark-fusion.py repeats apartment and
+warehouse runs and produces CSV output for comparing real workstation
+or Docker builds:
+
+~~~sh
+export BUILD_JOBS=28 SLAM_DOCKER_JOBS=28 SLAM_PROFILE_FUSION=ON
+docker compose build test demo
+mkdir -p benchmarks
+docker compose run --rm -v "$PWD/benchmarks:/results" \
+  --entrypoint python3 test scripts/benchmark-fusion.py \
+  --binary ./build-docker/slam_offline_fusion \
+  --scene both --warmup 1 --runs 5 \
+  --csv /results/fusion-profiled-001.csv
+~~~
+
+The reported FPS is a **synthetic offline throughput estimate**, not
+proof of real-time behavior for LD19/MPU6050 hardware. Compare the
+same experiments with instrumentation disabled in a separate build,
+then evaluate actual sensor deadlines and backpressure on target
+hardware. See [profiling methodology](docs/fusion-profiling.md).
+
 ## Fusion Replay — watch completed SLAM runs in the browser
 
 The native C++20 dashboard now has a dedicated **[Fusion Replay](docs/fusion-replay.md)**
