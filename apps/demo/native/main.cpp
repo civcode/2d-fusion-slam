@@ -154,6 +154,11 @@ void handle(int client,slam::viewer::ViewerData& viewer,
       const auto n=::recv(client,chunk,sizeof(chunk),0);
       if(n<=0){reply(client,error(400,"incomplete HTTP request"));return;}
       request.append(chunk,static_cast<std::size_t>(n));
+      const auto end_of_headers=request.find("\r\n\r\n");
+      if((end_of_headers==std::string::npos && request.size()>8192) ||
+         (end_of_headers!=std::string::npos && end_of_headers>8192)) {
+        reply(client,error(400,"headers too long"));return;
+      }
     }
     const auto end=request.find("\r\n");
     if(end==std::string::npos||end>4096){reply(client,error(400,"invalid request line"));return;}
