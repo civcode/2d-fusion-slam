@@ -240,6 +240,41 @@ add_executable(slam_map_inspect src/map_inspect.cpp)
 target_compile_features(slam_map_inspect PRIVATE cxx_std_20)
 target_link_libraries(slam_map_inspect PRIVATE slam::map_bundle)
 
+# Native read-only browser UI. No Python runtime and no Ceres/GTSAM. The
+# browser JS/CSS assets remain unchanged and are served from a fixed allowlist.
+option(SLAM_BUILD_NATIVE_DEMO "Build the native C++20 offline web dashboard" ON)
+option(SLAM_REQUIRE_NATIVE_DEMO "Fail configure if native viewer dependencies are missing" OFF)
+if(SLAM_BUILD_NATIVE_DEMO)
+  find_package(OpenSSL QUIET COMPONENTS Crypto)
+  if(OpenSSL_FOUND AND ZLIB_FOUND AND UNIX)
+    add_executable(fusion_slam_demo
+      apps/demo/native/main.cpp
+      apps/demo/native/data.cpp)
+    target_compile_features(fusion_slam_demo PRIVATE cxx_std_20)
+    target_include_directories(fusion_slam_demo PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(fusion_slam_demo PRIVATE
+      FUSION_VIEWER_STATIC_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/apps/demo/web/static")
+    target_link_libraries(fusion_slam_demo PRIVATE
+      slam::map_bundle OpenSSL::Crypto ZLIB::ZLIB)
+    set_target_properties(fusion_slam_demo PROPERTIES CXX_EXTENSIONS OFF)
+    if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+      add_test(NAME native_web_api
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_native_viewer.py"
+          "$<TARGET_FILE:fusion_slam_demo>")
+      set_tests_properties(native_web_api PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" TIMEOUT 90)
+    endif()
+  elseif(SLAM_REQUIRE_NATIVE_DEMO)
+    message(FATAL_ERROR
+      "Native C++ viewer requires POSIX sockets, ZLIB and OpenSSL::Crypto")
+  else()
+    message(STATUS "Native viewer skipped: POSIX, zlib or OpenSSL Crypto unavailable")
+  endif()
+endif()
+
+
 # Ground-truth occupancy evaluation is independent of Ceres, GTSAM, zlib
 # and network downloads. Inputs are immutable FUSMAP2D synthetic snapshots.
 add_library(slam_map_accuracy STATIC src/map_accuracy.cpp)
