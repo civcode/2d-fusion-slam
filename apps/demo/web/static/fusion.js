@@ -230,7 +230,7 @@
       pathLayer(poses.synthetic_truth_for_scoring,"synthetic_truth_for_scoring");
     beams();
     ctx.setTransform(dpr,0,0,dpr,0,0);
-    shown("fusion-scale",fmt(100/view.scale,1)+" cm per 100px");
+    shown("fusion-scale",fmt(100/view.scale,1)+" cm per pixel");
   }
   async function selectMap(method) {
     const token=++imageToken;
@@ -267,9 +267,15 @@
   async function loadRun(name) {
     stop();const token=++loadingToken;
     runId=name;report=null;poses=null;trace=null;
-    imageToken++;mapImage=null;mapMeta=null;
+    imageToken++;
+    if(mapImage)URL.revokeObjectURL(mapImage.src);
+    mapImage=null;mapMeta=null;
     setReady(false);showMessage("");
-    if(!name){shown("fusion-scene","—");draw();return;}
+    if(!name){
+      for(const id of ["fusion-scene","fusion-backend","fusion-accepted","fusion-loops"])shown(id,"—");
+      el("fusion-scores").textContent="Select a completed run.";
+      draw();return;
+    }
     try {
       const base=urlBase();
       const [r,p,t]=await Promise.all([
