@@ -77,6 +77,7 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
     if(slash==std::string_view::npos)return json(fusion.report(id));
     const auto sub=rest.substr(slash+1);
     if(sub=="trajectories")return json(fusion.trajectories(id));
+    if(sub=="profile")return json(fusion.profile(id));
     if(sub=="replay")return json(fusion.replay(id));
     constexpr std::string_view frame_marker="frame/";
     if(sub.starts_with(frame_marker)){
