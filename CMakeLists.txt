@@ -207,13 +207,22 @@ if(TARGET slam_match_ceres AND ZLIB_FOUND)
   add_executable(slam_ceres_replay_export src/ceres_replay_export.cpp)
   target_compile_features(slam_ceres_replay_export PRIVATE cxx_std_20)
   target_link_libraries(slam_ceres_replay_export PRIVATE
-    slam::carmen slam::map_bundle slam::match_ceres ZLIB::ZLIB)
+    slam::carmen slam::map_bundle slam::match_ceres slam::fr079_train_only ZLIB::ZLIB)
   if(BUILD_TESTING AND Python3_Interpreter_FOUND)
     add_test(NAME ceres_replay_native
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_native_ceres_export.py"
         "$<TARGET_FILE:slam_ceres_replay_export>")
     set_tests_properties(ceres_replay_native PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # This regression rebuilds the actual train-only map, rejects a
+    # nontraining map and checks the exact excluded scan index sequence.
+    add_test(NAME ceres_heldout_native
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_native_heldout.py"
+        "$<TARGET_FILE:slam_fr079_map_export>"
+        "$<TARGET_FILE:slam_ceres_replay_export>")
+    set_tests_properties(ceres_heldout_native PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   endif()
 endif()

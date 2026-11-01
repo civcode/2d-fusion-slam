@@ -182,8 +182,11 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Persistent map-generation registry and recovery](docs/map-generation-registry.md)
 - [Offline map Web UI: launch, Docker and API](docs/web-ui.md)
 - [Native Ceres replay diagnostics and limitations](docs/ceres-replay.md)
+- [Training-excluded FR079 Ceres evaluation and report](docs/heldout-ceres-evaluation.md)
 - [Interactive recorded LiDAR replay and FUSREPLAY1](docs/recorded-replay.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
-**Next:** verify the new durable map registry in the complete Docker/Ubuntu build and add independent, calibrated sensor packet lineage before attempting real-data map promotion. Then add measured fault-injection/power-loss tests and retention policy. The current graph/map quality gate is still synthetic-only; real-world accuracy and FR079 map-frame truth remain unresolved.
+**Next:** source-rebuilt train-only map evaluation now checks that every Ceres query scan was excluded from the FR079 training map. See [held-out Ceres evaluation](docs/heldout-ceres-evaluation.md). This still does not provide independent physical ground truth, verified extrinsics or per-beam timestamps. A calibrated independent traversal is the next real-data gate.
+
+**Previously planned:** verify the new durable map registry in the complete Docker/Ubuntu build and add independent, calibrated sensor packet lineage before attempting real-data map promotion. Then add measured fault-injection/power-loss tests and retention policy. The current graph/map quality gate is still synthetic-only; real-world accuracy and FR079 map-frame truth remain unresolved.
 

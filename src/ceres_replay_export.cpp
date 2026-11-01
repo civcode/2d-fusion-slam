@@ -1,6 +1,7 @@
 // Offline Ceres scan-to-frozen-map diagnostics for the read-only replay.
 // No graph factor, map update, ground truth, or frame calibration is inferred.
 #include "slam/datasets/carmen.hpp"
+#include "slam/datasets/fr079_train_only.hpp"
 #include "slam/mapping/map_bundle.hpp"
 #include "slam/matching/geometry.hpp"
 
@@ -76,16 +77,22 @@ void pose(std::ostream& o,const slam::Pose2& p) {
 void emit(const std::vector<slam::datasets::CarmenLaser>& scans,
           const slam::mapping::MapBundle& map,
           const std::shared_ptr<const slam::mapping::DistanceField>& field,
-          std::size_t query_stride,std::size_t beam_stride) {
+          std::size_t query_stride,std::size_t beam_stride,bool heldout_only) {
   std::cout<<std::setprecision(17);
   std::cout<<"{\"format\":\"FUSMATCH_NATIVE1\",\"matcher\":\"ceres_scan_to_edt\","
            <<"\"map_fingerprint\":\""<<map.snapshot->fingerprint()<<"\","
            <<"\"map_frame_id\":\""<<map.provenance.frame_id<<"\","
            <<"\"map_revision\":\""<<map.snapshot->revision()<<"\","
            <<"\"map_origin_verified\":"<<(map.provenance.metric_origin_verified?"true":"false")<<','
-           <<"\"frame_count\":"<<scans.size()<<",\"matches\":[";
+           <<"\"frame_count\":"<<scans.size()
+           <<",\"selection\":\""<<(heldout_only?"fr079_heldout_mod5_verified":"sampled_unrestricted")
+           <<"\",\"query_stride\":"<<query_stride
+           <<",\"beam_stride\":"<<beam_stride<<",\"matches\":[";
   bool first=true;
-  for(std::size_t i=0;i<scans.size();i+=query_stride){
+  std::size_t eligible_seen=0;
+  for(std::size_t i=0;i<scans.size();++i){
+    if(heldout_only && i%5!=0)continue;
+    if((eligible_seen++)%query_stride!=0)continue;
     const auto& scan=scans[i];
     std::vector<Eigen::Vector2d> hits;
     hits.reserve(scan.ranges.size()/beam_stride+1);
@@ -116,17 +123,24 @@ void emit(const std::vector<slam::datasets::CarmenLaser>& scans,
 }
 } // namespace
 int main(int argc,char** argv) {
-  if(argc!=4 && argc!=6 && argc!=8) {
-    std::cerr<<"Usage: slam_ceres_replay_export <map.slammap> <log(.gz)> <scan-stride> [--beam-stride N] [--max-scans N]\n";
+  if(argc<4 || argc>9) {
+    std::cerr<<"Usage: slam_ceres_replay_export <map.slammap> <log(.gz)> <scan-stride> [--beam-stride N] [--max-scans N] [--verified-fr079-holdout]\n";
     return 2;
   }
   try {
     const std::size_t stride=posint(argv[3],128);
     std::size_t beam_stride=4, max_scans=6000;
-    for(int arg=4;arg<argc;arg+=2){
+    bool heldout_only=false;
+    for(int arg=4;arg<argc;){
+      if(std::string_view(argv[arg])=="--verified-fr079-holdout") {
+        if(heldout_only)throw std::invalid_argument("duplicate heldout option");
+        heldout_only=true; ++arg; continue;
+      }
+      if(arg+1>=argc)throw std::invalid_argument("missing option value");
       if(std::string_view(argv[arg])=="--beam-stride")beam_stride=posint(argv[arg+1],64);
       else if(std::string_view(argv[arg])=="--max-scans")max_scans=posint(argv[arg+1],6000);
       else throw std::invalid_argument("unknown CLI option");
+      arg+=2;
     }
     std::ifstream binary(argv[1],std::ios::binary);
     if(!binary)throw std::runtime_error("cannot open frozen map bundle");
@@ -150,7 +164,19 @@ int main(int argc,char** argv) {
       scans.push_back(std::move(*scan));
     }
     if(scans.empty())throw std::runtime_error("no FLASER scans found");
-    emit(scans,map,field,stride,beam_stride);
+    if(heldout_only) {
+      // Verify the *actual* map contents were built from the exact CARMEN
+      // recording with the same default train/holdout split. A filename or
+      // source label by itself would NOT establish nonleakage.
+      if(map.provenance.source_id!="fr079-training-index-mod5-mod6-v1" ||
+         map.provenance.frame_id!="fr079_logged_laser_frame_UNVERIFIED" ||
+         map.provenance.metric_origin_verified)
+        throw std::invalid_argument("map is not the FR079 train-only frozen export");
+      const auto rebuilt=slam::datasets::build_fr079_training_map(scans);
+      if(rebuilt.snapshot->fingerprint()!=map.snapshot->fingerprint())
+        throw std::invalid_argument("frozen map differs from training-only rebuild of this recording");
+    }
+    emit(scans,map,field,stride,beam_stride,heldout_only);
   } catch(const std::exception& error) {
     std::cerr<<"Ceres replay export failed: "<<error.what()<<'\n';return 1;
   }

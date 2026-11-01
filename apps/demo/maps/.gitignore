@@ -6,3 +6,4 @@ CURRENT
 *.slamreplay.json
 *.slamreplay.json
 *.slamreplay.json.ceres.json
+*.holdout-report.json

@@ -106,3 +106,13 @@ keep it bound to host loopback.
 
 The full Ubuntu Docker build and repository-wide CTest matrix remain
 unverified in this environment. GitHub Actions were not run.
+
+## Training-excluded FR079 mode (new)
+
+For a source-rebuilt, strict `index % 5 == 0` held-out evaluation, run
+`apps/demo/match_ceres.py` with `--verified-fr079-holdout`. The native
+exporter recomputes the original train-only map and checks its fingerprint
+before evaluating. A separate JSON summary and a UI banner distinguish
+this mode from the earlier unrestricted sampled Ceres diagnostic run.
+See [the complete held-out contract](heldout-ceres-evaluation.md).
+This strengthens **index separation**, not physical ground-truth accuracy.

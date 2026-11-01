@@ -400,3 +400,31 @@ Chromium displayed actual FR079 accepted-frame diagnostics using a
 fixture-backed API. Complete Ubuntu Docker CTest and independent
 localization accuracy remain **unverified**. No Actions were run or
 modified. [Ceres replay contract](ceres-replay.md).
+
+## 2026-11-01 — Rebuilt-map, training-excluded FR079 Ceres evaluation
+
+The C++ Ceres replay exporter now offers `--verified-fr079-holdout`:
+before producing a result it rebuilds the frozen map using exactly
+`build_fr079_training_map` on the original source recording and compares
+the binary map's content fingerprint and source provenance. It then
+queries only source indices divisible by five (excluded from training),
+with a selectable stride *within* that subset. The Python exporter
+refuses source/replay/map mismatches, verifies the complete expected
+held-out index sequence and exclusively writes both a FUSMATCH1 sidecar
+and a separate FUSHOLDOUT_REPORT1 JSON audit file. A read-only summary
+in the replay UI shows acceptance and EDT geometry diagnostics.
+
+**Real FR079 sample** with held-out stride 12 / beam stride 10:
+52 source-excluded scans, 43 accepted, 5 insufficient support,
+4 no improvement; mean EDT overlap 84.29%, mean initial/final robust
+cost 69.81/66.02, mean EDT distance 0.1352 m.
+These are training-excluded *scan-to-map consistency* measurements,
+not absolute accuracy or ATE/RPE. Neighboring scans are correlated;
+sensor-to-map registration and beam timing remain unverified.
+
+**Focused local checks:** 37/37 Python/HTTP tests; native synthetic
+map rebuild / source exclusion and report regression passed in Release
+and strict GCC warnings+UBSan. The real FR079 run used installed Ceres
+2.2.0. Full Ubuntu Docker image/CTest is still unverified in this
+workspace. No GitHub Actions were run or changed. See
+[held-out Ceres evaluation](heldout-ceres-evaluation.md).

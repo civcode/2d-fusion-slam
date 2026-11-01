@@ -139,13 +139,24 @@ async function refreshMaps(){
   }catch(error){alertUser(`Cannot list maps: ${error.message}`);}
 }
 async function loadSession(name){
-  setPlaying(false);session=null;frame=null;requestId++;$("replay-empty").hidden=true;setControls(false);map=null;mapImage=null;$("overlay-map").value="";render();
+  setPlaying(false);session=null;frame=null;requestId++;$("replay-holdout-report").hidden=true;$("replay-empty").hidden=true;setControls(false);map=null;mapImage=null;$("overlay-map").value="";render();
   if(!name){$("replay-empty").hidden=false;return;}
   try{
     session=await getJSON(`/api/replays/${encodeURIComponent(name)}`);
     ceresAvailable=session.ceres?.status === "valid";
     $("replay-use-ceres").disabled=!ceresAvailable;
     $("replay-use-ceres").checked=false;
+    const holdout=session.ceres?.evaluation;
+    const report=$("replay-holdout-report");
+    report.hidden = !(holdout?.training_split_checked);
+    if (holdout?.training_split_checked) {
+      const counts=holdout.status_counts;
+      report.textContent = `TRAINING-EXCLUDED FR079 SCANS · ${holdout.evaluated_scans} evaluated · `+
+        `${holdout.accepted} accepted (${(100*holdout.acceptance_fraction).toFixed(1)}%) · `+
+        `${(100*holdout.mean_overlap).toFixed(1)}% mean EDT overlap · `+
+        `cost ${holdout.mean_initial_robust_cost.toFixed(2)} → ${holdout.mean_final_robust_cost.toFixed(2)} · `+
+        `no independent ground truth / no per-beam timing`;
+    }
     label("replay-ceres-source",ceresAvailable?
       `${session.ceres.processed} matched scan attempts · ${session.ceres.accepted} accepted · frozen ${session.ceres.map_name}`:
       session.ceres?.status==="invalid" ? session.ceres.error : "No native Ceres sidecar found");

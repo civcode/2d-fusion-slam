@@ -4,3 +4,5 @@
 .ceres-bar label{display:flex;align-items:center;gap:8px;cursor:pointer}.ceres-bar input{accent-color:#f6b35d}.ceres-bar input:disabled{cursor:not-allowed}
 #replay-ceres-source{color:#96aabe;font-size:11px;max-width:480px;overflow-wrap:anywhere}.replay-key.ceres{background:#f6b35d}
 #replay-match-metrics{font-variant-numeric:tabular-nums;white-space:normal;overflow-wrap:anywhere}
+
+.replay-holdout-report{padding:12px 16px;border:1px solid #4c766b;background:#142b2b;color:#a0e9cf;font-size:12px;line-height:1.5}

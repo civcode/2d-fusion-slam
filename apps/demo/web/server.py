@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 from .bundle import BundleError, parse_registry, read_bundle
 from .example import data_dir_or_example
 from .replay import SAFE_NAME as SAFE_REPLAY, read_replay, ReplayError, create_synthetic_replay, validate
-from .ceres_results import SIDE_SUFFIX, MAX_RESULTS, load_results
+from .ceres_results import SIDE_SUFFIX, MAX_RESULTS, load_results, summarize
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / "static"
@@ -104,7 +104,8 @@ class Dashboard:
                     "map_name": map_name, "map_fingerprint": matched["map_fingerprint"],
                     "map_frame_id": matched["map_frame_id"],
                     "independent_ground_truth": False,
-                    "training_independence_verified": False}, rows
+                    "training_independence_verified": False,
+                    "evaluation": summarize(matched)}, rows
         except (OSError, ValueError, ReplayError) as exc:
             return {"status": "invalid", "processed": 0,
                     "error": "Ceres results refused: " + str(exc)}, {}

@@ -67,3 +67,12 @@ then generate a `FUSMATCH1` sidecar with `python3 apps/demo/match_ceres.py`.
 The replay will display genuine Ceres overlap, robust cost, rejected matches
 and optional orange accepted-pose overlays. The browser never runs Ceres.
 See [Ceres replay instructions](../../docs/ceres-replay.md).
+
+## Verified held-out Ceres diagnostics
+
+Use `--verified-fr079-holdout` in `apps/demo/match_ceres.py` to evaluate only
+scans excluded from the actual source-rebuilt training map. The viewer
+shows a held-out summary (status counts, EDT overlap and cost) without
+claiming ground-truth positioning accuracy. The command also emits an
+exclusive `FUSHOLDOUT_REPORT1` JSON report. See
+[held-out evaluation instructions](../../docs/heldout-ceres-evaluation.md).
