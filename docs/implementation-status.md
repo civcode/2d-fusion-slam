@@ -450,3 +450,27 @@ map alignment or a deployed Pi localizer. No GitHub Actions were run.
 
 See [known-map tracker contract](known-map-tracker.md) for usage, exact
 evidence requirements and remaining hardware/software gates.
+
+
+## 2026-11-01 — Exact synthetic ground-truth map accuracy module
+
+- Added `slam_map_accuracy` library and `slam_map_accuracy_cli` to compare
+  authoritative FUSMAP2D occupancy against exact synthetic apartment/warehouse
+  wall surfaces. The evaluator reports classified/unknown confusion counts,
+  occupied IoU/precision/recall/F1, coverage, and symmetric mean/p95
+  nearest-wall distance from an untruncated two-pass Euclidean distance
+  transform. Rotated map grid origins and deterministic cell-center wall
+  rasterization are supported.
+- Fail-closed map/scene source checks require a declared same metric map frame,
+  exact synthetic truth class, matching reference scene ID, and reference
+  scene fully contained by the map extent. Unknown cells penalize wall recall
+  and IoU; undefined measures are JSON null. FR079 reference-grid agreement
+  is **not** reported as independently measured truth.
+- Added a deterministic oracle-pose synthetic ray-insertion fixture, native
+  occupancy accuracy/negative-path tests and a Python JSON CLI smoke test.
+  The fixture tests plumbing and is **not a SLAM estimator benchmark**.
+- **Verification pending:** full checkout CMake build, new native CTest and
+  CLI execution. GitHub source-file integrity was checked after writing,
+  but Docker and GitHub Actions were not run. See
+  [ground-truth map accuracy](map-accuracy.md).
+
