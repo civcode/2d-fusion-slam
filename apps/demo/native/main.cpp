@@ -10,6 +10,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <string>
 #include <string_view>
 #ifdef __unix__
@@ -214,8 +215,8 @@ int main(int argc,char** argv) {
       else if(arg=="--port"){
         const auto val=value();
         std::size_t v=0;
-        if(!decimal(val,v)||v<1||v>65535)
-          throw std::invalid_argument("viewer port must be 1..65535");
+        if(!decimal(val,v)||v>65535)
+          throw std::invalid_argument("viewer port must be 0..65535 (0 chooses a free local port)");
         port=static_cast<unsigned>(v);
       }
       else if(arg=="--host"){
