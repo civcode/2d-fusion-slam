@@ -27,6 +27,9 @@ struct AlignmentHypothesis {
   bool swap_xy{};
   int sign_x{1}, sign_y{1}; // may represent reflection: diagnostic only
   double translation_x{}, translation_y{};
+  [[nodiscard]] bool proper_rotation() const noexcept {
+    return (swap_xy ? -1 : 1) * sign_x * sign_y == 1;
+  }
 };
 struct AlignmentResult {
   AlignmentHypothesis selected;

@@ -26,6 +26,8 @@ TEST_CASE("FR079 map registration separates calibration and held-out queries") {
     }
     scans.push_back(std::move(scan));
   }
+  REQUIRE_FALSE(AlignmentHypothesis{true,1,1,0,0}.proper_rotation());
+  REQUIRE(AlignmentHypothesis{true,1,-1,0,0}.proper_rotation());
   AlignmentOptions options;
   options.beam_stride=1;
   options.calibration_scan_stride=3;

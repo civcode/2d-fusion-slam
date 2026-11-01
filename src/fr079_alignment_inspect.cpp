@@ -22,6 +22,10 @@ std::string gzip_read(const char* path, std::size_t limit) {
 }
 }
 int main(int argc,char** argv) {
+  if(argc==2 && std::string(argv[1])=="--help") {
+    std::cout<<"Usage: slam_fr079_alignment_inspect <fr079-sm.log.gz> <fr079-05cm.carmen.map>\n";
+    return 0;
+  }
   if(argc!=3) {
     std::cerr<<"Usage: slam_fr079_alignment_inspect <fr079-sm.log.gz> <fr079-05cm.carmen.map>\n";
     return 2;
@@ -42,6 +46,7 @@ int main(int argc,char** argv) {
       <<",\"heldout_scans\":"<<result.held_out_scans
       <<",\"swap_xy\":"<<(t.swap_xy?"true":"false")
       <<",\"sign_x\":"<<t.sign_x<<",\"sign_y\":"<<t.sign_y
+      <<",\"proper_rotation\":"<<(t.proper_rotation()?"true":"false")
       <<",\"shift_x_m\":"<<t.translation_x<<",\"shift_y_m\":"<<t.translation_y
       <<",\"train_known_fraction\":"<<result.calibration.known_fraction()
       <<",\"train_near_wall_fraction\":"<<result.calibration.wall_fraction()
