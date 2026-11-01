@@ -1,7 +1,9 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const canvas = $("replay-canvas"), stage = $("replay-stage"), ctx = canvas.getContext("2d");
-let session = null, frame = null, index = -1, requestId = 0, playing = false, previousTick = 0, playTime = 0;
+let session = null, frame = null, index = -1, scanFrames = null;
+let sessionLoadId = 0, overlayLoadId = 0;
+let playing = false, previousTick = 0, playTime = 0;
 let ceresAvailable = false;
 let map = null, mapImage = null, world = {scale: 20, x: 0, y: 0}, drag = null;
 const fmt = (x, digits=2) => Number(x).toFixed(digits);
@@ -14,7 +16,11 @@ async function getJSON(path){
   return body;
 }
 function setPlaying(value){
-  playing = !!value && available(); previousTick = 0; playTime = frame?.t ?? session?.first_t ?? 0;
+  playing = !!value && available() && !!scanFrames;
+  // Replay from frame one after reaching the final timestamp.
+  if(playing && index >= session.frame_count - 1)seek(0);
+  previousTick = 0;
+  playTime = frame?.t ?? session?.first_t ?? 0;
   label("replay-play", playing ? "❚❚ Pause" : "▶ Play");
 }
 function setControls(enabled){
@@ -111,15 +117,13 @@ function updateFrameInfo(){
   }
   $("replay-slider").value=frame.index;
 }
-async function seek(i){
-  if(!session)return;
+function seek(i){
+  // One validated batch per session. Never issue one HTTP request per frame:
+  // otherwise the single-threaded server re-parses the full 3118-frame log
+  // and stale in-flight requests can prevent playback from advancing.
+  if(!session||!scanFrames)return;
   const n=Math.max(0,Math.min(session.frame_count-1,Math.round(i)));
-  const request=++requestId;
-  try{
-    const result=await getJSON(`/api/replays/${encodeURIComponent(session.name)}/frame/${n}`);
-    if(request!==requestId)return;
-    frame=result;index=n;updateFrameInfo();render();
-  }catch(error){if(request===requestId){setPlaying(false);alertUser(`Scan could not be loaded: ${error.message}`);}}
+  frame=scanFrames[n];index=n;updateFrameInfo();render();
 }
 async function refreshSessions(){
   setPlaying(false);
@@ -141,10 +145,26 @@ async function refreshMaps(){
   }catch(error){alertUser(`Cannot list maps: ${error.message}`);}
 }
 async function loadSession(name){
-  setPlaying(false);session=null;frame=null;requestId++;$("replay-holdout-report").hidden=true;$("replay-empty").hidden=true;setControls(false);map=null;mapImage=null;$("overlay-map").value="";render();
+  setPlaying(false);const load=++sessionLoadId;++overlayLoadId;
+  session=null;scanFrames=null;frame=null;index=-1;
+  $("replay-holdout-report").hidden=true;$("replay-empty").hidden=true;setControls(false);map=null;mapImage=null;$("overlay-map").value="";render();
   if(!name){$("replay-empty").hidden=false;return;}
   try{
-    session=await getJSON(`/api/replays/${encodeURIComponent(name)}`);
+    const metadata=await getJSON(`/api/replays/${encodeURIComponent(name)}`);
+    if(load!==sessionLoadId)return;
+    // The frames endpoint verifies the source and any Ceres sidecar once.
+    // Keep every frame locally for immediate, zero-network playback and seeking.
+    alertUser("Loading validated scans for local playback…");
+    const batch=await getJSON(`/api/replays/${encodeURIComponent(name)}/frames`);
+    if(load!==sessionLoadId)return;
+    if(batch.format!=="FUSREPLAYFRAMES1"||
+       batch.source_sha256!==metadata.source.source_sha256||
+       !Array.isArray(batch.frames)||batch.frames.length!==metadata.frame_count||
+       batch.frames[0]?.t!==metadata.first_t||
+       batch.frames.at(-1)?.t!==metadata.last_t){
+      throw Error("source or frame count differs from validated session");
+    }
+    session=metadata;scanFrames=batch.frames;
     ceresAvailable=session.ceres?.status === "valid";
     $("replay-use-ceres").disabled=!ceresAvailable;
     $("replay-use-ceres").checked=false;
@@ -172,15 +192,21 @@ async function loadSession(name){
     label("replay-source-hash",session.source.source_sha256);
     $("replay-slider").max=session.frame_count-1;setControls(true);
     alertUser(session.ceres?.status==="invalid" ? session.ceres.error : "");
-    await seek(0);fit();
-  }catch(error){session=null;setControls(false);alertUser(`Session refused: ${error.message}`);}
+    seek(0);fit();
+  }catch(error){
+    if(load!==sessionLoadId)return;
+    session=null;scanFrames=null;setControls(false);
+    alertUser(`Session refused: ${error.message}`);
+  }
 }
 async function chooseMap(name){
+  const load=++overlayLoadId;
   map=null;mapImage=null;
   label("replay-map-note","No map alignment assumed");render();
   if(!name||!session)return;
   try{
     const m=await getJSON(`/api/maps/${encodeURIComponent(name)}`);
+    if(load!==overlayLoadId)return;
     if(m.frame_id!==session.source.frame_id){
       $("overlay-map").value="";alertUser("Map overlay refused: declared frame labels differ. A coordinate transform must be independently established.");return;
     }
@@ -189,24 +215,33 @@ async function chooseMap(name){
     const url=URL.createObjectURL(await response.blob()), img=new Image();
     try{await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=url;});}
     finally{URL.revokeObjectURL(url);}
+    if(load!==overlayLoadId)return;
     map=m;mapImage=img;
     label("replay-map-note","UNVERIFIED overlay: equal frame labels are not calibration");
     alertUser("Visualization only: matching frame labels do NOT prove scan-to-map alignment or ground truth.");render();
-  }catch(error){$("overlay-map").value="";alertUser(`Map overlay refused: ${error.message}`);}
+  }catch(error){
+    if(load!==overlayLoadId)return;
+    $("overlay-map").value="";alertUser(`Map overlay refused: ${error.message}`);
+  }
 }
 function tick(now){
-  if(playing&&session){
-    if(previousTick){
-      playTime += (now-previousTick)/1000*Number($("replay-speed").value);
-      let next=index;
-      // Look ahead only until the next recorded scan boundary.
-      while(next+1<session.frame_count&&session.trajectory[next+1][0]<=playTime)next++;
-      if(next!==index)seek(next);
-      if(next===session.frame_count-1)setPlaying(false);
+  try {
+    if(playing&&session&&scanFrames){
+      if(previousTick){
+        playTime+=(now-previousTick)/1000*Number($("replay-speed").value);
+        let next=index;
+        // Input timestamps determine playback speed, not HTTP latency.
+        while(next+1<session.frame_count&&session.trajectory[next+1][0]<=playTime)next++;
+        if(next!==index)seek(next); // immediate, synchronous local seek
+        if(next===session.frame_count-1)setPlaying(false);
+      }
+      previousTick=now;
     }
-    previousTick=now;
+  }catch(error){
+    setPlaying(false);alertUser("Replay animation failed: "+error.message);
+  }finally{
+    requestAnimationFrame(tick);
   }
-  requestAnimationFrame(tick);
 }
 $("replay-refresh").addEventListener("click",()=>{refreshSessions();refreshMaps();});
 $("session-list").addEventListener("change",event=>loadSession(event.target.value));
