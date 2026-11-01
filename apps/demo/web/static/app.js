@@ -228,11 +228,41 @@ $("refresh").addEventListener("click", refresh);
 $("fit").addEventListener("click", fitMap);
 $("zoom-in").addEventListener("click", () => { const b = stage.getBoundingClientRect(); zoomAt(1.4, b.left + b.width/2, b.top + b.height/2); });
 $("zoom-out").addEventListener("click", () => { const b = stage.getBoundingClientRect(); zoomAt(1/1.4, b.left + b.width/2, b.top + b.height/2); });
-stage.addEventListener("wheel", (event) => { if (!mapImage) return; event.preventDefault(); zoomAt(event.deltaY < 0 ? 1.14 : 1/1.14, event.clientX, event.clientY); }, {passive:false});
-stage.addEventListener("pointerdown", (event) => { if (!mapImage) return; drag = {startX:event.clientX, startY:event.clientY, x:view.x, y:view.y, moved:false}; stage.setPointerCapture(event.pointerId); });
-stage.addEventListener("pointermove", (event) => { if (!drag) return; const dx=event.clientX-drag.startX, dy=event.clientY-drag.startY; if (Math.abs(dx)+Math.abs(dy)>5) drag.moved=true; if (drag.moved) {view.x=drag.x+dx; view.y=drag.y+dy; render();} });
-stage.addEventListener("pointerup", (event) => { if (!drag) return; const moved=drag.moved; drag=null; if (!moved) inspectCell(hitTest(event.clientX, event.clientY)); });
-stage.addEventListener("pointercancel", () => { drag=null; });
+stage.addEventListener("wheel", (event) => {
+  if (!mapImage) return;
+  event.preventDefault();
+  // A held middle button is a pan, not zoom. Horizontal-only wheel input
+  // (deltaY === 0) must not be mistaken for a downward wheel step either.
+  if (drag?.button === 1 || (event.buttons & 4) || event.deltaY === 0) return;
+  zoomAt(event.deltaY < 0 ? 1.14 : 1/1.14, event.clientX, event.clientY);
+}, {passive:false});
+// Cancel native middle-button autoscroll/clipboard paste on both event paths.
+for (const type of ["mousedown", "auxclick"]) {
+  stage.addEventListener(type, (event) => { if (event.button === 1) event.preventDefault(); });
+}
+stage.addEventListener("pointerdown", (event) => {
+  if (event.button === 1) event.preventDefault();
+  if (!mapImage || drag || (event.button !== 0 && event.button !== 1)) return;
+  drag = {pointerId:event.pointerId, button:event.button,
+          startX:event.clientX, startY:event.clientY, x:view.x, y:view.y, moved:false};
+  stage.setPointerCapture(event.pointerId);
+});
+stage.addEventListener("pointermove", (event) => {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const dx=event.clientX-drag.startX, dy=event.clientY-drag.startY;
+  if (Math.abs(dx)+Math.abs(dy)>5) drag.moved=true;
+  if (drag.moved) {view.x=drag.x+dx; view.y=drag.y+dy; render();}
+});
+function endPan(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const inspect = event.type === "pointerup" && drag.button === 0 && !drag.moved;
+  drag = null;
+  if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
+  if (inspect) inspectCell(hitTest(event.clientX, event.clientY));
+}
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  stage.addEventListener(type, endPan);
+}
 stage.addEventListener("keydown", (event) => { if (event.key.toLowerCase() === "f") {fitMap(); event.preventDefault();} });
 window.addEventListener("resize", syncCanvas);
 syncCanvas();

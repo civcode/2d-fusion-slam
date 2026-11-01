@@ -23,7 +23,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "demo"))
 from web.example import create_example_bundle
-from web.bundle import read_bundle
+from web.bundle import MapBundle, read_bundle
+from test_synthetic_replay import verify_workshop_replay
 from web.replay import create_synthetic_replay
 
 
@@ -86,6 +87,8 @@ class NativeViewerApi(unittest.TestCase):
     def api(self, path):
         with self.get(path) as response:
             self.assertIn("object-src", response.headers["Content-Security-Policy"])
+            self.assertIn("img-src 'self' data: blob:;",
+                          response.headers["Content-Security-Policy"])
             self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
             return json.load(response)
 
@@ -134,6 +137,10 @@ class NativeViewerApi(unittest.TestCase):
                             ("/replay.css", b"replay")):
             with self.get(route) as r:
                 self.assertIn(mark.lower(), r.read().lower())
+                # Map/replay pages decode fetched PNGs using blob object URLs.
+                policy = r.headers["Content-Security-Policy"]
+                self.assertIn("img-src 'self' data: blob:;", policy)
+                self.assertIn("script-src 'self';", policy)
 
     def test_full_recorded_replay_and_ceres_sidecar(self):
         rows = self.api("/api/replays")
@@ -256,8 +263,26 @@ class NativeViewerApi(unittest.TestCase):
         m = self.api("/api/maps/sample-synthetic-workshop.slammap")
         self.assertEqual(m["truth_class"], "synthetic_exact")
         self.assertFalse(m["metric_origin_verified"])
+        bundle = MapBundle(create_example_bundle())
+        self.assertEqual(m["fingerprint"], bundle.metadata()["fingerprint"])
         self.assertEqual(self.api("/api/replays")["sessions"],
                          ["sample-synthetic-workshop.slamreplay.json"])
+        name = "sample-synthetic-workshop.slamreplay.json"
+        metadata = self.api(f"/api/replays/{name}")
+        expected = create_synthetic_replay()
+        self.assertEqual(metadata["source"], expected["source"])
+        self.assertEqual(metadata["frame_count"], len(expected["frames"]))
+        frames = [self.api(f"/api/replays/{name}/frame/{i}")
+                  for i in range(metadata["frame_count"])]
+        verify_workshop_replay(self, frames, bundle)
+        # Both implementations must produce the same scan geometry and poses.
+        for actual, target in zip(frames, expected["frames"]):
+            self.assertEqual(actual["hit_count"], target["hit_count"])
+            for value, truth in zip(actual["pose"], target["pose"]):
+                self.assertAlmostEqual(value, truth, places=9)
+            for point, truth in zip(actual["points"], target["points"]):
+                for value, component in zip(point, truth):
+                    self.assertAlmostEqual(value, component, delta=1e-5)
 
 
 if __name__ == "__main__":

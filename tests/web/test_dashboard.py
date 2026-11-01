@@ -143,6 +143,14 @@ class HTTPTests(unittest.TestCase):
     def fetch(self,path, method="GET"):
         return request.urlopen(request.Request(self.url+path,method=method),timeout=5)
 
+    def test_page_policy_allows_blob_map_images(self):
+        for path in ("/", "/replay"):
+            with self.fetch(path) as response:
+                policy = response.headers["Content-Security-Policy"]
+                self.assertIn("img-src 'self' data: blob:;", policy)
+                self.assertIn("script-src 'self';", policy)
+                self.assertIn("object-src 'none';", policy)
+
     def test_live_http_map_registry_and_cell(self):
         with self.fetch("/api/maps") as r:
             index=json.load(r)

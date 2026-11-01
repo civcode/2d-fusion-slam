@@ -214,8 +214,38 @@ $("replay-step-next").addEventListener("click",()=>{setPlaying(false);seek(index
 $("replay-slider").addEventListener("input",event=>{setPlaying(false);seek(Number(event.target.value));});
 window.addEventListener("keydown",event=>{if(event.code==="Space"&&!(["INPUT","SELECT","TEXTAREA","BUTTON"].includes(document.activeElement.tagName))){event.preventDefault();setPlaying(!playing);}});
 window.addEventListener("resize",render);
-stage.addEventListener("wheel",event=>{if(!available())return;event.preventDefault();const rect=stage.getBoundingClientRect();const x=event.clientX-rect.left,y=event.clientY-rect.top;const next=Math.max(.1,Math.min(1000,world.scale*(event.deltaY<0?1.18:1/1.18)));const factor=next/world.scale;world.x=x-(x-world.x)*factor;world.y=y-(y-world.y)*factor;world.scale=next;render();},{passive:false});
-stage.addEventListener("pointerdown",event=>{drag={x:event.clientX,y:event.clientY,ox:world.x,oy:world.y};stage.setPointerCapture(event.pointerId);});
-stage.addEventListener("pointermove",event=>{if(drag){world.x=drag.ox+event.clientX-drag.x;world.y=drag.oy+event.clientY-drag.y;render();}});
-stage.addEventListener("pointerup",()=>{drag=null;});stage.addEventListener("pointercancel",()=>{drag=null;});
+stage.addEventListener("wheel", event => {
+  if (!available()) return;
+  event.preventDefault();
+  // Do not zoom during middle-button panning or on horizontal-only input.
+  if (drag?.button === 1 || (event.buttons & 4) || event.deltaY === 0) return;
+  const rect=stage.getBoundingClientRect();
+  const x=event.clientX-rect.left, y=event.clientY-rect.top;
+  const next=Math.max(.1,Math.min(1000,world.scale*(event.deltaY<0?1.18:1/1.18)));
+  const factor=next/world.scale;
+  world.x=x-(x-world.x)*factor;world.y=y-(y-world.y)*factor;world.scale=next;render();
+}, {passive:false});
+// Cancel native middle-button autoscroll/clipboard paste on both event paths.
+for (const type of ["mousedown", "auxclick"]) {
+  stage.addEventListener(type, event => { if (event.button === 1) event.preventDefault(); });
+}
+stage.addEventListener("pointerdown", event => {
+  if (event.button === 1) event.preventDefault();
+  if (!available() || drag || (event.button !== 0 && event.button !== 1)) return;
+  drag={pointerId:event.pointerId, button:event.button,
+        x:event.clientX,y:event.clientY,ox:world.x,oy:world.y};
+  stage.setPointerCapture(event.pointerId);
+});
+stage.addEventListener("pointermove", event => {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  world.x=drag.ox+event.clientX-drag.x;world.y=drag.oy+event.clientY-drag.y;render();
+});
+function endPan(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  drag=null;
+  if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
+}
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  stage.addEventListener(type, endPan);
+}
 refreshSessions();refreshMaps();requestAnimationFrame(tick);

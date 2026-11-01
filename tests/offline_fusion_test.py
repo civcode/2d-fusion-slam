@@ -5,6 +5,7 @@ Never claims the synthetic experiment is independent real hardware evidence.
 """
 from __future__ import annotations
 import json
+import math
 import pathlib
 import subprocess
 import sys
@@ -43,6 +44,8 @@ class OfflineFusionExperiment(unittest.TestCase):
         self.assertEqual(len(pose_export["timestamps_ns"]), report["frames"])
         self.assertEqual(len(pose_export["synthetic_truth_for_scoring"]),
                          report["frames"])
+        if scene == "warehouse":
+            self.assert_warehouse_route_clear(pose_export["synthetic_truth_for_scoring"])
         self.assertEqual(set(pose_export["paths"]), set(report["results"]))
         for path in pose_export["paths"].values():
             self.assertEqual(len(path), report["frames"])
@@ -51,6 +54,14 @@ class OfflineFusionExperiment(unittest.TestCase):
         self.assertGreater(report["heldout_attempted"], 10)
         self.assertEqual(report["heldout_attempted"],
                          report["heldout_accepted"] + report["heldout_rejected"])
+        for prefix in ("heldout", "lidar_only"):
+            reasons = report[prefix + "_rejection_reasons"]
+            self.assertEqual(sum(reasons.values()), report[prefix + "_rejected"])
+            self.assertTrue(all(isinstance(count, int) and count > 0 for count in reasons.values()))
+            self.assertLessEqual(set(reasons), {"insufficient_support", "degenerate",
+                                               "no_improvement", "invalid_input", "qualification_gate"})
+        self.assertEqual(report["lidar_only_accepted"] + report["lidar_only_rejected"],
+                         report["frames"] - 1)
         self.assertIn(report["matcher"],
                       ("ceres", "geometry_reference_fallback"))
         self.assertEqual(report["loop_measurements"], "none")
@@ -60,6 +71,8 @@ class OfflineFusionExperiment(unittest.TestCase):
         self.assertLess(report["gyro_bias_estimate_rad_s"], .04)
 
         labels = ("wheel_only", "lidar_only", "gyro_wheel", "fused_scan_matched")
+        if report["graph_status"] != "gtsam_not_built":
+            labels += ("graph_optimized",)
         for label in labels:
             with self.subTest(label=label):
                 entry = report["results"][label]
@@ -94,6 +107,25 @@ class OfflineFusionExperiment(unittest.TestCase):
             self.assertTrue((folder / "graph_optimized.slammap").is_file())
             self.assertIn("gtsam_", report["graph_status"])
         return report, (folder / "fusion_report.json").read_bytes()
+
+    def assert_warehouse_route_clear(self, poses):
+        # Independent shelf-solid check, including motion between scan poses.
+        # Protect both a 0.2 m-radius base and the offset laser origin.
+        shelves = [(x, x+1, 4., 16.) for x in (6., 12., 18., 24.)]
+        for first, second in zip(poses, poses[1:]):
+            steps = max(1, math.ceil(math.hypot(second[0]-first[0], second[1]-first[1])/.02))
+            for i in range(steps + 1):
+                u = i / steps
+                x, y = (first[j] + u*(second[j]-first[j]) for j in range(2))
+                self.assertGreaterEqual(min(x, y, 30-x, 20-y), .2)
+                for left, right, bottom, top in shelves:
+                    distance = math.hypot(max(left-x, 0, x-right), max(bottom-y, 0, y-top))
+                    self.assertGreaterEqual(distance, .2, "reference robot intersects a shelf")
+        for x, y, yaw in poses:
+            lx = x + .12*math.cos(yaw) - .01*math.sin(yaw)
+            ly = y + .12*math.sin(yaw) + .01*math.cos(yaw)
+            self.assertTrue(0 < lx < 30 and 0 < ly < 20)
+            self.assertFalse(any(l <= lx <= r and b <= ly <= t for l, r, b, t in shelves))
 
     def test_apartment(self):
         with tempfile.TemporaryDirectory() as root:

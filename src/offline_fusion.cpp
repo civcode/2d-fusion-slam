@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
@@ -57,7 +58,9 @@ struct Motion {
 Motion at_time(bool warehouse,double seconds_after_start) {
   const double active=std::max(0.0,seconds_after_start-.30);
   const double period=warehouse?56.0:20.0;
-  const double rx=warehouse?13.0:1.35,ry=warehouse?8.0:1.35;
+  // Keep the warehouse ellipse outside the shelf solids (y=4..16).
+  // The old 13x8 m radii cut through the outer shelves near the corners.
+  const double rx=warehouse?14.0:1.35,ry=warehouse?9.0:1.35;
   const double cx=warehouse?15.0:2.5,cy=warehouse?10.0:3.0;
   const double w=2*kPi/period,phase=w*active;
   const double s=std::sin(phase),c=std::cos(phase);
@@ -236,7 +239,29 @@ struct Matched {
   Mask accepted_mask; // passed *all* source/rank/innovation gates
   std::size_t attempted{},accepted{},rejected{};
   std::string backend;
+  std::map<std::string,std::size_t> rejections;
 };
+std::string rejection_reason(slam::matching::MatchStatus status) {
+  using slam::matching::MatchStatus;
+  switch(status) {
+    case MatchStatus::insufficient_support:return "insufficient_support";
+    case MatchStatus::degenerate:return "degenerate";
+    case MatchStatus::no_improvement:return "no_improvement";
+    case MatchStatus::invalid_input:return "invalid_input";
+    case MatchStatus::accepted:return "qualification_gate";
+  }
+  throw std::logic_error("unknown matcher status");
+}
+void write_rejections(std::ostream& out,const char* name,
+                      const std::map<std::string,std::size_t>& counts) {
+  out<<"\n\""<<name<<"\":{";
+  bool comma=false;
+  for(const auto& [reason,count]:counts) {
+    if(comma)out<<',';
+    out<<'\"'<<reason<<"\":"<<count;comma=true;
+  }
+  out<<"},";
+}
 slam::matching::MatchResult match(
     std::shared_ptr<const slam::mapping::DistanceField> field,
     const std::vector<Eigen::Vector2d>& points,Pose2 seed) {
@@ -287,7 +312,10 @@ Matched match_heldout(const Simulation& sim,const Prepared& p) {
                                    slam::inverse(kBaseFromLaser));
       result.accepted_mask[i]=true;
       ++result.accepted;
-    } else ++result.rejected;
+    } else {
+      ++result.rejected;
+      ++result.rejections[rejection_reason(candidate.status)];
+    }
     result.outcomes[i]=std::move(candidate);
   }
   return result;
@@ -296,6 +324,7 @@ struct LidarOnly {
   std::vector<Pose2> poses;
   Mask mapped;
   std::size_t accepted{},rejected{};
+  std::map<std::string,std::size_t> rejections;
 };
 LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor) {
   LidarOnly out;
@@ -320,6 +349,7 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor)
     } else {
       out.poses.push_back(out.poses.back());
       ++out.rejected;
+      ++out.rejections[rejection_reason(candidate.status)];
       // An unlocalized moving scan is never inserted into the occupancy map.
     }
   }
@@ -520,8 +550,10 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"heldout_accepted\":"<<matched.accepted<<","
      <<"\n\"heldout_rejected\":"<<matched.rejected<<","
      <<"\n\"lidar_only_accepted\":"<<lidar.accepted<<","
-     <<"\n\"lidar_only_rejected\":"<<lidar.rejected<<","
-     <<"\n\"graph_status\":\""<<graph.status<<"\","
+     <<"\n\"lidar_only_rejected\":"<<lidar.rejected<<",";
+  write_rejections(out,"heldout_rejection_reasons",matched.rejections);
+  write_rejections(out,"lidar_only_rejection_reasons",lidar.rejections);
+  out<<"\n\"graph_status\":\""<<graph.status<<"\","
      <<"\n\"loop_measurements\":\""<<(synthetic_loops?
           "independently_simulated_relative_pose":"none")<<"\","
      <<"\n\"graph_loop_candidates\":"<<graph.loop_candidates<<","

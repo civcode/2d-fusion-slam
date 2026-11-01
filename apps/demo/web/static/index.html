@@ -53,12 +53,12 @@
         <section class="content-grid">
           <div class="map-panel">
             <div class="panel-header"><div><div class="panel-kicker">SPATIAL VIEW</div><h2 id="map-title">Occupancy grid</h2></div><div class="map-tools"><button id="fit" class="tool-button" title="Fit map to view" type="button">Fit map</button><button id="zoom-out" class="tool-button square" title="Zoom out" aria-label="Zoom out" type="button">−</button><span id="zoom-readout" class="zoom-readout">—</span><button id="zoom-in" class="tool-button square" title="Zoom in" aria-label="Zoom in" type="button">+</button></div></div>
-            <div id="map-stage" class="map-stage" tabindex="0" aria-label="Interactive map; drag to pan, scroll to zoom, click to inspect a cell">
+            <div id="map-stage" class="map-stage" tabindex="0" aria-label="Interactive map; middle-drag to pan, scroll to zoom, left-click to inspect a cell">
               <canvas id="map-canvas" role="img" aria-label="Rendered authoritative occupancy map"></canvas>
               <div id="map-empty" class="map-empty"><div class="empty-graphic"><span>◈</span><span class="orbit"></span></div><h3>No map selected</h3><p>Place a <code>.slammap</code> export in your map directory, then refresh.</p></div>
               <div class="map-overlay" id="map-overlay" hidden><span class="overlay-dot"></span> GRID FRAME · Y UP</div>
             </div>
-            <div class="map-foot"><div class="legend"><span><i class="key occupied"></i> Occupied</span><span><i class="key free"></i> Free</span><span><i class="key uncertain"></i> Neutral</span><span><i class="key unknown"></i> Unknown</span></div><div class="map-hint">Scroll to zoom · Drag to pan · Click a cell</div></div>
+            <div class="map-foot"><div class="legend"><span><i class="key occupied"></i> Occupied</span><span><i class="key free"></i> Free</span><span><i class="key uncertain"></i> Neutral</span><span><i class="key unknown"></i> Unknown</span></div><div class="map-hint">Scroll to zoom · Middle-drag to pan · Left-click a cell</div></div>
           </div>
           <aside class="inspector">
             <section class="detail-card"><div class="panel-kicker">MAP METADATA</div><h2>Source &amp; frame</h2><dl class="detail-list"><div><dt>Frame ID</dt><dd id="meta-frame">—</dd></div><div><dt>Source</dt><dd id="meta-source">—</dd></div><div><dt>Origin (x, y)</dt><dd id="meta-origin">—</dd></div><div><dt>Grid yaw</dt><dd id="meta-yaw">—</dd></div><div><dt>Fingerprint</dt><dd id="meta-fingerprint" class="monospace">—</dd></div><div><dt>Metric origin</dt><dd id="meta-calibrated">Unverified</dd></div></dl></section>

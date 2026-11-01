@@ -3,6 +3,8 @@ services:
     build:
       context: .
       target: demo
+      args:
+        SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-2}
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
@@ -16,5 +18,9 @@ services:
     build:
       context: .
       target: test
+      args:
+        SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-2}
+    environment:
+      CTEST_PARALLEL_LEVEL: ${SLAM_DOCKER_JOBS:-2}
     init: true
     restart: "no"

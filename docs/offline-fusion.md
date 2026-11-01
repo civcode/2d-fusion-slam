@@ -66,7 +66,9 @@ The CLI refuses an existing output directory; choose a new path for each run.
   provisional LD19 packet timing would be refused for mapping.
 
 The synthetic motion is a smooth repeatable interior-room circle in the
-apartment and a perimeter ellipse in the warehouse. This **is not a
+apartment and a 14 x 9 m-radius perimeter ellipse in the warehouse. The
+warehouse route is regression-checked against shelf collisions; the former
+13 x 8 m ellipse intersected shelves and is no longer used. This **is not a
 complete environment exploration/coverage guarantee**, and occupancy
 quality may remain low because some walls are never observed.
 
@@ -123,7 +125,7 @@ The new directory contains:
 | `fused_scan_matched.slammap` | Gyro + wheel + accepted Ceres/reference scan corrections |
 | `graph_optimized.slammap` | Optional GTSAM-optimized map when GTSAM is compiled |
 | `trajectories.json` | FUSPOSES1 timestamped estimated pose paths, nanosecond timestamps as strings and separately labeled synthetic reference for scoring |
-| `fusion_report.json` | FUSFUSION1 with every method's fixed-gauge translation RMSE, p95, yaw RMSE and embedded independent FUSMAPACC1 ground-truth metrics |
+| `fusion_report.json` | FUSFUSION1 with fixed-gauge translation RMSE/p95, yaw RMSE, FUSMAPACC1 metrics, and held-out/LiDAR-only rejection-reason histograms |
 
 The generated map's provenance is `synthetic_estimated`, and the
 separate **reference** is `synthetic_exact`. Evaluation uses the exact
@@ -159,9 +161,11 @@ GitHub Actions need to be run.
   not a low-latency Pi SLAM daemon. The LiDAR-only baseline assumes
   stationary scans and carries known limitations.
 
-**Verification:** Source and tests are committed, but the current
-tool environment lacks a full local repository checkout and the
-optional installed Ceres/GTSAM headers. The complete CMake/CTest and
-native CLI runs need to be executed on a compatible workstation
-before publishing quantitative results. A full absence of numeric
-results is preferable to invented benchmark values.
+**Local verification:** Executed in Ubuntu 24.04 Docker with Ceres 2.2 and
+GTSAM 4.2; all 31 CTests passed with 28-way parallelism. Both scenes were run
+with and without the extra simulated loop sensor. All 20 exported maps were
+re-scored through the accuracy CLI, trajectory errors were independently
+recomputed, and primary outputs repeated byte-for-byte. Results reveal failed
+LiDAR-only bootstrap and poor warehouse map accuracy despite successful program
+execution. See [measured results and limitations](slam-evaluation.md). These
+runs do not consume the web UI workshop replay and do not validate hardware.

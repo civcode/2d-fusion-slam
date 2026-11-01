@@ -131,7 +131,7 @@ void reply(int fd,const Response& r){
       <<"\r\nConnection: close\r\nCache-Control: no-store\r\n"
       <<"X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n"
       <<"Referrer-Policy: no-referrer\r\nCross-Origin-Resource-Policy: same-origin\r\n"
-      <<"Content-Security-Policy: default-src 'self'; img-src 'self' data:; "
+      <<"Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; "
         "style-src 'self'; script-src 'self'; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'\r\n\r\n";
   const auto bytes=head.str()+r.body;

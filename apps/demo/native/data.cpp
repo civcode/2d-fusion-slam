@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -267,7 +268,31 @@ mapping::MapBundle sample_map() {
   return {mapping::MapSnapshot::from_cells(cfg,1,std::move(cells)),
     {"synthetic_demo_frame","schematic_virtual_workshop","synthetic_exact",false}};
 }
-Json sample_replay() {
+// Synthetic fixture only: identity-frame grid and a unit ray starting inside.
+// DDA visits cells in distance order; unknown cells do not invent returns.
+// Corner ties enter the diagonal cell, matching the Python fixture.
+std::optional<double> sample_ray_distance(const mapping::MapSnapshot& map,
+                                         double x,double y,double dx,double dy) {
+  const auto& cfg=map.config();
+  const double r=cfg.resolution_m,inf=std::numeric_limits<double>::infinity();
+  int ix=static_cast<int>(std::floor(x/r)),iy=static_cast<int>(std::floor(y/r));
+  const int sx=dx>0?1:-1,sy=dy>0?1:-1;
+  double tx=std::abs(dx)>1e-12?((ix+(dx>0))*r-x)/dx:inf;
+  double ty=std::abs(dy)>1e-12?((iy+(dy>0))*r-y)/dy:inf;
+  const double delta_x=std::abs(dx)>1e-12?r/std::abs(dx):inf;
+  const double delta_y=std::abs(dy)>1e-12?r/std::abs(dy):inf;
+  double distance=0;
+  while(ix>=0&&iy>=0&&ix<static_cast<int>(cfg.width)&&iy<static_cast<int>(cfg.height)){
+    const auto& cell=map.cells()[static_cast<std::size_t>(iy)*cfg.width+static_cast<std::size_t>(ix)];
+    if(cell.observed&&cell.log_odds>0)return distance;
+    distance=std::min(tx,ty);
+    const bool step_x=tx<=ty,step_y=ty<=tx;
+    if(step_x){ix+=sx;tx+=delta_x;}
+    if(step_y){iy+=sy;ty+=delta_y;}
+  }
+  return std::nullopt;
+}
+Json sample_replay(const mapping::MapSnapshot& map) {
   Json root=Json::dict(),source=Json::dict(),frames=Json::list();
   source.object={{"dataset",string("SYNTHETIC virtual workshop (not recorded LiDAR)")},
     {"frame_id",string("synthetic_demo_frame")},
@@ -275,34 +300,29 @@ Json sample_replay() {
     {"timestamp_kind",string("synthetic_scan_level")},
     {"per_beam_time_known",Json::boolean(false)},
     {"map_alignment_verified",Json::boolean(false)},
-    {"source_sha256",string(sha256("synthetic virtual workshop replay v1"))}};
+    {"source_sha256",string(sha256("synthetic virtual workshop replay v2 grid-raycast safe-route"))}};
+  // Seven scan-level poses per segment, with >= 0.2 m body clearance.
+  constexpr std::array<std::array<double,2>,8> route{{
+    {2.5,1.2},{8.5,1.2},{8.5,5.9},{9.5,5.9},
+    {9.5,7.8},{6.5,7.8},{6.5,5.9},{2.5,5.9}}};
   for(std::size_t i=0;i<56;++i){
-    const double angle=2.0*std::numbers::pi*static_cast<double>(i)/56;
-    const double x=6+2.25*std::cos(angle),y=4.5+1.55*std::sin(angle);
-    const double yaw=std::atan2(1.55*std::cos(angle),-2.25*std::sin(angle));
+    const auto& start=route[i/7];const auto& end=route[(i/7+1)%route.size()];
+    const double fraction=static_cast<double>(i%7)/7;
+    const double x=start[0]+fraction*(end[0]-start[0]);
+    const double y=start[1]+fraction*(end[1]-start[1]);
+    const double yaw=std::atan2(end[1]-start[1],end[0]-start[0]);
     Json p=Json::list(),points=Json::list(),f=Json::dict();
     p.array={jreal(x),jreal(y),jreal(yaw)};
     for(std::size_t k=0;k<64;++k){
       const double ray=-std::numbers::pi/2+std::numbers::pi*static_cast<double>(k)/64;
       const double a=yaw+ray,dx=std::cos(a),dy=std::sin(a);
-      double distance=5;
-      for(const auto wall: {0.7,11.3}){
-        if(std::abs(dx)>1e-10){
-          const auto t=(wall-x)/dx;
-          if(t>0&&y+t*dy>=.7&&y+t*dy<=8.3)distance=std::min(distance,t);
-        }
-      }
-      for(const auto wall: {0.7,8.3}){
-        if(std::abs(dy)>1e-10){
-          const auto t=(wall-y)/dy;
-          if(t>0&&x+t*dx>=.7&&x+t*dx<=11.3)distance=std::min(distance,t);
-        }
-      }
-      Json hit=Json::list();hit.array={jreal(distance*std::cos(ray)),jreal(distance*std::sin(ray))};
+      const auto distance=sample_ray_distance(map,x,y,dx,dy);
+      if(!distance)continue; // Leaving the known grid is not a measured hit.
+      Json hit=Json::list();hit.array={jreal(*distance*std::cos(ray)),jreal(*distance*std::sin(ray))};
       points.array.push_back(std::move(hit));
     }
     f.object={{"index",num(i)},{"t",jreal(i*.12)},{"pose",p},{"odom",p},
-      {"beam_count",num(64)},{"hit_count",num(64)},{"points",points},{"matching",Json{}}};
+      {"beam_count",num(64)},{"hit_count",num(points.array.size())},{"points",points},{"matching",Json{}}};
     frames.array.push_back(std::move(f));
   }
   root.object={{"format",string("FUSREPLAY1")},{"source",source},{"frames",frames}};
@@ -372,7 +392,7 @@ ViewerData::ViewerData(std::filesystem::path maps,std::filesystem::path replays,
         any=true;break;
       }
     }
-    if(!any){synthetic_map_=sample_map();synthetic_replay_=sample_replay();}
+    if(!any){synthetic_map_=sample_map();synthetic_replay_=sample_replay(*synthetic_map_->snapshot);}
   }
 }
 mapping::MapBundle ViewerData::map(const std::string& name) const {

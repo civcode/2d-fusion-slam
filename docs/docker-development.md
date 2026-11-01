@@ -1,177 +1,109 @@
 # Docker development with Ubuntu APT dependencies
 
-**Goal:** Build and test the C++ SLAM project without installing Ceres,
-GTSAM, Catch2, Eigen3, CMake or a compiler on the host. Docker is the only
-required host tool. **GitHub Actions stays manual-only**.
+Build and test without installing a host compiler or SLAM dependencies.
+Docker is the only required host tool; GitHub Actions remains manual-only.
 
-## Why use APT instead of the dependency Release?
+## Build and test
 
-APT is the better default *inside* an Ubuntu Docker image. It installs
-the libraries and their transitive system dependencies together, uses
-standard CMake package locations, and avoids loading the separately
-compiled Debian 13/GCC 14 development bundle into Ubuntu 24.04.
-
-The Ubuntu 24.04 (Noble) package versions are:
-
-| Dependency | Ubuntu 24.04 APT version | Existing development baseline |
-| --- | --- | --- |
-| Ceres | 2.2.x (`libceres-dev`) | 2.2.0 |
-| GTSAM | 4.2.x (`libgtsam-dev`) | 4.3.0 |
-| Catch2 | 3.4.x (`catch2`) | 3.16.1 |
-| Eigen3 | Ubuntu's `libeigen3-dev` | 3.4.0 |
-
-Package references:
-[Ubuntu GTSAM](https://packages.ubuntu.com/noble/libgtsam-dev),
-[Ubuntu Ceres](https://packages.ubuntu.com/noble/libceres-dev),
-[Ubuntu Catch2](https://packages.ubuntu.com/noble/catch2).
-
-**The Docker/apt build is a compatibility matrix, not a replacement for
-the original-version regression.** The native default still expects
-GTSAM 4.3 and Catch2 3.16. The older distribution versions may expose
-differences; the complete Docker CTest run will detect failures and must
-pass before claiming compatibility.
-
-## Root Dockerfile and Compose (matching hybrid-astar-cpp)
-
-The root [Dockerfile](../Dockerfile) has four targets:
-`dependencies` (Ubuntu APT native libraries),
-`build` (C++ compilation with all optional solvers required),
-`test` (manual CTest command), and
-`demo` (the **default**, small Python-only read-only map viewer).
-The older `docker/Dockerfile.apt` has been removed. Its dependency
-installation remains in the root `dependencies` stage.
+From the repository root, use 28 parallel build/test jobs:
 
 ```sh
-# Browser demo works with an empty map directory: synthetic example by default.
-# Optionally place your real *.slammap exports in apps/demo/maps.
-docker compose up --build demo
-# Open http://127.0.0.1:8765
+SLAM_DOCKER_JOBS=28 docker compose run --build --rm test
 
-# Native C++ plus Python tests, opt-in only:
-docker compose run --build --rm test
-
-# Without Compose:
-docker build --target demo -t fusion-slam:demo .
-docker run --rm -p 127.0.0.1:8765:8765 \
-  -v "$PWD/apps/demo/maps:/maps:ro" fusion-slam:demo
-docker build --target test -t fusion-slam:test .
-docker run --rm fusion-slam:test
+# Or without Compose:
+docker build --build-arg SLAM_DOCKER_JOBS=28 --target test -t fusion-slam:test .
+docker run --rm --init fusion-slam:test
 ```
 
-The `test` service is behind a Compose profile and does **not**
-start with `docker compose up demo`. If no map exists, the demo
-displays an explicitly labeled synthetic map without writing to the
-mounted map directory; source data and the CURRENT registry take precedence. The `demo` image doesn't
-need Ceres/GTSAM/Catch2 to **view** existing binary maps; the native
-`build`/`test` targets require them. The demo service binds
-host port 8765 to loopback and mounts files read-only. Do not expose
-this unauthenticated viewer publicly.
+The build argument controls CMake build parallelism and sets the test image's
+`CTEST_PARALLEL_LEVEL`. Override test parallelism at runtime with
+`docker run --rm -e CTEST_PARALLEL_LEVEL=28 fusion-slam:test`.
+Without an override, builds default to two jobs.
 
-The existing development wrapper remains useful for repeated native
-builds with a bind-mounted checkout, and now builds the root
-`dependencies` target rather than the removed Dockerfile.
+For incremental development, the wrapper mounts the checkout read-only and
+writes build outputs to Git-ignored `.build/docker-ubuntu24.04-apt/`, using
+the host UID/GID:
 
-## Build/test commands
-
-Run these from a clone of `civcode/2d-fusion-slam`. On a Linux host
-(or inside WSL2 with Docker Desktop/Engine):
-
-~~~sh
-# First image build: installs packages only, not the project source
+```sh
 bash scripts/docker-build-test.sh image
+SLAM_DOCKER_JOBS=28 bash scripts/docker-build-test.sh test
+# Other actions: build, shell
+```
 
-# Configure and build the complete project inside the container
-bash scripts/docker-build-test.sh build
+Rebuild the dependency image with `image` after Dockerfile dependency changes;
+the wrapper otherwise reuses an existing image. Override its name with
+`SLAM_DOCKER_IMAGE`. Keep container build directories separate from host builds.
 
-# Configure, build and run the complete CTest suite
-bash scripts/docker-build-test.sh test
+If Docker's default configuration directory is read-only, set `DOCKER_CONFIG`
+to a writable directory. Custom contexts/registry credentials may need to be
+configured there as well. If the checkout has an unreadable `.env`, use
+`docker compose --env-file /dev/null ...` to bypass implicit loading without
+modifying that file.
 
-# Optional interactive shell with repo read-only and build outputs mounted
-bash scripts/docker-build-test.sh shell
-~~~
+## Native browser demo
 
-With no argument the script defaults to **test**:
+```sh
+SLAM_DOCKER_JOBS=28 docker compose up --build demo
+# Open http://127.0.0.1:8765
+```
 
-~~~sh
-bash scripts/docker-build-test.sh
-~~~
+Compose publishes loopback only and mounts `apps/demo/maps` read-only. With
+no maps, the viewer serves a labeled synthetic example without writing to the
+mount. Do not expose this unauthenticated viewer publicly.
 
-The runner automatically builds the image if it does not exist. It uses
-the root `Dockerfile` `dependencies` stage and tags the image
-`2d-fusion-slam:ubuntu24.04-apt`. The repository is mounted **read-only**
-under `/workspace`. CMake/Ninja outputs are written to the host's
-Git-ignored `.build/docker-ubuntu24.04-apt/` directory via `/build`,
-so reruns reuse compiled project files. Docker runs with the host user's
-UID/GID on Linux to avoid creating root-owned build files.
+Dockerfile targets:
 
-Adjust parallelism or image name without editing source:
+- `dependencies`: Ubuntu 24.04 development libraries and Python test driver.
+- `build`: complete native build, requiring Ceres, GTSAM, Catch2 and the viewer.
+- `test`: runs CTest on invocation, not during image construction.
+- `demo-builder`: independent C++ viewer build without solvers or Catch2.
+- `demo` (default): non-root native viewer runtime; no Python runtime required.
 
-~~~sh
-SLAM_DOCKER_JOBS=4 bash scripts/docker-build-test.sh test
-SLAM_DOCKER_IMAGE=slam-local:noble bash scripts/docker-build-test.sh image
-~~~
+The `test` Compose service is opt-in and does not start with the demo.
+The `.dockerignore` excludes local build outputs, maps and recorded sessions.
 
-A separate build directory is important: do not reuse the native
-Debian 13/GCC 14 build cache inside the Ubuntu container.
+## Ubuntu compatibility profile
 
-## Explicit CMake compatibility profile
+| Dependency | Ubuntu 24.04 package baseline | Native default minimum |
+| --- | --- | --- |
+| Ceres | 2.2.x | Toolchain-provided |
+| GTSAM | 4.2.x | 4.3 |
+| Catch2 | 3.4.x | 3.16 |
+| Eigen3 | 3.4.x | 3.3 |
 
-The runner selects these CMake options:
+`SLAM_APT_DEPENDENCIES=ON` selects the distro GTSAM/Catch2 minimums. The
+Dockerfile checks installed package major/minor versions. Required solver and
+Catch2 options prevent silently skipped coverage; FetchContent is disconnected.
+This is a compatibility matrix, not validation of the newer native baseline.
+Do not mix in the [Debian 13 binary dependency bundle](dependency-cache.md).
 
-~~~sh
-cmake -S /workspace -B /build -G Ninja \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON \
-  -DSLAM_APT_DEPENDENCIES=ON \
-  -DSLAM_ENABLE_CERES=ON -DSLAM_REQUIRE_CERES=ON \
-  -DSLAM_ENABLE_GTSAM=ON -DSLAM_REQUIRE_GTSAM=ON \
-  -DSLAM_ENABLE_CATCH2=ON -DSLAM_REQUIRE_SYSTEM_CATCH2=ON \
-  -DFETCHCONTENT_FULLY_DISCONNECTED=ON
-cmake --build /build --parallel 2
-ctest --test-dir /build --output-on-failure --parallel 2 --timeout 120
-~~~
+Noble's `libgtsam-dev` package has incomplete development dependencies and
+exports a `CppUnitLite` target whose archive is absent. The dependency stage
+explicitly installs the required Boost, TBB and METIS development packages,
+and removes only the unused CppUnitLite export from the installed CMake files.
+It preserves GTSAM's actual library exports and existence checks; no solver
+is replaced or built from source. References:
+[Ubuntu package](https://packages.ubuntu.com/noble/libgtsam-dev),
+[package file list](https://packages.ubuntu.com/noble/amd64/libgtsam-dev/filelist),
+[upstream dependency discovery](https://github.com/borglab/gtsam/blob/4.2/cmake/Config.cmake.in).
 
-`SLAM_APT_DEPENDENCIES=ON` changes only the minimum **GTSAM to 4.2**
-and **Catch2 to 3.4** for APT compatibility. The existing default
-versions remain 4.3 and 3.16. With both `SLAM_REQUIRE_GTSAM=ON` and
-`SLAM_REQUIRE_CERES=ON`, configuration fails if a solver is absent.
-`SLAM_REQUIRE_SYSTEM_CATCH2=ON` prevents a fallback Catch2 source
-download; `FETCHCONTENT_FULLY_DISCONNECTED=ON` adds protection.
+## Local validation
 
-Before executing CTest, the runner also asserts that the expected
-`match_ceres`, `core_catch2`, `pose_graph`,
-`offline_map_promotion`, `map_registry`, `map_bundle`, `web_ui_unit`
-and `demo_fixture_native` CTests are registered. It
-will not print a misleading green test run after silently skipping a
-solver or the detailed tests.
+Verified on the `local-build` branch with Docker Engine 28.3.3, Linux amd64,
+Ubuntu 24.04/GCC 13.3, Ceres 2.2, GTSAM 4.2 and Catch2 3.4:
 
-The native `dependencies` image has no GitHub source checkout or GTSAM/Ceres/Catch2
-build from source; all dependencies are standard Ubuntu APT packages.
-The root `build` stage copies the checkout and compiles it; the separate
-`demo` stage is Python-only.
-The `.dockerignore` excludes maps, large datasets and local build
-directories from the image's build context.
+- Release `test` image and Compose test service: **31/31 CTests passed**, 28 jobs.
+- Incremental RelWithDebInfo wrapper: **31/31 CTests passed**, 28 jobs.
+- `scripts/verify-native-demo.sh` inside Docker: **4/4 CTests passed**.
+- Slim `demo` image: non-root startup with a read-only map mount; HTTP checks
+  passed for health, map listing/metadata/PNG, both pages, JavaScript and CSS.
+- Headless Chromium in a separate Playwright container decoded the sample map
+  and replay overlay. Both servers explicitly allow `blob:` in CSP `img-src`
+  for fetched PNG object URLs; scripts remain restricted to `'self'`.
 
-## Compatibility, reproducibility and limits
+These are synthetic/unit/integration regressions. External FR079 dataset
+CTest targets remain opt-in and were not run; no hardware validation is claimed.
+No GitHub Actions workflow was dispatched or changed.
 
-- The image is Ubuntu 24.04, **not** the Debian 13 release-cache ABI.
-  Do not copy the Debian 13 compiled archive into this image.
-- Docker image rebuilds can pick up newer patched APT packages in
-  Ubuntu's repositories. The Dockerfile **checks** the expected
-  major/minor versions, but is not a bit-for-bit pinned APT snapshot or
-  base-image digest. For immutable reproducibility, record the built
-  image digest or use a reviewed apt snapshot/locked base.
-- The APT image also includes Python 3 for the **read-only offline map viewer** (see [Web UI instructions](web-ui.md)). The Docker wrapper requires the `web_ui_unit` CTest to be registered. The default `test` command runs synthetic/unit CTests. It does **not**
-  silently download FR079 archives or make claims of independent
-  real-dataset localization accuracy.
-- This development workspace did **not** expose a working Docker engine,
-  so the exact Ubuntu container build/runtime suite remains **unverified
-  here**. The Dockerfile and shell script were syntax/structure checked,
-  the script's Docker invocation was tested with a CLI stub, and CMake
-  discovered the relaxed version constraints using available locally
-  installed libraries. That is **not** a substitute for running the
-  actual Ubuntu 24.04 image.
-- No GitHub Actions workflow was created, dispatched, or changed.
-
-For a new chat, the repository supplies this Docker configuration;
-the [binary dependency Release](dependency-cache.md) remains an
-independent fallback for its exact Debian 13/GCC 14 target environment.
+Ubuntu tags and APT repositories are not immutable snapshots: record image
+IDs/digests for exact reproduction, or pin a reviewed base and package snapshot.

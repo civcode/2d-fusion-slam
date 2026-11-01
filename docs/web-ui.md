@@ -38,9 +38,24 @@ mkdir -p /tmp/slam-maps
 Open **http://127.0.0.1:8765/**. The UI shows the available maps on the
 left, an interactive occupancy raster in the center, and
 frame/source/fingerprint and selected cell information on the right.
-Mouse wheel zooms at cursor; drag pans; clicking a cell displays its
-grid coordinates, map-frame metric coordinates and measured occupancy
-probability. Use **Fit map** to reset the camera.
+Mouse wheel zooms at cursor; middle-button drag pans without zooming;
+left-clicking a cell displays its grid coordinates, map-frame metric
+coordinates and measured occupancy probability. Left-button drag also remains
+supported. Use **Fit map** to reset the camera. The replay view uses the same
+pan/zoom controls. Wheel input is ignored while the middle button is held,
+and horizontal-only/zero-delta wheel events never change zoom. Native browser
+autoscroll is canceled (see [MDN middle-button defaults](https://developer.mozilla.org/en-US/docs/Web/API/Element/auxclick_event#preventing_default_actions)).
+
+For an opt-in real-browser regression against the demo's synthetic map/replay,
+run in an environment with Playwright and its Chromium browser installed:
+
+```sh
+python tests/web/check_browser_interactions.py http://127.0.0.1:8765
+```
+
+This checks image decoding, stationary middle-button hold, middle/left pan,
+wheel zoom at cursor, cell inspection and pointer-capture cleanup on both pages.
+It does not add a browser dependency to the standard-library CTest suite.
 
 For the persistent registry, simply point \`--data-dir\` to the
 application-owned generation directory containing \`CURRENT\` and

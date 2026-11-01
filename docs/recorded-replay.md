@@ -45,6 +45,21 @@ existing sample occupancy map, without writing to the user's map folder.
 Real `.slammap`, `CURRENT`, or `.slamreplay.json` files always take
 precedence, even if malformed. Synthetic playback is clearly labeled.
 
+The synthetic replay raycasts the **same occupied cells displayed in the map**,
+including all interior objects, using [2-D DDA grid traversal](https://www.pbr-book.org/4ed/Volume_Scattering/Media#DDAMajorantIterator).
+Each hit stops at the nearest occupied-cell face; objects occlude walls behind
+them. Unknown cells are not treated as obstacles. Beams leaving the grid without
+an occupied-cell hit are omitted from `points` and `hit_count`, not replaced by
+invented maximum-range hits. Thus valid hits may be fewer than the 64 beams.
+
+The 56 scan-level poses follow a closed waypoint route checked for a **0.2 m
+circular-body clearance** along the entire path. This replaces the old oval,
+which intersected an interior object. Native and Python fixtures use the same
+route and geometry, with regression checks against an independent rectangle
+intersection oracle for every beam. All five visible interior objects must be
+detected over the replay. These are exact synthetic scans, not real sensor
+measurements, calibrated timing, or validation of real-world map alignment.
+
 ## Docker demo
 
 ```sh
@@ -53,7 +68,7 @@ docker compose up --build demo
 # Open http://127.0.0.1:8765/replay
 ```
 
-The default Docker demo is Python-only and runs as an unprivileged user.
+The default Docker demo runs the native C++ viewer as an unprivileged user.
 The map directory is mounted **read-only**. The unauthenticated HTTP server
 is bound to the container interface for loopback-only host port mapping;
 never expose its port on a public interface. The generated session must

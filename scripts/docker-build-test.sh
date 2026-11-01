@@ -43,11 +43,12 @@ cmake -S /workspace -B /build -G Ninja \
   -DSLAM_ENABLE_CERES=ON -DSLAM_REQUIRE_CERES=ON \
   -DSLAM_ENABLE_GTSAM=ON -DSLAM_REQUIRE_GTSAM=ON \
   -DSLAM_ENABLE_CATCH2=ON -DSLAM_REQUIRE_SYSTEM_CATCH2=ON \
+  -DSLAM_BUILD_NATIVE_DEMO=ON -DSLAM_REQUIRE_NATIVE_DEMO=ON \
   -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 cmake --build /build --parallel "${SLAM_DOCKER_JOBS:-2}"
 '
 if [[ "$action" == test ]]; then
-  script+='for test in match_ceres core_catch2 pose_graph offline_map_promotion map_registry map_bundle web_ui_unit ceres_replay_native ceres_heldout_native demo_fixture_native; do
+  script+='for test in match_ceres core_catch2 pose_graph offline_map_promotion map_registry map_bundle web_ui_unit ceres_replay_native ceres_heldout_native demo_fixture_native native_web_api native_viewer_json offline_fusion; do
   if ! ctest --test-dir /build -N -R "^${test}$" | grep -Fq ": ${test}"; then
     echo "Required CTest target missing: ${test}" >&2
     exit 1

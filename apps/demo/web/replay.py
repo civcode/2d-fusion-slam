@@ -188,37 +188,64 @@ if __name__ == "__main__":
     main()
 
 
+def _workshop_ray_distance(occupied, x, y, dx, dy):
+    """First occupied-cell entry via 2-D DDA; unknown is not a return.
+
+    Synthetic fixture only: origin inside the identity-frame example grid,
+    unit direction. Corner ties enter the diagonal cell. Leaving the grid
+    without a hit is a no-return beam, never a fabricated endpoint.
+    """
+    from .example import WIDTH, HEIGHT, RESOLUTION
+    ix, iy = math.floor(x / RESOLUTION), math.floor(y / RESOLUTION)
+    sx, sy = (1 if dx > 0 else -1), (1 if dy > 0 else -1)
+    tx = ((ix + (dx > 0)) * RESOLUTION - x) / dx if abs(dx) > 1e-12 else math.inf
+    ty = ((iy + (dy > 0)) * RESOLUTION - y) / dy if abs(dy) > 1e-12 else math.inf
+    delta_x = RESOLUTION / abs(dx) if abs(dx) > 1e-12 else math.inf
+    delta_y = RESOLUTION / abs(dy) if abs(dy) > 1e-12 else math.inf
+    distance = 0.0
+    while 0 <= ix < WIDTH and 0 <= iy < HEIGHT:
+        if occupied[iy * WIDTH + ix]:
+            return distance
+        distance = min(tx, ty)
+        step_x, step_y = tx <= ty, ty <= tx
+        if step_x:
+            ix += sx
+            tx += delta_x
+        if step_y:
+            iy += sy
+            ty += delta_y
+    return None
+
+
 def create_synthetic_replay():
-    """Schematic scan sequence for an empty demo, NEVER a real recording."""
+    """Raycast the displayed workshop grid, NEVER a real recording."""
     from hashlib import sha256
+    from .example import WIDTH, HEIGHT, _cell
+    occupied = [bool(known and odds > 0) for y in range(HEIGHT) for x in range(WIDTH)
+                for known, odds in [_cell(x, y)]]
+    # Seven scan-level poses per straight segment. The entire loop has at
+    # least 0.2 m body clearance; the old oval crossed the central obstacle.
+    route = ((2.5, 1.2), (8.5, 1.2), (8.5, 5.9), (9.5, 5.9),
+             (9.5, 7.8), (6.5, 7.8), (6.5, 5.9), (2.5, 5.9))
     frames = []
-    # A synthetic oval path, bounded inside the synthetic workshop.
     for i in range(56):
-        angle = 2 * math.pi * i / 56
-        x, y = 6 + 2.25 * math.cos(angle), 4.5 + 1.55 * math.sin(angle)
-        yaw = math.atan2(1.55 * math.cos(angle), -2.25 * math.sin(angle))
+        start, end = route[i // 7], route[(i // 7 + 1) % len(route)]
+        fraction = (i % 7) / 7
+        x, y = (start[j] + fraction * (end[j] - start[j]) for j in range(2))
+        yaw = math.atan2(end[1] - start[1], end[0] - start[0])
         points = []
         for beam in range(64):
             a = yaw - math.pi / 2 + math.pi * beam / 64
             dx, dy = math.cos(a), math.sin(a)
-            choices = []
-            for wall, origin, d, other, slope, low, high in (
-                    (0.7, x, dx, y, dy, 0.7, 8.3),
-                    (11.3, x, dx, y, dy, 0.7, 8.3),
-                    (0.7, y, dy, x, dx, 0.7, 11.3),
-                    (8.3, y, dy, x, dx, 0.7, 11.3)):
-                if abs(d) > 1e-10:
-                    t = (wall - origin) / d
-                    if t > 0 and low <= other + t * slope <= high:
-                        choices.append(t)
-            dist = min(choices) if choices else 5.0
-            points.append([round(dist * math.cos(a - yaw), 5), round(dist * math.sin(a - yaw), 5)])
+            dist = _workshop_ray_distance(occupied, x, y, dx, dy)
+            if dist is not None:
+                points.append([round(dist * math.cos(a - yaw), 5), round(dist * math.sin(a - yaw), 5)])
         frames.append({"index": i, "t": round(i * 0.12, 4), "pose": [x, y, yaw],
-                       "odom": [x, y, yaw], "beam_count": 64, "hit_count": 64,
+                       "odom": [x, y, yaw], "beam_count": 64, "hit_count": len(points),
                        "points": points, "matching": None})
     source = {"dataset": "SYNTHETIC virtual workshop (not recorded LiDAR)",
               "frame_id": "synthetic_demo_frame", "pose_kind": "synthetic_exact",
               "timestamp_kind": "synthetic_scan_level", "per_beam_time_known": False,
               "map_alignment_verified": False,
-              "source_sha256": sha256(b"synthetic virtual workshop replay v1").hexdigest()}
+              "source_sha256": sha256(b"synthetic virtual workshop replay v2 grid-raycast safe-route").hexdigest()}
     return validate({"format": MAGIC, "source": source, "frames": frames})
