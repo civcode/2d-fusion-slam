@@ -58,7 +58,8 @@ function mapItem(item) {
   title.textContent = item.name;
   const role = document.createElement("span");
   role.className = "file-meta" + (item.role === "active" ? " active-label" : "");
-  role.textContent = item.role === "file" ? "STANDALONE MAP" : item.role.toUpperCase() + " GENERATION";
+  role.textContent = item.role === "fusion" ? "FUSION RESULT · FINAL MAP" :
+    item.role === "file" ? "STANDALONE MAP" : item.role.toUpperCase() + " GENERATION";
   names.append(title, role);
   b.append(icon, names);
   b.addEventListener("click", () => selectMap(item.id));
@@ -95,7 +96,13 @@ async function refresh() {
     if (!selected || !maps.some((m) => m.id === selected)) {
       selected = "";
       if (preferred && maps.some((m) => m.id === preferred)) await selectMap(preferred);
-      else if (maps.length) await selectMap(maps[0].id);
+      else if (maps.length) {
+        const requested = new URLSearchParams(window.location.search).get("map");
+        const chosen = maps.find(m => m.id === requested) ||
+          maps.find(m => m.role === "fusion" && m.id.endsWith("@fused_scan_matched")) ||
+          maps[0];
+        await selectMap(chosen.id);
+      }
       else { metadata = null; mapImage = null; updateStats(); setEmpty(true); render(); }
     }
     paintList();
