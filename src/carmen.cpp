@@ -45,7 +45,7 @@ std::optional<CarmenLaser> CarmenReader::parse_laser(const std::string& line) co
   for (long long i = 0; i < count; ++i) {
     const double distance = number(in,"range");
     const double angle = -options_.field_of_view_rad / 2 +
-        options_.field_of_view_rad * static_cast<double>(i) / static_cast<double>(count - 1 == 0 ? 1 : count - 1);
+        options_.field_of_view_rad * static_cast<double>(i) / static_cast<double>(count);
     scan.ranges.push_back({distance,angle,
       distance > 0 && distance <= options_.max_usable_range_m ? RangeStatus::hit : RangeStatus::invalid});
   }
