@@ -18,6 +18,7 @@
 <div class="replay-controls fusion-controls">
 <label>Offline fusion run<select id="fusion-runs"><option value="">Scanning run directory…</option></select></label>
 <label>Final occupancy overlay<select id="fusion-map"><option value="">None — observation trail only</option></select></label>
+<a id="fusion-open-map" class="back-map" href="/" title="Open selected final fusion map in the Map Explorer">▦ Explore fusion map</a>
 <button type="button" id="fusion-fit">Fit scene</button><button type="button" id="fusion-refresh">↻ Refresh</button>
 </div>
 <div class="fusion-metrics" id="fusion-metrics" aria-label="Finished run metrics">
@@ -69,6 +70,16 @@
 </dl></section>
 <section class="detail-card"><div class="panel-kicker">COMPLETED RUN SCORE</div><h2>Method comparison</h2>
 <div id="fusion-scores" class="fusion-scores">Select a completed run.</div></section>
+<section class="detail-card"><div class="panel-kicker">NATIVE PROCESSING PROFILE</div><h2>Compute performance</h2>
+<dl class="detail-list">
+<div><dt>Offline fusion throughput</dt><dd id="fusion-prof-fps">—</dd></div>
+<div><dt>Sensor input rate</dt><dd id="fusion-prof-input">—</dd></div>
+<div><dt>Average offline budget</dt><dd id="fusion-prof-budget">—</dd></div>
+<div><dt>Frame proxy p95</dt><dd id="fusion-prof-p95">—</dd></div>
+<div><dt>Critical-path compute</dt><dd id="fusion-prof-compute">—</dd></div>
+</dl><div id="fusion-profile-stages" class="fusion-scores">No profile loaded.</div>
+<p class="fusion-prof-caveat">Steady-clock measurements from a completed batch run. They exclude synthetic generation, alternative baselines, scoring and file output. Offline throughput and per-frame proxies do <strong>not</strong> validate live real-time deadlines.</p>
+</section>
 <section class="replay-caution">⚠ <strong>Offline synthetic replay.</strong> The fixed occupancy overlay and optimized graph path are <strong>final</strong> post-run results, not intermediate estimates. The scan-matching map was frozen before held-out queries. Synthetic truth is available only for independent after-the-fact scoring. No live robot tracking, controls or map publication.</section>
 </aside></div>
 <footer class="replay-footer">DRAG TO PAN · WHEEL TO ZOOM · SPACE TO PLAY/PAUSE <span>FUSFUSREPLAY1 · NO ROBOT COMMANDS</span></footer>
