@@ -162,6 +162,18 @@ class NativeViewerApi(unittest.TestCase):
         self.assertIsNone(self.api(
             "/api/replays/record.slamreplay.json/frame/0")["matching"])
 
+        # A forged held-out selection must never present source-index
+        # separation without the actual frozen FR079 training-map source.
+        sidecar["replay_sha256"] = hashlib.sha256(self.replay.read_bytes()).hexdigest()
+        sidecar["selection"] = "fr079_heldout_mod5_verified"
+        sidecar["query_stride"] = 10
+        sidecar["beam_stride"] = 4
+        side.write_text(json.dumps(sidecar))
+        heldout = self.api("/api/replays/record.slamreplay.json")
+        self.assertEqual(heldout["ceres"]["status"], "invalid")
+        self.assertIsNone(self.api(
+            "/api/replays/record.slamreplay.json/frame/0")["matching"])
+
     def test_read_only_symlinks_and_bad_files(self):
         for path in ("/api/maps/record.slammap/cell?x=-1&y=0",
                      "/api/maps/record.slammap/cell?x=4&x=5",
@@ -182,6 +194,19 @@ class NativeViewerApi(unittest.TestCase):
         corrupt.write_bytes(b"garbage")
         with self.assertRaises(error.HTTPError) as e:
             self.get("/api/maps/broken.slammap")
+        self.assertEqual(e.exception.code, 422)
+        previous = self.replay.read_bytes()
+        try:
+            self.replay.write_bytes(b'{"format":"FUSREPLAY1","source":{},"frames":[]}')
+            with self.assertRaises(error.HTTPError) as e:
+                self.get("/api/replays/record.slamreplay.json")
+            self.assertEqual(e.exception.code, 422)
+        finally:
+            self.replay.write_bytes(previous)
+        link = self.root / "linked.slamreplay.json"
+        link.symlink_to(self.replay)
+        with self.assertRaises(error.HTTPError) as e:
+            self.get("/api/replays/linked.slamreplay.json")
         self.assertEqual(e.exception.code, 422)
 
     def test_synthetic_only_if_folder_empty(self):
