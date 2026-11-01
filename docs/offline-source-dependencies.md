@@ -68,3 +68,14 @@ headers/library in an isolated adapter build. **A complete checkout
 Ceres-linked CTest run remains unverified** and must not be inferred
 from these checks. When using `MINIGLOG`, review compatibility before
 linking another logging implementation.
+
+
+**Additional isolated Ceres runtime evidence (2026-11-01):** The
+byte-identical repository `src/match_ceres.cpp` was exercised in a
+separate Ceres 2.2.0-linked executable using a purpose-built
+analytic distance-field/diagnostics stand-in (50 synthetic landmarks).
+It accepted an improved pose and drove the robust cost from 5.76697 to
+approximately 7.0e-20. **Neither the complete project's
+`slam_match_ceres_test` nor a public-recording Ceres match has
+been run.** This remains a prerequisite before declaring the Ceres
+backend verified.

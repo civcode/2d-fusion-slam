@@ -1,0 +1,52 @@
+{
+  "date": "2026-11-01",
+  "type": "reference_map_registration_diagnostic_not_independent_accuracy",
+  "source_files": {
+    "fr079-sm.log.gz": "eefe6296ceb9982a8b05da9bcb848ca5c0ebb8b95f916c13d3bc18b3e06c319c",
+    "fr079-05cm.carmen.map": "1e17673c0c2d1b514274eecf3695542404dd8935aef0ffb33dd490bbd2374e46",
+    "map05cm.gif": "60625ec4bbe9ecc5ad893021284c31a0b0f48683be8d36207b81ab7e4f4cf258"
+  },
+  "raster_layout": {
+    "width": 910,
+    "height": 323,
+    "resolution_m": 0.05000000074505806,
+    "index": "x * height + y",
+    "visual_row": "height - 1 - y",
+    "strong_occupied_cells": 16803,
+    "strong_occupied_gif_agreement": 1,
+    "near_zero_free_cells": 125987,
+    "near_zero_free_gif_agreement": 1,
+    "unknown_cells": 129202
+  },
+  "split": {
+    "rule": "scan_index % 5 == 0 reserved for held-out queries",
+    "nonheldout_scans": 2494,
+    "heldout_scans": 624,
+    "calibration_selector": "scan_index % 17 == 1, excluding held-out scans",
+    "beam_stride": 12
+  },
+  "selected_hypothesis": {
+    "swap_xy": false,
+    "sign_x": 1,
+    "sign_y": -1,
+    "proper_rotation": false,
+    "translation_x_m": 22.25,
+    "translation_y_m": 8
+  },
+  "measured": {
+    "train_known_fraction": 0.749428,
+    "train_near_wall_fraction": 0.28032,
+    "heldout_known_fraction": 0.75105,
+    "heldout_near_wall_fraction": 0.279112,
+    "wall_radius_cells": 3
+  },
+  "ground_truth_independent": false,
+  "reference_map_independent": false,
+  "ceres_scan_match_performed": false,
+  "pose_accuracy_measured": false,
+  "local_validation": {
+    "dataset_subset_ctest": "8/8 passed normal and GCC14 warnings-as-errors ASan+UBSan",
+    "full_project_ceres_ctest": "not run",
+    "isolated_ceres_adapter": "passed analytic 50-landmark solver harness"
+  }
+}

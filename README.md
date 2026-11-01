@@ -1,6 +1,6 @@
 # 2D Fusion SLAM
 
-**Status: synthetic matching baseline plus initial FR079 public-data import.** The C++20 core now parses Freiburg FR079 CARMEN logs, converts scans to matcher-native laser points and supports offline Catch2 3.16.1 and Ceres 2.2.0 dependencies. **This is not yet a complete SLAM system or a validated real-dataset SLAM benchmark.** See [implementation status](docs/implementation-status.md).
+**Status: synthetic scan matcher, FR079 import, and reproducible reference-map frame diagnostics.** The C++20 core now parses Freiburg FR079 CARMEN logs, converts scans to matcher-native laser points and supports offline Catch2 3.16.1 and Ceres 2.2.0 dependencies. **This is not yet a complete SLAM system or a validated real-dataset SLAM benchmark.** See [implementation status](docs/implementation-status.md).
 
 The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optional **actually measured** wheel odometry. Three target modes share a portable core:
 
@@ -22,10 +22,11 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_motion`: sampled SE(2) interpolation and midpoint deskew diagnostics with laser mounting offset, explicit gyro-only/full-SE(2) capability and acquisition-time validity gates.
 - `slam_distance_field`: deep-copy immutable map snapshot with revision/content fingerprint, full-field exact centre-to-centre Euclidean distance transform, strict four-cell known-mask interpolation, finite gradients and source-version pinning.
 - `slam_match_geometry`: geometry-only robust Huber scan-to-EDT reference matcher with synthetic pose recovery, overlap and LiDAR Hessian-rank diagnostics, and conservative rejection of unknown/truncated evidence.
-- `slam_match_ceres` (optional): Ceres cost-function/solver adapter using the same geometry and fail-closed support policy; **not compiled or runtime-verified** in the current environment because Ceres is not installed.
+- `slam_match_ceres` (optional): Ceres cost-function/solver adapter. Its byte-identical source compiled and was **exercised at runtime** against Ceres 2.2.0 using an isolated analytic distance-field harness; the *complete repository Ceres CTest remains unverified*.
 - `slam_carmen`, `slam_carmen_geometry` and `slam_carmen_inspect`: strict FR079 `FLASER`/`RLASER`/`ODOM` parsing, 180° half-open angular layout, source scan IPC/logger times, conservative invalid-range classification, and native geometry-only matcher input without inventing per-beam times.
 - **Catch2 3.16.1**: user-provided release extracted, compiled and used for CARMEN parsing/geometry tests. CMake accepts `SLAM_CATCH2_SOURCE_DIR`, otherwise uses pinned upstream commit `08092139210881f01a34e60c5f2fd6afa0ea4024`.
 - **Ceres 2.2.0**: user-provided release compiled into a local static library with minimal logging; a standalone solver consumer passed. The byte-identical repository Ceres adapter compiled against Ceres 2.2 headers/library in an isolated build. **The full repository Ceres regression is not yet executed.**
+- `slam_fr079_alignment` / `slam_fr079_alignment_inspect`: deterministic training-only frame-hypothesis search and held-out query diagnostics against the archived reference map, with explicit reflection detection, without asserting independent ground truth or an SE(2) pose.
 - **FR079 public dataset**: both uploaded complete logs parsed in local CTest (3,118 scans and 5,761 odometry records each). `slam_carmen_map` parses CARMENMAPFILEv020 reference grids at 3, 5 and 10 cm; the optional `slam_carmen_map_inspect` checks the real 5 cm grid. Archived CARMEN binary maps now decode with preserved known/unknown cells; map-to-trajectory registration and conversion into authoritative map snapshots remain unverified. See [FR079 setup](datasets/fr079/README.md).
 
 LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no fully verified Ceres-based SLAM pipeline**, GTSAM optimizer, Pi driver, recorder, ROS adapter or Web UI implemented.
@@ -59,7 +60,8 @@ If Eigen3 is not discoverable, supply `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3`
 - [Design choices OD-001–OD-025](docs/open-design-choices.md)
 - [Implementation status and local test evidence](docs/implementation-status.md)
 - [FR079 dataset setup, hashes and limitations](datasets/fr079/README.md)
+- [FR079 map-frame diagnostic evidence](datasets/fr079/alignment-evidence.json)
 - [Air-gapped Catch2 and Ceres setup](docs/offline-source-dependencies.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
-**Next:** run the full in-repository Ceres matcher regression against the assembled offline dependencies, validate reference-map axis/frame registration, then create a reproducible FR079 scan-to-map benchmark with a held-out evaluation split. Logged CARMEN pose fields are estimates, not ground truth. Follow with map export and offline GTSAM. Hardware acquisition progresses independently.
+**Next:** run the *complete repository* Ceres matcher regression against the assembled offline dependencies, then establish a **rigid, physically justified** map-to-laser frame and construct a truly training-only map for a leakage-free held-out FR079 scan-to-map benchmark. The current registration diagnostic uses a map derived from the source recording and is **not** an accuracy benchmark. Logged CARMEN pose fields are estimates, not ground truth. Follow with map export and offline GTSAM. Hardware acquisition progresses independently.

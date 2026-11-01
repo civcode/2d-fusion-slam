@@ -1,6 +1,6 @@
 # 2D Fusion SLAM — Benchmarks and Datasets
 
-**Status:** Revised benchmark plan v0.2; synthetic primitive tests and FR079 CARMEN import checks run locally; public scan-matching accuracy and full benchmark campaigns still pending  
+**Status:** Revised benchmark plan v0.2; synthetic primitive tests, FR079 ingestion, reference-map pixel layout, and a train/held-out reference registration diagnostic run locally; independent public scan-matching accuracy and full campaigns still pending  
 **Date:** 2026-10-31  
 **Related:** [Architecture](architecture-specification.md) · [Technical specification](technical-specification.md) · [Implementation contract](implementation-contract.md) · [Design decisions](open-design-choices.md)
 
@@ -194,3 +194,18 @@ Require a reproducible improvement relative to the **simplest adequate baseline*
 Default tests remain **offline and network-free**; real dataset downloads are explicit. Avoid publishing real platform performance without a real Pi, and do not invent timestamps, frame origins, source independence or hardware wheel signals. A benchmark release includes dataset manifests/hashes, test command and result logs, environment versions, truth/split integrity and failures. For hardware-specific acceptance, state the actual LD19/MPU6050 firmware/config and measured clock calibration quality.
 
 No Github Actions are necessary; local/Docker test execution is preferred, and no workflow is run without explicit permission.
+
+
+### FR079 alignment diagnostic (2026-11-01)
+
+The source FR079 binary grid is X-major and Y-up, confirmed against
+the original 5 cm GIF. A reproducible 2,494/624 training/held-out
+frame-hypothesis diagnostic is now implemented; it **does not optimize
+a Ceres pose**, nor claim an independent map or external trajectory
+truth. The best `fr079-sm` grid hypothesis is mirrored,
+therefore **not a valid SE(2) transform**. Its heldout near-wall score
+cannot serve as a localization accuracy or mapper generalization metric.
+See [FR079 evidence](../datasets/fr079/alignment-evidence.json) and
+[setup](../datasets/fr079/README.md). The B08 Ceres-linked project
+suite and a genuinely training-only FR079 matcher benchmark remain
+**outstanding**.

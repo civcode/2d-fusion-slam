@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-31  
 **Branch:** `main`  
-**Scope:** Synthetic scan matching plus FR079 public CARMEN data ingest, Catch2 source integration and a locally built Ceres dependency; **not complete offline SLAM or a quantitative public-data SLAM benchmark**.
+**Scope:** Synthetic scan matching, verified FR079 map **raster layout**, train/held-out frame diagnostic and local Ceres solver-adapter runtime test; **not complete offline SLAM or a quantitative independent public-data SLAM benchmark**.
 
 ## Implemented and locally exercised
 
@@ -18,7 +18,8 @@
 | `slam_match_ceres` (optional) | Ceres single-scalar-per-beam cost-function adapter and bounded solver | Repository adapter file **compiled** in an isolated Ceres 2.2 consumer with interface-compatible headers; full repository Ceres regression still not run |
 | `slam_carmen` + `slam_carmen_geometry` | Strict CARMEN `FLASER`/`ODOM` parsing and conservative native laser-point conversion (scan timestamp only) | Catch2 importer/geometry tests passed |
 | `slam_carmen_inspect` | Local `.log`/`.log.gz` summary and optional expected scan count; zlib remains CLI-only | Both user-uploaded complete FR079 logs parsed in CTest |
-| `slam_carmen_map`, `slam_carmen_map_inspect` | CARMENMAPFILEv020 binary grid decoding with native known/unknown float samples, strict dimensions and bounded input | Synthetic Catch2 grid test; actual 3/5/10 cm files decoded, 5 cm map checked in CTest |
+| `slam_carmen_map`, `slam_carmen_map_inspect` | CARMENMAPFILEv020 binary grid decoding with X-major/Y-up addressing and native known/unknown samples | Synthetic Catch2 grid test; actual 3/5/10 cm files decoded, 5 cm map checked in CTest |
+| `slam_fr079_alignment` | Training-only search over explicit map-frame hypotheses, held-out scan endpoint coverage and reflection/proper-rotation classification | 8/8 dataset-subset CTest passes, including FR079-sm full log/map run; not pose accuracy |
 
 **Test evidence:** GCC 14, CMake 3.31.6, Ninja, provisioned Eigen3 on Linux x86-64. **6/6 pre-existing CTest tests passed** with network-free `SLAM_ENABLE_CATCH2=OFF`, including the normal build and a strict build using `-Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-sanitize-recover=all`. The EDT tests compare all cells to exact Euclidean reference distances, test rotated grids, immutable source revisions, unknown stencils and truncation. The matching tests check geometry-only convergence toward synthetic truth, overlap, rank, cost reduction and unsupported-region rejection. These are **unit/synthetic tests**, not a public-dataset accuracy benchmark.
 
@@ -37,9 +38,45 @@ Use `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3` if the Eigen package is not autom
 - **EDT is exact at cell centres**, with bilinear interpolation using four observed cells and entirely nontruncated stencil values. Unknown/out-of-map/saturated support is **not** a false zero residual. The derived cache is not map authority.
 - **Matcher is a local, geometry-only baseline** seeded near the map pose. Its synthetic test uses independent, known synthetic landmark geometry but is not a full SLAM trajectory/loop benchmark. No relocalization/global search or verified sensor bias/clock estimator is implemented.
 - The information matrix and its eigenvalues are **observability diagnostics**, not a calibrated independent covariance. A returned tracking pose is not an automatically graph-eligible factor. A local matcher can still have map/deskew correlations.
-- **Ceres toolchain builds locally; whole-program solver validation remains.** An unsupported trial evaluation fails rather than yielding an artificial zero-distance residual. The repository matcher end-to-end convergence, false-lock and boundary behavior still need a full Ceres-linked CTest and independent recordings.
+- **Ceres solver adapter compiles and runs in an isolated analytic harness; whole-program project test remains.** An unsupported trial evaluation fails rather than yielding an artificial zero-distance residual. The repository matcher end-to-end convergence, false-lock and boundary behavior still need a full Ceres-linked CTest and independent recordings.
 - LD19 packet time-reference, MPU6050 gyro bias, real acquisition/MCAP, actual Pi performance, public-dataset SLAM accuracy and full online/offline SLAM remain unverified. FR079 log parsing is verified, **not** full SLAM benchmarking. FR079 CARMEN v020 grid files are decoded into read-only file-order values, but not yet frame-registered, converted to authoritative occupancy snapshots or used for accurate pose scoring.
 
 ## Next checkpoint
 
 Run the complete project Catch2/Ceres CTests against the supplied offline dependencies, validate CARMEN reference-grid axis/frame conventions and implement a reproducible FR079 scan-to-map evaluation with held-out frames and truthful source timing, then add **deterministic map export and a simple offline pose-only GTSAM reference graph**, with conservative factor provenance and false-loop checks. Independently progress real Pi LD19/MPU6050 acquisition and data calibration; initial algorithm experiments continue using synthetic and verified public data.
+
+
+## 2026-11-01: FR079 frame and Ceres progress
+
+- **Raster layout verified:** Source binary occupancy is X-major with Y-up.
+  The independent GIF verifier reports **100% agreement** at both 16,803
+  strongly occupied and 125,987 near-zero free map cells. The map's
+  **metric frame origin and handedness versus logged laser poses are not
+  independently specified.**
+- **Reference-map registration diagnostic built:** 3,118 `fr079-sm` scans
+  split into 2,494 non-heldout and 624 heldout scans. Grid search uses
+  only a deterministic subset of the non-heldout queries. Best fit is
+  `swap_xy=false, sign_x=1, sign_y=-1`, an **improper (reflected)
+  transform**; heldout known-space coverage 0.751050 and near-wall
+  coverage 0.279112. This is not admissible as an SE(2) pose estimate.
+- **Source-map leakage:** The supplied reference map was generated from
+  the same recording. A held-out *query* is **not** an independently
+  held-out *mapping observation*. Do not infer ATE/RPE or independent
+  accuracy from the diagnostic.
+- **Local tests:** 8/8 dataset/integration CTests pass with GCC 14,
+  Catch2 3.16.1 and zlib, both normally and under
+  `-Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined`.
+  This is a locally assembled dataset-subset build, **not the complete
+  repository-wide CMake/Ceres suite**.
+- **Ceres runtime:** The repository's byte-identical `src/match_ceres.cpp`
+  was linked to Ceres 2.2.0 in an *isolated analytical EDT-style
+  harness*. A 50-landmark optimization reduced robust cost from
+  approximately 5.76697 to 7.0e-20, with final translation/yaw
+  error near zero. **This synthetic harness does not substitute for**
+  the official `match_ceres` CTest using real immutable map/EDT code.
+
+The next **unverified** gate remains: the complete checkout's Ceres
+CTest (including Jacobian and rank/outlier rejection), a justified
+rigid map-registration model, and a training-only map with held-out
+FR079 scan-to-map matching against a truthful reference or explicitly
+proxy quality metrics. No GitHub Actions were used.

@@ -55,7 +55,7 @@ ranging from -90 degrees to +89.5 degrees.
 - **No fabricated free-space returns.** Missing, zero or over-range values
   are classified as invalid. They are excluded from matcher point clouds
   and must not create free-space occupancy evidence.
-- **Reference map file decoding is implemented, not full map registration.**
+- **Reference map file decoding and storage-axis verification are implemented, not full metric map registration.**
   `slam_carmen_map_inspect` reads CARMENMAPFILEv020 binary grids and checks
   float values; axis conventions, registration against the scan/log pose frame,
   import into authoritative occupancy snapshots and metric comparison remain future work.
@@ -68,3 +68,61 @@ ranging from -90 degrees to +89.5 degrees.
 The parser library is plain C++20; only the optional gzip CLI uses zlib.
 The input files and compressed third-party sources must not be pushed
 to GitHub just to make CTest pass.
+
+
+## Reproducible frame-layout and held-out diagnostic
+
+The source `CARMENMAPFILEv020` payload is **X-major**, indexed as
+`values[x * height + y]`. Its Y coordinate increases upward; for the
+provided GIF the corresponding pixel row is `height - 1 - y`. The
+independent optional verifier checks the source binary map directly against
+the supplied original 5 cm GIF (not the annotated path image):
+
+~~~sh
+python -m pip install Pillow  # optional analysis dependency; NOT needed for C++
+python tools/verify_fr079_map_layout.py \
+  /path/to/fr079-05cm.carmen.map /path/to/map05cm.gif
+~~~
+
+On the uploaded files, all **16,803 high-occupancy map cells** aligned with
+dark GIF pixels and all **125,987 near-zero free cells** aligned with white
+GIF pixels under the documented thresholds. This proves **raster layout**,
+not an external metric origin or pose alignment.
+
+With local Catch2, zlib and the two FR079 artifacts supplied:
+
+~~~sh
+cmake -S . -B build -G Ninja -DBUILD_TESTING=ON \
+  -DSLAM_ENABLE_CATCH2=ON \
+  -DSLAM_CATCH2_SOURCE_DIR=/path/to/Catch2-3.16.1 \
+  -DSLAM_FR079_SM_LOG=/path/to/fr079-sm.log.gz \
+  -DSLAM_FR079_MAP=/path/to/fr079-05cm.carmen.map
+cmake --build build
+ctest --test-dir build --output-on-failure
+./build/slam_fr079_alignment_inspect \
+  /path/to/fr079-sm.log.gz /path/to/fr079-05cm.carmen.map
+~~~
+
+The diagnostic uses **scans whose index modulo 5 is nonzero** for
+calibration (further subsampled), and **index modulo 5 equals zero** for
+held-out queries. Its fixed grid search checks 8 axis-permutation/sign
+hypotheses and translation offsets. **It does not use held-out queries
+for transform selection.** All failures outside the map, inside unknown
+cells or away from mapped walls are counted as nonmatches.
+
+The uploaded `fr079-sm` recording selected a reflected-Y hypothesis:
+`swap_xy=false, sign_x=1, sign_y=-1` with an apparent shift
+`(22.25 m, 8 m)`. This has a **negative determinant**, so it
+cannot be used as an `SE(2)` robot-pose transform. On the **624
+held-out queries**, known-space coverage was **75.105%** and 15 cm
+near-wall endpoint coverage **27.9112%**, at a fixed, diagnostic-only
+threshold. These are **not localization accuracy** metrics.
+
+The published map was built from the same source recording, so the
+held-out scans are **not independent of the reference map**. Logged
+laser poses are also estimates. Consequently this is **a frame
+registration and data-integrity diagnostic only**, not an independently
+held-out SLAM evaluation. See [versioned measured evidence](alignment-evidence.json).
+A true benchmark needs a training-only map, independent ground truth
+(or explicitly labeled proxy metrics), and physically justified frame
+registration before running the Ceres tracker against FR079.
