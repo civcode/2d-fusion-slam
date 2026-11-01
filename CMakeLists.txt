@@ -75,6 +75,7 @@ target_link_libraries(slam_match_geometry PUBLIC slam::distance_field)
 # Ceres is an optional private solver: core tests and map construction never
 # fetch solver dependencies or link GTSAM. Enable when the toolchain has Ceres.
 option(SLAM_ENABLE_CERES "Build the Ceres scan-to-map matcher if available" ON)
+option(SLAM_REQUIRE_CERES "Fail configuration if Ceres is requested but unavailable" OFF)
 if(SLAM_ENABLE_CERES)
   find_package(Ceres QUIET CONFIG)
   if(Ceres_FOUND)
@@ -86,6 +87,9 @@ if(SLAM_ENABLE_CERES)
       "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
     target_link_libraries(slam_match_ceres PUBLIC slam::match_geometry PRIVATE Ceres::ceres)
   else()
+    if(SLAM_REQUIRE_CERES)
+      message(FATAL_ERROR "Ceres required: set Ceres_DIR or CMAKE_PREFIX_PATH to the offline installation")
+    endif()
     message(STATUS "Ceres not found: geometry reference matcher and EDT tests remain available")
   endif()
 endif()
@@ -121,10 +125,20 @@ if(BUILD_TESTING)
   option(SLAM_ENABLE_CATCH2 "Fetch pinned Catch2 v3 for detailed tests" ON)
   if(SLAM_ENABLE_CATCH2)
     include(FetchContent)
-    FetchContent_Declare(Catch2
-      GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-      GIT_TAG 2b60af89e23d28eefc081bc930831ee9d45ea58b
-      GIT_SHALLOW FALSE)
+    # Prefer the user-supplied complete release for air-gapped builds. Never
+    # commit/download a vendored copy simply to run tests.
+    set(SLAM_CATCH2_SOURCE_DIR "" CACHE PATH "Local Catch2 v3.16.1 source root")
+    if(SLAM_CATCH2_SOURCE_DIR)
+      if(NOT EXISTS "${SLAM_CATCH2_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "SLAM_CATCH2_SOURCE_DIR must point to the extracted Catch2 source root")
+      endif()
+      FetchContent_Declare(Catch2 SOURCE_DIR "${SLAM_CATCH2_SOURCE_DIR}")
+    else()
+      FetchContent_Declare(Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG 08092139210881f01a34e60c5f2fd6afa0ea4024
+        GIT_SHALLOW FALSE)
+    endif()
     FetchContent_MakeAvailable(Catch2)
     add_executable(slam_core_catch2 tests/core_catch2.cpp)
     target_link_libraries(slam_core_catch2 PRIVATE slam::core Catch2::Catch2WithMain)
