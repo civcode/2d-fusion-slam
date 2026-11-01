@@ -279,6 +279,46 @@ Json FusionRuns::index() const {
   return out;
 }
 Json FusionRuns::report(const std::string& run) const {return load(run).report;}
+Json FusionRuns::profile(const std::string& run) const {
+  const auto report=load(run).report;
+  const auto j=parse_json(read_file(directory(run)/"fusion_profile.json",512*1024));
+  need(j.at("format").str()=="FUSPROFILE1" &&
+       j.at("scene").str()==report.at("scene").str() &&
+       j.at("matcher").str()==report.at("matcher").str() &&
+       j.at("frames").uint()==report.at("frames").uint() &&
+       j.at("clock").str()=="std::chrono::steady_clock",
+       "profile is not from this fusion run");
+  const double scan_ms=finite(j.at("scan_period_ms"),10000);
+  need(scan_ms>0&&std::abs(scan_ms-report.at("scan_period_ns").real()*1e-6)<1e-7,
+       "profile input frequency does not match recorded run");
+  const auto enabled=j.at("profiled").flag();
+  const auto& stages=j.at("stages");
+  need(stages.kind==Json::Kind::object&&stages.object.size()<=32,
+       "invalid profiling stage collection");
+  for(const auto& [name,entry]:stages.object){
+    need(!name.empty()&&name.size()<=60&&entry.at("calls").uint()<=100000,
+         "invalid profiling stage");
+    for(const auto field:{"total_ms","mean_ms","p50_ms","p95_ms","max_ms"}){
+      const auto value=finite(entry.at(field),1e9);
+      need(value>=0,"invalid negative profiling duration");
+    }
+    need(entry.at("p50_ms").real()<=entry.at("p95_ms").real() &&
+         entry.at("p95_ms").real()<=entry.at("max_ms").real(),
+         "nonmonotonic profiling percentiles");
+  }
+  for(const auto field:{"fusion_compute_ms","effective_processing_fps",
+                         "realtime_factor","frame_proxy_mean_ms",
+                         "frame_proxy_p95_ms","frame_proxy_max_ms"}){
+    if(enabled)need(finite(j.at(field),1e9)>=0,
+                    "invalid fusion benchmark measurement");
+    else need(j.at(field).kind==Json::Kind::null,
+              "disabled profiler must not claim measured performance");
+  }
+  need(!j.at("realtime_capability_verified").flag(),
+       "offline synthetic profiling cannot verify live real-time capability");
+  return j;
+}
+
 Json FusionRuns::trajectories(const std::string& run) const {return load(run).poses;}
 Json FusionRuns::replay(const std::string& run) const {return load(run).trace;}
 Json FusionRuns::frame(const std::string& run,std::size_t i) const {
