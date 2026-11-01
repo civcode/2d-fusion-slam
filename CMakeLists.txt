@@ -307,7 +307,10 @@ if(BUILD_TESTING)
   # environments that cannot fetch dependencies (smoke test remains runnable).
   option(SLAM_ENABLE_CATCH2 "Fetch pinned Catch2 v3 for detailed tests" ON)
   if(SLAM_ENABLE_CATCH2)
-    include(FetchContent)
+    # Prefer restored CMake package to avoid unnecessary fetch/build work.
+    find_package(Catch2 3.16 QUIET CONFIG)
+    if(NOT TARGET Catch2::Catch2WithMain)
+      include(FetchContent)
     # Prefer the user-supplied complete release for air-gapped builds. Never
     # commit/download a vendored copy simply to run tests.
     set(SLAM_CATCH2_SOURCE_DIR "" CACHE PATH "Local Catch2 v3.16.1 source root")
@@ -322,7 +325,8 @@ if(BUILD_TESTING)
         GIT_TAG 08092139210881f01a34e60c5f2fd6afa0ea4024
         GIT_SHALLOW FALSE)
     endif()
-    FetchContent_MakeAvailable(Catch2)
+      FetchContent_MakeAvailable(Catch2)
+    endif()
     add_executable(slam_fr079_alignment_catch2 tests/fr079_alignment_test.cpp)
     target_link_libraries(slam_fr079_alignment_catch2 PRIVATE slam::fr079_alignment Catch2::Catch2WithMain)
     add_test(NAME fr079_alignment_unit COMMAND slam_fr079_alignment_catch2)

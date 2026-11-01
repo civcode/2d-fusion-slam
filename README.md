@@ -60,6 +60,18 @@ ctest --test-dir build-catch --output-on-failure
 
 If Eigen3 is not discoverable, supply `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3`. No public dataset download, hardware or GitHub Actions are required.
 
+## Reusable offline dependency cache
+
+A verified **11.6 MB Linux x86-64 Debian 13/GCC 14** dependency bundle
+preserves installed Catch2 3.16.1, Ceres 2.2.0, GTSAM 4.3.0 and Eigen3 3.4.0
+across chat/workspace resets. The repo tracks the pinned source checksums,
+build scripts, restore verification, CMake smoke test and exact archive SHA-256,
+but **not** the compiled archive. See [recovery and release instructions](docs/dependency-cache.md).
+**The Release asset is prepared but not yet published** through GitHub.
+
+CMake prefers an installed Catch2 package; it does not fetch Catch2 if
+the restored package is available.
+
 ## Manual GitHub build and tests
 
 The [Manual C++ build and tests](.github/workflows/manual-build-test.yml) workflow runs **only when manually started** from **Actions → Manual C++ build and tests → Run workflow**. It does not run on pushes, pull requests or a schedule, and it was not dispatched when added.
@@ -78,6 +90,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [FR079 map-frame diagnostic evidence](datasets/fr079/alignment-evidence.json)
 - [FR079 training-only benchmark evidence](datasets/fr079/train-only-evidence.json)
 - [Air-gapped Catch2 and Ceres setup](docs/offline-source-dependencies.md)
+- [Offline dependency bundle, restore and Release setup](docs/dependency-cache.md)
 - [Offline GTSAM 4.3 pose-graph integration](docs/offline-pose-graph.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 

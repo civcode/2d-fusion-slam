@@ -132,3 +132,27 @@ The new slam_fr079_map_export CLI generates a binary map plus visualization-only
 - The *full repository* Catch2/Ceres/GTSAM build matrix has not been run locally for this new target; the existing manual GitHub Actions workflow remains unchanged and was not dispatched. The user's previous successful workflow run predates this addition and does not validate GTSAM.
 
 **Still outstanding:** independently measured wheel/gyro or independently justified loop measurements, provenance-qualified factor uncertainty, source-correct mapping rebuild after optimization, false-loop evaluation on public data, and complete end-to-end offline SLAM. See [offline graph build and safety contract](offline-pose-graph.md).
+
+
+## 2026-11-01 — Portable dependency cache, Stage 1
+
+Built a **11,572,733-byte** versioned development dependency archive with
+installed Catch2 3.16.1, Ceres 2.2.0, GTSAM 4.3.0, Eigen 3.4 headers,
+license notices, source hashes, platform metadata and per-file checksums.
+The SHA-256 of the archive is
+`f459867e70f25e1de5f092476dd72b3953a5e985fdd3460b15726c1a1a89838b`.
+
+**Local evidence:** Repeated packaging from identical installed prefixes
+produced byte-identical archives; a fresh extraction at a different path
+compiled, linked and executed a combined Catch2/Ceres/GTSAM/Eigen smoke
+test (1/1). Mutating the manifest caused verification to fail.
+
+**Scope/limitations:** This cache is built for **Debian 13, x86-64, GCC
+14.2, glibc 2.41**. It must not be used on Ubuntu 24.04 or ARM64 without
+rebuilding for that ABI. The complete project CTest matrix was **not** run
+from this restored bundle. The archive is prepared for user publication
+as a GitHub Release asset, but the current GitHub tool connection cannot
+upload binary Release assets; the asset is **not yet on GitHub**.
+
+The existing GitHub Actions workflow remains manual-only and was not run.
+See [dependency recovery documentation](dependency-cache.md).

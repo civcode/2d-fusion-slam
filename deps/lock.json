@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "package_label": "deps-debian13-x86_64-gcc14-v1",
+  "dependencies": {
+    "Catch2": {
+      "version": "3.16.1",
+      "source_archive_sha256": "7509086e230246c393e82a4065b0c2b3b934c3f9e0572b7ab4927a74cf50efc0"
+    },
+    "Ceres": {
+      "version": "2.2.0",
+      "source_archive_sha256": "1fc28e22ce190ce4c1db04d0c2ddfdf8dc836609866d09372ea8533c8b6d490b",
+      "build_features": "MINIGLOG=ON; GFLAGS=OFF; SUITESPARSE=OFF; CXSPARSE=OFF; LAPACK=OFF; BUILD_TESTING=OFF"
+    },
+    "GTSAM": {
+      "version": "4.3.0",
+      "source_archive_sha256": "44a5a8da6e553f03c229ebc75973c80a6474b7f3f485a7ef230ad64bce3a5f76",
+      "build_features": "TBB=OFF; BOOST_FEATURES=OFF; BOOST_SERIALIZATION=OFF; CUDA=OFF; Python=OFF; bundled Eigen; RUNPATH=$ORIGIN"
+    },
+    "Eigen3": {
+      "version": "3.4.0",
+      "headers_provenance": "Eigen 3.4.0 headers from CasADi environment, bundled as source headers (not compiled); source license MPL-2.0",
+      "license": "MPL-2.0"
+    }
+  },
+  "target_platform": {
+    "os_id": "debian",
+    "os_version_id": "13",
+    "architecture": "x86_64",
+    "compiler_family": "gcc",
+    "compiler_major": 14
+  }
+}
