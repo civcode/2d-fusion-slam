@@ -30,7 +30,7 @@ cmake -S . -B "$build" -G Ninja \
   -DSLAM_ENABLE_GTSAM="$solver" -DSLAM_REQUIRE_GTSAM="$solver" \
   -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 cmake --build "$build" --parallel "$jobs" --target \
-  slam_gyro_wheel_test slam_offline_fusion slam_map_accuracy_cli fusion_slam_demo
+  slam_fusion_profiler_test slam_gyro_wheel_test slam_offline_fusion slam_map_accuracy_cli fusion_slam_demo
 ctest --test-dir "$build" --output-on-failure \
   --timeout 240 -R '^(gyro_wheel_fusion|offline_fusion|fusion_replay_http|native_web_api)
 
