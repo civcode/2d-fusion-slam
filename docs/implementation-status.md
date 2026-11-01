@@ -503,3 +503,37 @@ evidence requirements and remaining hardware/software gates.
   No GitHub Actions or remote CI were dispatched.
 
 See [native synthetic mapping benchmark](synthetic-mapping-benchmark.md).
+
+
+## 2026-11-01 — Native C++20 offline Web UI migration
+
+- Added \`apps/demo/native/json.hpp\`, a bounded, typed C++20 JSON parser
+  that preserves numeric map identity without lossy floating conversion,
+  refuses duplicate keys, and validates finite numeric fields.
+- Added \`apps/demo/native/data.hpp/.cpp\`: read-only, directory-confined,
+  symlink-refusing FUSMAP2D loading through the existing authoritative C++
+  \`read_map_bundle\`, snapshot-derived metadata/cell inspection, zlib PNG,
+  FUSGEN1 active/previous registry checks, FUSREPLAY1 replay validation,
+  and SHA-256/source/map-pinned FUSMATCH1 sidecar diagnostics. Invalid Ceres
+  sidecars are reported invalid; they cannot mutate the map or inject
+  accepted tracking poses.
+- Added \`apps/demo/native/main.cpp\`: POSIX loopback-first, fixed asset
+  allowlist, bounded HTTP/1.0/1.1 GET-only viewer with defensive headers,
+  per-client timeouts and explicit opt-in broad Docker binding. Preserved
+  HTML/CSS/JS UI and public read-only API routes. Purely local, not an
+  internet-facing or real-time HTTP server.
+- Added \`fusion_slam_demo\` CMake target, \`native_web_api\` Python-driven
+  CTest covering map metadata, PNG, replay, sidecar digest/fingerprint
+  validation, synthetic fallback and read-only failures, and a lightweight
+  Docker demo-builder/runtime without Python, Ceres or GTSAM. The existing
+  Python viewer and offline dataset conversion/testing tools remain for
+  fallback and parity comparison.
+- **Verification status:** Source-level parity review performed. This
+  execution environment cannot fetch a complete repository checkout from
+  GitHub and **did not execute the native full-repo CMake build, HTTP CTest
+  or Docker build**. Docker \`demo\` now targets the native executable;
+  operators should verify these locally before replacing an established
+  deployment. No GitHub Actions workflows were invoked or modified.
+
+See [native demo instructions](../apps/demo/README.md) and [web UI
+architecture](web-ui.md).
