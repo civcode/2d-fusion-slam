@@ -259,7 +259,8 @@ if(SLAM_BUILD_NATIVE_DEMO)
   if(OpenSSL_FOUND AND ZLIB_FOUND AND UNIX)
     add_executable(fusion_slam_demo
       apps/demo/native/main.cpp
-      apps/demo/native/data.cpp)
+      apps/demo/native/data.cpp
+      apps/demo/native/fusion.cpp)
     target_compile_features(fusion_slam_demo PRIVATE cxx_std_20)
     target_include_directories(fusion_slam_demo PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}")
