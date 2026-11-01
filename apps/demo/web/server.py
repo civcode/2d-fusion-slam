@@ -26,7 +26,7 @@ STATIC = BASE / "static"
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.slammap\Z")
 MAP_ENDPOINT = re.compile(r"/api/maps/([A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.slammap)(?:/(image\.png|cell))?\Z")
 MAX_ENTRIES = 512
-REPLAY_ENDPOINT = re.compile(r"/api/replays/([A-Za-z0-9][A-Za-z0-9_.-]{0,140}\.slamreplay\.json)(?:/frame/([0-9]{1,4}))?\Z")
+REPLAY_ENDPOINT = re.compile(r"/api/replays/([A-Za-z0-9][A-Za-z0-9_.-]{0,140}\.slamreplay\.json)(?:/(frames|frame/[0-9]{1,4}))?\Z")
 
 
 class Dashboard:
@@ -222,8 +222,17 @@ class Handler(BaseHTTPRequestHandler):
             name, frame_text = replay_match.groups()
             replay = self.viewer.replay(name)
             match_info, match_rows = self.viewer.ceres(name, replay)
+            if frame_text == "frames":
+                return self._json(200, {
+                    "format": "FUSREPLAYFRAMES1",
+                    "source_sha256": replay["source"]["source_sha256"],
+                    "frames": [
+                        {**frame, "matching": match_rows.get(idx),
+                         "matching_state": match_info["status"]}
+                        for idx, frame in enumerate(replay["frames"])
+                    ]})
             if frame_text is not None:
-                idx = int(frame_text)
+                idx = int(frame_text.removeprefix("frame/"))
                 if idx >= len(replay["frames"]):
                     raise ValueError("frame index out of range")
                 response = dict(replay["frames"][idx])
