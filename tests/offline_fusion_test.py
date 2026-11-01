@@ -51,6 +51,33 @@ class OfflineFusionExperiment(unittest.TestCase):
             self.assertEqual(len(path), report["frames"])
             self.assertTrue(all(len(p) == 3 for p in path))
 
+        trace = json.loads((folder / "fusion_replay.json").read_text())
+        self.assertEqual(trace["format"], "FUSFUSREPLAY1")
+        self.assertEqual(trace["scene"], report["scene"])
+        self.assertEqual(trace["matcher"], report["matcher"])
+        self.assertEqual(trace["frame_count"], report["frames"])
+        self.assertEqual(trace["reference_class"], "synthetic_exact")
+        self.assertEqual(trace["scan_frame"], "laser_midpoint_deskewed_full_se2")
+        self.assertEqual(len(trace["frames"]), report["frames"])
+        accepted = rejected = loop_accepted = 0
+        for i, frame in enumerate(trace["frames"]):
+            self.assertEqual(frame["index"], i)
+            self.assertEqual(frame["time_ns"], pose_export["timestamps_ns"][i])
+            self.assertLessEqual(len(frame["points_laser"]), frame["hits"])
+            self.assertTrue(frame["mapping"]["fused_scan_matched_inserted"])
+            self.assertEqual(frame["matching"]["attempted"], i % 2 == 1)
+            if i % 2:
+                accepted += int(frame["matching"]["accepted"])
+                rejected += int(not frame["matching"]["accepted"])
+            self.assertEqual(frame["matching"]["cumulative_accepted"], accepted)
+            self.assertEqual(frame["matching"]["cumulative_rejected"], rejected)
+            loop_accepted += sum(event["decision"] == "accepted"
+                                 for event in frame["loop_events"])
+            self.assertEqual(frame["cumulative_accepted_loops"], loop_accepted)
+        self.assertEqual(accepted, report["heldout_accepted"])
+        self.assertEqual(rejected, report["heldout_rejected"])
+        self.assertEqual(loop_accepted, report["graph_accepted_loops"])
+
         self.assertGreater(report["heldout_attempted"], 10)
         self.assertEqual(report["heldout_attempted"],
                          report["heldout_accepted"] + report["heldout_rejected"])
