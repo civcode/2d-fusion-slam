@@ -16,7 +16,7 @@ enum class State { lost, uncertain, tracking, relocalizing };
 enum class Reason {
   no_anchor, matched, match_rejected, invalid_evidence, excessive_innovation,
   source_mismatch, clock_discontinuity, calibration_changed, stale, input_over_budget,
-  relocalization_requested
+  relocalization_requested, no_new_observation
 };
 
 struct Settings {
