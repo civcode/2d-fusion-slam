@@ -21,6 +21,7 @@ services:
       target: test
       args:
         SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-2}
+        SLAM_PROFILE_FUSION: ${SLAM_PROFILE_FUSION:-ON}
     environment:
       CTEST_PARALLEL_LEVEL: ${SLAM_DOCKER_JOBS:-2}
     init: true
