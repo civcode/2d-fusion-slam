@@ -10,6 +10,7 @@
 #include <numeric>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,28 +21,33 @@ class PipelineProfiler {
   struct Observation { double ms{}; std::size_t frame{}; bool per_frame{}; };
   class Scope {
    public:
-    Scope(PipelineProfiler& owner,std::string stage,std::size_t frame=0,
+    Scope(PipelineProfiler& owner,std::string_view stage,std::size_t frame=0,
           bool per_frame=false)
-      :owner_(owner),stage_(std::move(stage)),frame_(frame),per_frame_(per_frame)
 #ifdef SLAM_PROFILE_FUSION
-      ,started_(Clock::now())
+      :owner_(owner),stage_(stage),frame_(frame),per_frame_(per_frame),
+       started_(Clock::now())
 #endif
-    {}
+    {
+#ifndef SLAM_PROFILE_FUSION
+      // Completely remove timer, string and map work from an OFF build.
+      (void)owner;(void)stage;(void)frame;(void)per_frame;
+#endif
+    }
     Scope(const Scope&)=delete;
     Scope& operator=(const Scope&)=delete;
     ~Scope(){
 #ifdef SLAM_PROFILE_FUSION
       const auto end=Clock::now();
       const double elapsed=std::chrono::duration<double,std::milli>(end-started_).count();
-      owner_.samples_[stage_].push_back({elapsed,frame_,per_frame_});
+      owner_.samples_[std::string(stage_)].push_back({elapsed,frame_,per_frame_});
 #endif
     }
    private:
+#ifdef SLAM_PROFILE_FUSION
     PipelineProfiler& owner_;
-    std::string stage_;
+    std::string_view stage_;
     std::size_t frame_{};
     bool per_frame_{};
-#ifdef SLAM_PROFILE_FUSION
     Clock::time_point started_;
 #endif
   };
