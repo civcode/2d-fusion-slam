@@ -45,7 +45,8 @@ def validate(data):
     for key in ("dataset", "frame_id", "pose_kind", "timestamp_kind", "source_sha256"):
         if not isinstance(source.get(key), str) or not 1 <= len(source[key]) <= 256:
             raise ReplayError("missing replay provenance: " + key)
-    if source["pose_kind"] not in ("logged_laser_estimate_not_ground_truth", "synthetic_exact"):
+    if source["pose_kind"] not in ("logged_laser_estimate_not_ground_truth", "synthetic_exact",
+                                   "estimated_fr079_odometry_scan_matched_not_ground_truth"):
         raise ReplayError("unrecognized pose provenance")
     if source["timestamp_kind"] not in ("CARMEN_IPC_scan_level", "synthetic_scan_level"):
         raise ReplayError("unsupported clock provenance")
