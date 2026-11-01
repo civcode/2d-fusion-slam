@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <cstdint>
 #include <string>
 
 namespace slam::viewer {
@@ -26,6 +27,16 @@ private:
   ReplaySession replay(const std::string& name) const;
   Json registry() const;
   std::filesystem::path maps_, replays_;
+  // One verified map and its PNG stay hot while the user explores that map.
+  // The single-threaded viewer invalidates this cache on file identity change.
+  struct CachedMap {
+    std::string name;
+    std::uint64_t device{},inode{},bytes{};
+    std::int64_t mtime_s{},mtime_ns{},ctime_s{},ctime_ns{};
+    mapping::MapBundle bundle;
+    std::optional<std::string> png;
+  };
+  mutable std::optional<CachedMap> map_cache_;
   std::optional<mapping::MapBundle> synthetic_map_;
   std::optional<Json> synthetic_replay_;
 };
