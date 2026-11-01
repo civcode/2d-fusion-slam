@@ -255,6 +255,14 @@ add_executable(slam_synthetic_eval_fixture src/synthetic_eval_fixture.cpp)
 target_compile_features(slam_synthetic_eval_fixture PRIVATE cxx_std_20)
 target_link_libraries(slam_synthetic_eval_fixture PRIVATE
   slam_fixtures slam::map_bundle slam::mapping)
+# Actual synthetic scan-to-map baseline: poses after the first anchor are
+# inferred from biased relative odometry and independently held-out scans.
+add_executable(slam_synthetic_mapping_benchmark
+  src/synthetic_mapping_benchmark.cpp)
+target_compile_features(slam_synthetic_mapping_benchmark PRIVATE cxx_std_20)
+target_link_libraries(slam_synthetic_mapping_benchmark PRIVATE
+  slam_fixtures slam::mapping slam::map_bundle
+  slam::match_geometry slam::map_accuracy)
 if(ZLIB_FOUND)
   add_executable(slam_fr079_map_export src/fr079_map_export.cpp)
   target_compile_features(slam_fr079_map_export PRIVATE cxx_std_20)
@@ -350,6 +358,16 @@ if(BUILD_TESTING)
   add_executable(slam_map_accuracy_test tests/map_accuracy_test.cpp)
   target_link_libraries(slam_map_accuracy_test PRIVATE slam::map_accuracy)
   add_test(NAME map_accuracy COMMAND slam_map_accuracy_test)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME synthetic_mapping_benchmark
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/synthetic_mapping_benchmark_test.py"
+        "$<TARGET_FILE:slam_synthetic_mapping_benchmark>"
+        "$<TARGET_FILE:slam_map_accuracy_cli>"
+        "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(synthetic_mapping_benchmark PROPERTIES
+      TIMEOUT 180)
+  endif()
   if(Python3_Interpreter_FOUND)
     add_test(NAME map_accuracy_fixture_export
       COMMAND slam_synthetic_eval_fixture apartment
