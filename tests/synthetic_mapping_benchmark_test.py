@@ -37,6 +37,15 @@ class SyntheticMappingBenchmarkTest(unittest.TestCase):
         self.assertGreater(report["scan_count"], 10)
         self.assertGreater(report["query_attempted"], 0)
         self.assertEqual(report["query_attempted"],
+                         report["scan_count"] // 2,
+                         "odd-index scans must be held out from matcher training")
+        self.assertEqual(report["even_training_updates"],
+                         (report["scan_count"] + 1) // 2)
+        config = report["configuration"]
+        self.assertEqual(config["scan_beams"], 360)
+        self.assertEqual(config["odometry_forward_scale"], 1.018)
+        self.assertEqual(config["matcher_min_supported_hits"], 18)
+        self.assertEqual(report["query_attempted"],
                          report["query_accepted"] + report["query_rejected"])
         self.assertGreater(report["even_training_updates"], 0)
         self.assertGreater(report["query_accepted"], 0,
