@@ -24,6 +24,8 @@ struct MapAccuracyReport {
   std::uint64_t map_revision{};
   std::size_t width{}, height{};
   double resolution_m{};
+  double occupied_threshold_log_odds{};
+  double free_threshold_log_odds{};
   std::size_t reference_wall_cells{};
   std::size_t predicted_wall_cells{};
   std::size_t true_positive{}, false_positive{}, false_negative{}, true_negative{};
