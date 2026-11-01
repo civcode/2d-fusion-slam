@@ -520,7 +520,7 @@ ViewerData::ReplaySession ViewerData::replay(const std::string& name) const {
                         "per_beam_time_verified"})
         need(!side.at(f).flag(),"unjustified Ceres source claim");
       const std::string mapname=side.at("map_name").str();
-      const auto m=map(mapname),metadata=map_info(m);
+      const auto m=map(mapname);
       need(side.at("map_fingerprint").uint()==m.snapshot->fingerprint()&&
            side.at("map_revision").uint()==m.snapshot->revision()&&
            side.at("map_origin_verified").flag()==m.provenance.metric_origin_verified&&
@@ -550,7 +550,7 @@ ViewerData::ReplaySession ViewerData::replay(const std::string& name) const {
         need(ix>=frames.size()&&(!rows.array.empty()||frames.empty()),
              "incomplete Ceres scan selection");
       }
-      std::size_t prev=0;bool first=true,accepted=0; 
+      std::size_t prev=0,accepted=0;bool first=true; 
       for(const auto& row:rows.array){
         need(keys(row,{"index","t","seed","estimate","status","iterations",
            "input_hits","supported_hits","overlap","initial_robust_cost",
