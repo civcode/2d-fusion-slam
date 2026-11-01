@@ -236,6 +236,7 @@ void write_pose(std::ostream& out, const PoseError& e) {
 
 void write_report(std::ostream& out, const Dataset& d, const FrontendStats& stats,
                   const PoseError& odom, const PoseError& matched,
+                  std::uint64_t training_map_fingerprint,
                   const slam::mapping::MapAccuracyReport& baseline_map,
                   const slam::mapping::MapAccuracyReport& rebuilt_map) {
   out << std::setprecision(12);
@@ -246,7 +247,8 @@ void write_report(std::ostream& out, const Dataset& d, const FrontendStats& stat
       << "\n  \"pose_anchor\":\"first_pose_only\","
       << "\n  \"odometry\":\"deterministically_perturbed_relative_pose\","
       << "\n  \"mapping_truth_poses_used\":false,"
-      << "\n  \"reference_map_fingerprint\":" << baseline_map.map_fingerprint
+      << "\n  \"training_map_fingerprint\":" << training_map_fingerprint
+      << ",\n  \"baseline_map_fingerprint\":" << baseline_map.map_fingerprint
       << ",\n  \"candidate_map_fingerprint\":" << rebuilt_map.map_fingerprint
       << ",\n  \"scan_count\":" << d.scans.size()
       << ",\n  \"query_attempted\":" << stats.attempted
@@ -298,7 +300,7 @@ int main(int argc, char** argv) {
     std::ofstream report(directory/"benchmark.json");
     if (!report) throw std::runtime_error("cannot create benchmark JSON");
     write_report(report,d,stats,odom_error,candidate_error,
-                 baseline_score,candidate_score);
+                 training.snapshot->fingerprint(),baseline_score,candidate_score);
     std::cout << "synthetic scene=" << d.scene.id << " scans=" << d.scans.size()
               << " heldout_accepted=" << stats.accepted << "/" << stats.attempted
               << " map_iou=" << baseline_score.occupied_iou.value_or(0.0)
