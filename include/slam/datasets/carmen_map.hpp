@@ -18,7 +18,9 @@ struct CarmenMap {
   // increasing Y upward. An image's row 0 is at grid Y=height-1.
   [[nodiscard]] std::optional<float> at_xy(std::size_t x, std::size_t y) const noexcept {
     if (x >= width || y >= height) return std::nullopt;
-    return values_in_file_order[x * height + y];
+    const auto index = x * static_cast<std::size_t>(height) + y;
+    if (index >= values_in_file_order.size()) return std::nullopt;
+    return values_in_file_order[index];
   }
   [[nodiscard]] std::optional<std::size_t> image_row_from_y(std::size_t y) const noexcept {
     if (y >= height) return std::nullopt;

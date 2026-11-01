@@ -23,6 +23,8 @@ TEST_CASE("CARMEN binary v020 map preserves unknown versus known values") {
   REQUIRE(m.at_xy(1,0).value()==0.95f);
   REQUIRE(m.at_xy(1,1).value()==0.f);
   REQUIRE_FALSE(m.at_xy(2,0));
+  CarmenMap malformed=m; malformed.values_in_file_order.pop_back();
+  REQUIRE_FALSE(malformed.at_xy(1,1));
   REQUIRE(m.image_row_from_y(0).value()==1);
   REQUIRE(m.image_row_from_y(1).value()==0);
   REQUIRE_FALSE(m.has_metric_origin());
