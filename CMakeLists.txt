@@ -258,6 +258,13 @@ if(SLAM_BUILD_NATIVE_DEMO)
     target_link_libraries(fusion_slam_demo PRIVATE
       slam::map_bundle OpenSSL::Crypto ZLIB::ZLIB)
     set_target_properties(fusion_slam_demo PROPERTIES CXX_EXTENSIONS OFF)
+    if(BUILD_TESTING)
+      add_executable(slam_native_viewer_json_test tests/native_viewer_json_test.cpp)
+      target_compile_features(slam_native_viewer_json_test PRIVATE cxx_std_20)
+      target_include_directories(slam_native_viewer_json_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+      add_test(NAME native_viewer_json COMMAND slam_native_viewer_json_test)
+    endif()
     if(BUILD_TESTING AND Python3_Interpreter_FOUND)
       add_test(NAME native_web_api
         COMMAND "${Python3_EXECUTABLE}"
