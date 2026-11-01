@@ -301,6 +301,12 @@ Json FusionRuns::map_metadata(const std::string& run,const std::string& method) 
        "FUSMAP2D bundle does not match fusion report identity");
   return metadata;
 }
+Json FusionRuns::map_cell(const std::string& run,const std::string& method,
+                          std::size_t x,std::size_t y) const {
+  (void)map_metadata(run,method); // report and authoritative map identity
+  const auto path=directory(run);
+  return ViewerData(path,path,false).map_cell(method+".slammap",x,y);
+}
 std::string FusionRuns::map_png(const std::string& run,const std::string& method) const {
   (void)map_metadata(run,method); // verifies authoritative fingerprint before image
   const auto path=directory(run);
