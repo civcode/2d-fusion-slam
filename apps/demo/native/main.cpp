@@ -99,7 +99,29 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
     }
     return error(404,"unknown fusion endpoint");
   }
-  if(path=="/api/maps") return json(data.list_maps());
+  if(path=="/api/maps") {
+    Json listing=data.list_maps();
+    // Fusion run maps are exposed through the *same* map-inspection
+    // contract, without copying artifacts or pretending they are published.
+    for(const auto& run:fusion.index().at("runs").array) {
+      const auto id=run.at("id").str();
+      try {
+        const auto report=fusion.report(id);
+        for(const auto& [method,_]:report.at("results").object) {
+          Json item=Json::dict();
+          const std::string key="fusion@"+id+"@"+method;
+          item.object={{"id",Json::text(key)},
+                       {"name",Json::text(id+" / "+method)},
+                       {"role",Json::text("fusion")}};
+          listing.object.at("maps").array.push_back(std::move(item));
+        }
+      }catch(const std::exception&){
+        // A broken or partially written run must not hide valid maps.
+        // Selecting any invalid map remains a hard 422; it is never listed.
+      }
+    }
+    return json(std::move(listing));
+  }
   if(path=="/api/replays") return json(data.list_replays());
   if(path=="/"||path=="/index.html"||path=="/app.js"||
      path=="/styles.css"||path=="/replay"||path=="/replay.html"||
@@ -124,6 +146,15 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
     else if(name.ends_with(cell)){name.remove_suffix(cell.size());mode="cell";}
     if(name.empty()||name.size()>200||name.find('/')!=std::string_view::npos)
       return error(404,"invalid map route");
+    std::string run,method;
+    if(name.starts_with("fusion@")){
+      const auto id=name.substr(7);
+      const auto split=id.find('@');
+      if(split==std::string_view::npos||id.find('@',split+1)!=std::string_view::npos)
+        return error(404,"invalid fusion map id");
+      run=std::string(id.substr(0,split));
+      method=std::string(id.substr(split+1));
+    }
     if(!mode.empty()&&mode=="cell"){
       const auto amp=query.find('&');
       if(amp==std::string_view::npos||query.find('&',amp+1)!=std::string_view::npos)
@@ -135,9 +166,14 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
       std::size_t x=0,y=0;
       if(!decimal(a.substr(2),x)||!decimal(b.substr(2),y))
         return error(422,"cell coordinates require bounded nonnegative integers");
+      if(!run.empty())return json(fusion.map_cell(run,method,x,y));
       return json(data.map_cell(std::string(name),x,y));
     }
     if(!query.empty()) return error(422,"unsupported map query");
+    if(!run.empty()){
+      if(mode=="image")return {200,"image/png",fusion.map_png(run,method)};
+      return json(fusion.map_metadata(run,method));
+    }
     if(mode=="image")return {200,"image/png",data.map_png(std::string(name))};
     return json(data.map_metadata(std::string(name)));
   }
