@@ -10,6 +10,7 @@
 #include <numeric>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace slam::fusion {
