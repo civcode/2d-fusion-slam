@@ -428,3 +428,25 @@ and strict GCC warnings+UBSan. The real FR079 run used installed Ceres
 2.2.0. Full Ubuntu Docker image/CTest is still unverified in this
 workspace. No GitHub Actions were run or changed. See
 [held-out Ceres evaluation](heldout-ceres-evaluation.md).
+
+## 2026-11-01 — P2 read-only known-map tracker foundation (proposed)
+
+A portable `slam_known_map` library now owns the conservative runtime
+`LOST / UNCERTAIN / TRACKING / RELOCALIZING` pose-trust transitions over
+the existing immutable EDT/reference matcher. It requires a caller-attested
+independent anchor and verified calibration/time/source identity, checks
+matcher's pinned map and independent LiDAR diagnostics, limits scan hit
+count and innovation, preserves same-timestamp map/odom semantics, and
+suppresses pose publication after rejection or host-steady timeout.
+
+The new `known_map_tracker` CTest covers synthetic matcher integration
+and mocked adverse paths. **Validation status:** a focused local strict
+warnings + UBSan trust-state harness passed using interface-compatible
+substitutes because repository checkout/network access is unavailable;
+the actual full-repository `known_map_tracker` CTest and Ceres/Pi paths
+remain **unverified** until a normal checkout and build. This is *not*
+proof of independently measured pose accuracy, sensor calibration, verified
+map alignment or a deployed Pi localizer. No GitHub Actions were run.
+
+See [known-map tracker contract](known-map-tracker.md) for usage, exact
+evidence requirements and remaining hardware/software gates.
