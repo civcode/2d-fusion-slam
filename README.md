@@ -96,6 +96,46 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## Moving-scan offline gyro/wheel SLAM experiment
+
+The new **C++20 `slam_offline_fusion`** executable connects verified
+timestamped synthetic gyroscope and wheel observations to full-SE(2)
+trajectory interpolation, moving LiDAR beam deskew, frozen-map Ceres scan
+matching (a geometry-only fallback is reported if Ceres is not built),
+and optional independently sourced GTSAM graph optimization. All mapping
+uses estimated poses; the exact simulator reference is reserved for
+sensor generation and after-the-fact accuracy/ATE scoring.
+
+Compared methods: **wheel-only**, **LiDAR-only without deskew**,
+**gyro + wheel**, **gyro + wheel + source-excluded scan matching**, and,
+when GTSAM is installed, **graph-optimized**. Each produces its own
+authoritative FUSMAP2D snapshot; the run writes an auditable
+`fusion_report.json` and time-indexed `trajectories.json`.
+Loop factors are refused by default: LiDAR scan-to-map pose corrections
+are **not** independent relative measurements. An opt-in *separately
+simulated relative-pose sensor* can exercise loop gating in synthetic
+tests, but no such hardware sensor is claimed.
+
+~~~sh
+cmake -S . -B build -G Ninja -DBUILD_TESTING=ON \
+  -DSLAM_ENABLE_CATCH2=OFF \
+  -DSLAM_ENABLE_CERES=ON -DSLAM_REQUIRE_CERES=ON \
+  -DSLAM_ENABLE_GTSAM=ON -DSLAM_REQUIRE_GTSAM=ON
+cmake --build build --target slam_offline_fusion \
+  slam_gyro_wheel_test slam_map_accuracy_cli --parallel 2
+ctest --test-dir build -R 'gyro_wheel_fusion|offline_fusion' \
+  --output-on-failure
+
+./build/slam_offline_fusion apartment /tmp/slam-fusion-apartment-a
+./build/slam_offline_fusion warehouse /tmp/slam-fusion-warehouse-a
+~~~
+
+The exact expected Ceres/GTSAM results and numerical map accuracy must be
+measured by running the native executable; **the complete repository native
+build remains unverified in this environment**. No physical LD19/MPU6050
+clock mapping, stationary calibration, real-wheel source or real loop
+sensor is asserted. See [offline sensor fusion protocol](docs/offline-fusion.md).
+
 ## Estimated-pose synthetic mapping benchmark
 
 \`slam_synthetic_mapping_benchmark\` now generates apartment and warehouse
