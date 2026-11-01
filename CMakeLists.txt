@@ -16,6 +16,17 @@ endif()
 
 include(CTest)
 
+# Browser playback behavior is tested with Node when already installed.
+# Docker's base image intentionally remains free of Node/npm dependencies.
+if(BUILD_TESTING)
+  find_program(SLAM_NODE_EXECUTABLE NAMES node nodejs)
+  if(SLAM_NODE_EXECUTABLE)
+    add_test(NAME replay_browser_runtime
+      COMMAND "${SLAM_NODE_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/replay_browser_runtime_test.js")
+  endif()
+endif()
+
 # The offline viewer has no C++ runtime dependency; run its standalone
 # Python standard-library tests whenever Python >= 3.10 is installed.
 if(BUILD_TESTING)
