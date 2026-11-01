@@ -1,0 +1,39 @@
+name: Manual C++ build and tests
+
+# Intentionally manual-only: no push, pull_request, schedule, or other triggers.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Ubuntu 24.04 / GCC / Ceres / Catch2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build libeigen3-dev libceres-dev zlib1g-dev
+
+      - name: Configure with Ceres and Catch2 tests required
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON \
+            -DSLAM_ENABLE_CERES=ON \
+            -DSLAM_REQUIRE_CERES=ON \
+            -DSLAM_ENABLE_CATCH2=ON
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Run CTest
+        run: ctest --test-dir build --output-on-failure --parallel 2 --timeout 120

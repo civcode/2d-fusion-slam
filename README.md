@@ -51,6 +51,12 @@ ctest --test-dir build-catch --output-on-failure
 
 If Eigen3 is not discoverable, supply `-DSLAM_EIGEN_INCLUDE_DIR=/path/to/eigen3`. No public dataset download, hardware or GitHub Actions are required.
 
+## Manual GitHub build and tests
+
+The [Manual C++ build and tests](.github/workflows/manual-build-test.yml) workflow runs **only when manually started** from **Actions → Manual C++ build and tests → Run workflow**. It does not run on pushes, pull requests or a schedule, and it was not dispatched when added.
+
+On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2 3.16.1 source, builds with CMake/Ninja and runs CTest, including the Ceres matcher test. CMake requires Ceres so the run cannot silently skip that backend. FR079 full-recording tests require local dataset files outside the repository and are **not included in this workflow**; synthetic and source-level importer tests are included.
+
 ## Documentation
 
 - [Architecture](docs/architecture-specification.md)
