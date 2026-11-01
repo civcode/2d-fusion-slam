@@ -20,7 +20,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if [[ "$action" == image ]] || ! docker image inspect "$image" >/dev/null 2>&1; then
-  docker build --file "$repo/docker/Dockerfile.apt" --tag "$image" "$repo"
+  docker build --file "$repo/Dockerfile" --target dependencies --tag "$image" "$repo"
 fi
 [[ "$action" == image ]] && exit 0
 mkdir -p -- "$build_dir"

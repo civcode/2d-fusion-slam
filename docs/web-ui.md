@@ -19,7 +19,7 @@ mkdir -p /tmp/slam-maps
 ./build/slam_fr079_map_export /path/to/fr079.log.gz /tmp/slam-maps/fr079-training
 
 # Start read-only viewer; choose a directory containing *.slammap
-python3 scripts/web-ui.py --data-dir /tmp/slam-maps --port 8765
+python3 apps/demo/main.py --data-dir /tmp/slam-maps --port 8765
 ~~~
 
 Open **http://127.0.0.1:8765/**. The UI shows the available maps on the
@@ -42,29 +42,49 @@ download \`fr079-training.slammap\` into a directory and pass it to
 \`--data-dir\`. FR079 map-frame alignment remains **unverified** and
 logged poses are **not external trajectory ground truth**.
 
-## Docker — no Python or C++ dependencies on the host
+## Application layout and Docker — no host toolchain
 
-The Ubuntu APT development image now includes Python 3. If you already
-have Docker, no host-side Python, Eigen, Ceres or GTSAM is needed:
+The Web UI lives entirely under [apps/demo](../apps/demo/README.md):
+`apps/demo/main.py` launches the Python standard-library HTTP
+server in `apps/demo/web/`, and its HTML/CSS/JS lives in
+`apps/demo/web/static/`. The prior top-level `web/` package and
+`scripts/web-ui.py` launcher have been removed. The native C++ SLAM
+libraries are not needed to display an exported map.
 
-~~~sh
-docker build -f docker/Dockerfile.apt -t 2d-fusion-slam:ubuntu24.04-apt .
+Like [hybrid-astar-cpp](https://github.com/civcode/hybrid-astar-cpp),
+the root [Dockerfile](../Dockerfile) has distinct stages for the Python
+demo and native build/tests, and [compose.yaml](../compose.yaml) starts
+the demo or runs tests explicitly.
 
+```sh
+# Put an existing .slammap export in apps/demo/maps first.
+docker compose up --build demo
+# Open http://127.0.0.1:8765
+
+# Opt-in full native C++ and Python test run (separate APT-backed image)
+docker compose run --build --rm test
+```
+
+The demo stage installs **Python only**, not Ceres/GTSAM/Catch2, because
+it is a read-only map viewer. The test target builds against Ubuntu 24.04
+APT packages and requires the native solvers. The map files are mounted
+read-only from `./apps/demo/maps` to `/maps`, and
+are ignored by Git and excluded from the Docker build context.
+
+Without Compose, using an existing exported map directory:
+
+```sh
+docker build --target demo -t fusion-slam:demo .
 docker run --rm -p 127.0.0.1:8765:8765 \
-  -v "$(pwd):/workspace:ro" \
-  -v /tmp/slam-maps:/maps:ro \
-  2d-fusion-slam:ubuntu24.04-apt \
-  python3 /workspace/scripts/web-ui.py --data-dir /maps \
-  --host 0.0.0.0 --allow-network
-~~~
+  -v /path/to/slam-maps:/maps:ro \
+  fusion-slam:demo
+```
 
-Here \`/tmp/slam-maps\` must already contain exported \`.slammap\`
-files. **Do not publish port 8765 on all host interfaces** or expose
-the unauthenticated viewer to the Internet. The server normally binds
-only to \`127.0.0.1\`; \`--allow-network\` is required for Docker's
-container-side broad bind and the Docker host-side \`-p\` command is
-intentionally restricted to loopback. The displayed hostname is always
-the user-facing loopback URL, even when bound inside a container.
+The Docker service binds all **container** interfaces to permit port
+forwarding, but the **host** port is explicitly loopback-only.
+The server has no authentication or TLS; never expose it on a public
+interface. Bare-metal Python launches bind to `127.0.0.1` by default,
+and `--allow-network` is still needed for an explicit broad bind.
 
 ## Read-only HTTP API
 
@@ -95,14 +115,13 @@ is authoritative; exported PGM/YAML is only a lossy visualization.
 
 ~~~sh
 python3 -m unittest discover -s tests/web -p 'test_*.py' -v
-node --check web/static/app.js   # optional JavaScript syntax check
+node --check apps/demo/web/static/app.js   # optional JavaScript syntax check
 ~~~
 
 If Python 3.10+ is available at CMake configure time and \`BUILD_TESTING=ON\`,
 the \`web_ui_unit\` CTest is registered and runs with the native suite.
-The Ubuntu Docker APT image explicitly installs Python and its test
-wrapper requires that CTest entry, so it cannot silently skip the UI
-tests.
+The root Dockerfile's native `test` target includes Python and its CTest
+entry; the minimal `demo` target needs only Python to serve maps.
 
 **Local evidence (2026-11-01):** 11/11 unittest cases passed. The
 real FR079 FUSMAP2D export was decoded with its known/unknown counts,

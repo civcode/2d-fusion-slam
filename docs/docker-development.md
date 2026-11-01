@@ -31,6 +31,43 @@ GTSAM 4.3 and Catch2 3.16. The older distribution versions may expose
 differences; the complete Docker CTest run will detect failures and must
 pass before claiming compatibility.
 
+## Root Dockerfile and Compose (matching hybrid-astar-cpp)
+
+The root [Dockerfile](../Dockerfile) has four targets:
+`dependencies` (Ubuntu APT native libraries),
+`build` (C++ compilation with all optional solvers required),
+`test` (manual CTest command), and
+`demo` (the **default**, small Python-only read-only map viewer).
+The older `docker/Dockerfile.apt` has been removed. Its dependency
+installation remains in the root `dependencies` stage.
+
+```sh
+# Browser demo; place local *.slammap exports in apps/demo/maps.
+docker compose up --build demo
+# Open http://127.0.0.1:8765
+
+# Native C++ plus Python tests, opt-in only:
+docker compose run --build --rm test
+
+# Without Compose:
+docker build --target demo -t fusion-slam:demo .
+docker run --rm -p 127.0.0.1:8765:8765 \
+  -v "$PWD/apps/demo/maps:/maps:ro" fusion-slam:demo
+docker build --target test -t fusion-slam:test .
+docker run --rm fusion-slam:test
+```
+
+The `test` service is behind a Compose profile and does **not**
+start with `docker compose up demo`. The `demo` image doesn't
+need Ceres/GTSAM/Catch2 to **view** existing binary maps; the native
+`build`/`test` targets require them. The demo service binds
+host port 8765 to loopback and mounts files read-only. Do not expose
+this unauthenticated viewer publicly.
+
+The existing development wrapper remains useful for repeated native
+builds with a bind-mounted checkout, and now builds the root
+`dependencies` target rather than the removed Dockerfile.
+
 ## Build/test commands
 
 Run these from a clone of `civcode/2d-fusion-slam`. On a Linux host
@@ -57,7 +94,7 @@ bash scripts/docker-build-test.sh
 ~~~
 
 The runner automatically builds the image if it does not exist. It uses
-`docker/Dockerfile.apt` and tags the image
+the root `Dockerfile` `dependencies` stage and tags the image
 `2d-fusion-slam:ubuntu24.04-apt`. The repository is mounted **read-only**
 under `/workspace`. CMake/Ninja outputs are written to the host's
 Git-ignored `.build/docker-ubuntu24.04-apt/` directory via `/build`,
@@ -103,8 +140,10 @@ Before executing CTest, the runner also asserts that the expected
 will not print a misleading green test run after silently skipping a
 solver or the detailed tests.
 
-The Docker image has no GitHub source checkout or GTSAM/Ceres/Catch2
+The native `dependencies` image has no GitHub source checkout or GTSAM/Ceres/Catch2
 build from source; all dependencies are standard Ubuntu APT packages.
+The root `build` stage copies the checkout and compiles it; the separate
+`demo` stage is Python-only.
 The `.dockerignore` excludes maps, large datasets and local build
 directories from the image's build context.
 

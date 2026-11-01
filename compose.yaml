@@ -1,0 +1,20 @@
+services:
+  demo:
+    build:
+      context: .
+      target: demo
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./apps/demo/maps:/maps:ro
+    init: true
+    restart: "no"
+
+  # Explicit opt-in only: docker compose run --build --rm test
+  test:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    init: true
+    restart: "no"

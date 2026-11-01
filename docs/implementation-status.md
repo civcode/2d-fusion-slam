@@ -295,3 +295,24 @@ requires that test to appear. The full repository CMake/CTest matrix
 and Ubuntu Docker run remain unverified for this commit.
 
 See [Web UI guide](web-ui.md).
+
+## 2026-11-01 — Web UI moved to apps/demo and root Docker stages
+
+Aligned the layout with [hybrid-astar-cpp](https://github.com/civcode/hybrid-astar-cpp):
+all dashboard server, map parser and static frontend files now live in
+`apps/demo/web/`, with `apps/demo/main.py` as the entrypoint. The old
+root `web/` package and `scripts/web-ui.py` have been removed; the
+existing Python CTest imports the moved package. A new root `Dockerfile`
+provides `dependencies`, `build`, `test` and default `demo`
+stages, plus `compose.yaml` for loopback-only interactive maps and
+explicit opt-in tests. The small demo stage contains Python, not native
+Ceres/GTSAM/Catch2; the native test stage uses Ubuntu 24.04 APT.
+The old `docker/Dockerfile.apt` is replaced by the root Dockerfile.
+
+**Local validation:** moved UI passed 11/11 Python unit/HTTP tests,
+JavaScript syntax validation, CLI launch and real FR079 map/API smoke
+(391×539, 57,529 known cells, original fingerprint). The Docker
+engine is unavailable in this workspace; Docker image compilation and
+full Ubuntu CTest remain **unverified**. GitHub Actions were not run
+or modified. See [demo README](../apps/demo/README.md) and
+[Docker commands](docker-development.md).

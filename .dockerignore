@@ -1,6 +1,25 @@
-# Dockerfile only installs APT packages; source is mounted read-only at runtime.
-# Avoid accidentally shipping large FR079 logs, release assets, and build trees
-# to the Docker daemon during image construction.
-**
-!docker/
-!docker/Dockerfile.apt
+# A multi-stage root Dockerfile copies source only into the native build.
+.git
+.gitignore
+.build/
+build/
+build-*/
+cmake-build-*/
+Testing/
+**/__pycache__/
+**/.pytest_cache/
+**/*.pyc
+*.zip
+*.tar.zst
+*.tar.gz
+*.log
+*.slammap
+*.mcap
+*.bag
+*.db3
+*.png
+*.jpg
+*.jpeg
+*.webp
+.vscode/
+.idea/

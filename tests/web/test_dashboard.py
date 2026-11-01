@@ -16,7 +16,7 @@ from urllib import error, request
 import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "apps" / "demo"))
 from web.bundle import (FNV_START, BundleError, MapBundle, fnv_update, fnv_word,
                         parse_registry, read_bundle)
 from web.server import Dashboard, Handler

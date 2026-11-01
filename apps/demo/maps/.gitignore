@@ -1,0 +1,5 @@
+# Local maps and registry data must not be committed.
+*.slammap
+CURRENT
+.pending-*
+.lock
