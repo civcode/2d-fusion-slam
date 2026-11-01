@@ -471,6 +471,6 @@ evidence requirements and remaining hardware/software gates.
   The fixture tests plumbing and is **not a SLAM estimator benchmark**.
 - **Verification pending:** full checkout CMake build, new native CTest and
   CLI execution. GitHub source-file integrity was checked after writing,
-  but Docker and GitHub Actions were not run. See
+  but Docker and GitHub Actions were not run. A local strict GCC 14 C++20\n  UBSan/-Werror numeric harness exercised the new separable EDT kernel on\n  **8,613 deterministic grids** against brute-force distances (all passed);\n  this is not a substitute for compiling the repository module. See
   [ground-truth map accuracy](map-accuracy.md).
 
