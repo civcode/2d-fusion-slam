@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 from .bundle import BundleError, parse_registry, read_bundle
 from .example import data_dir_or_example
 from .replay import SAFE_NAME as SAFE_REPLAY, read_replay, ReplayError, create_synthetic_replay, validate
+from .ceres_results import SIDE_SUFFIX, MAX_RESULTS, load_results
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / "static"
@@ -73,6 +74,40 @@ class Dashboard:
             raise ReplayError("replay must be a regular file, not a symlink")
         with self.lock:
             return self._replay_cached(name, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def ceres(self, name: str, session: dict):
+        """Read optional Ceres diagnostics; never execute a solver over HTTP."""
+        if self.synthetic_replay is not None and name == "sample-synthetic-workshop.slamreplay.json":
+            return {"status": "absent", "processed": 0}, {}
+        sidecar = self.replay_root / (name + SIDE_SUFFIX)
+        try:
+            st = sidecar.lstat()
+        except FileNotFoundError:
+            return {"status": "absent", "processed": 0}, {}
+        try:
+            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_RESULTS:
+                raise ReplayError("Ceres sidecar must be a bounded regular file")
+            # Extract only a safe map basename before performing full validation.
+            with sidecar.open("rb") as stream:
+                preliminary = json.load(stream)
+            if not isinstance(preliminary, dict):
+                raise ReplayError("invalid Ceres sidecar")
+            map_name = preliminary.get("map_name")
+            if not isinstance(map_name, str) or not SAFE_NAME.fullmatch(map_name):
+                raise ReplayError("invalid Ceres referenced map")
+            mapped = self.bundle(map_name)
+            session_file = self.replay_root / name
+            matched = load_results(sidecar, session_file, session, map_name, mapped)
+            rows = {row["index"]: row for row in matched["frames"]}
+            accepted = sum(row["status"] == "accepted" for row in rows.values())
+            return {"status": "valid", "processed": len(rows), "accepted": accepted,
+                    "map_name": map_name, "map_fingerprint": matched["map_fingerprint"],
+                    "map_frame_id": matched["map_frame_id"],
+                    "independent_ground_truth": False,
+                    "training_independence_verified": False}, rows
+        except (OSError, ValueError, ReplayError) as exc:
+            return {"status": "invalid", "processed": 0,
+                    "error": "Ceres results refused: " + str(exc)}, {}
 
     def replays(self) -> dict:
         names = sorted(p.name for p in self.replay_root.iterdir()
@@ -185,14 +220,18 @@ class Handler(BaseHTTPRequestHandler):
         if replay_match:
             name, frame_text = replay_match.groups()
             replay = self.viewer.replay(name)
+            match_info, match_rows = self.viewer.ceres(name, replay)
             if frame_text is not None:
                 idx = int(frame_text)
                 if idx >= len(replay["frames"]):
                     raise ValueError("frame index out of range")
-                return self._json(200, replay["frames"][idx])
+                response = dict(replay["frames"][idx])
+                response["matching"] = match_rows.get(idx)
+                response["matching_state"] = match_info["status"]
+                return self._json(200, response)
             frames = replay["frames"]
             return self._json(200, {"name": name, "format": replay["format"],
-                "source": replay["source"], "frame_count": len(frames),
+                "source": replay["source"], "ceres": match_info, "frame_count": len(frames),
                 "first_t": frames[0]["t"], "last_t": frames[-1]["t"],
                 "trajectory": [[f["t"], *f["pose"]] for f in frames]})
         if path == "/api/maps":

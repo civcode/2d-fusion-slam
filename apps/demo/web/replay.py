@@ -1,7 +1,7 @@
 """Bounded, read-only FUSREPLAY1 data and deterministic CARMEN FLASER conversion.
 
 FR079 logged laser poses are estimates, NOT calibrated map alignment or truth.
-Scan matching metrics are absent: this converter does not execute Ceres.
+Scan matching metrics are absent here: native Ceres writes a separate sidecar.
 """
 from __future__ import annotations
 

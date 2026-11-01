@@ -136,6 +136,17 @@ Compose publishes port 8765 on host loopback only and mounts the map
 directory read-only. No robot control, authentication or live tracking
 is provided, so do not expose this service publicly.
 
+## Actual Ceres diagnostics in LiDAR replay
+
+The replay can now overlay **real offline Ceres scan-to-EDT matching results**
+against a frozen, fingerprint-pinned map. Build the native
+`slam_ceres_replay_export` target, then use
+`python3 apps/demo/match_ceres.py` to produce a separately validated
+`FUSMATCH1` sidecar. The UI shows accepted/rejected frames, EDT overlap,
+mean distances and robust-cost changes. This is **not ground truth or
+independently measured localization accuracy**; the browser never runs Ceres.
+See [Ceres replay instructions](docs/ceres-replay.md).
+
 ## Docker / APT build and tests
 
 For a self-contained **Ubuntu 24.04** build, install Docker on the host
@@ -170,6 +181,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Offline map candidate rebuilding, comparison and rollback](docs/offline-map-generation.md)
 - [Persistent map-generation registry and recovery](docs/map-generation-registry.md)
 - [Offline map Web UI: launch, Docker and API](docs/web-ui.md)
+- [Native Ceres replay diagnostics and limitations](docs/ceres-replay.md)
 - [Interactive recorded LiDAR replay and FUSREPLAY1](docs/recorded-replay.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 

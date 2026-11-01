@@ -58,3 +58,12 @@ Scan points are downsampled for display while valid-hit/beam counts
 remain attached to every frame. The UI supports play/pause, variable
 speed, seek, stepping, zoom and pan. Existing user files take precedence
 over examples. See [recorded replay format and limits](../../docs/recorded-replay.md).
+
+## Offline Ceres scan-matching diagnostics
+
+With a **separately frozen** `.slammap` in this directory and the original
+CARMEN recording, build the native `slam_ceres_replay_export` executable,
+then generate a `FUSMATCH1` sidecar with `python3 apps/demo/match_ceres.py`.
+The replay will display genuine Ceres overlap, robust cost, rejected matches
+and optional orange accepted-pose overlays. The browser never runs Ceres.
+See [Ceres replay instructions](../../docs/ceres-replay.md).

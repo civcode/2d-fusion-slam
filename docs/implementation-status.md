@@ -379,3 +379,24 @@ no per-scan Ceres match metrics or per-beam timestamps exist in this
 export. Docker/Ubuntu full-build/CTest is still unverified due to
 an unavailable Docker engine; no GitHub Actions workflow was run or
 changed. See [recorded replay documentation](recorded-replay.md).
+
+## 2026-11-01 — native Ceres matches in recorded LiDAR replay
+
+Added `slam_ceres_replay_export`, a bounded offline C++20 Ceres client of
+the immutable FUSMAP2D distance field. It reads original CARMEN beams
+and logged laser seeds, emitting actual acceptance/rejection, overlap,
+mean EDT distance, iterations and robust-cost changes at a configured scan
+stride. `apps/demo/match_ceres.py` verifies original recording SHA-256,
+replay byte digest, map fingerprint/frame/revision and pose/timestamp parity,
+then exclusively writes a `FUSMATCH1` sidecar. HTTP validates sidecars
+read-only and refuses stale/malformed data; the replay UI optionally
+draws **accepted** Ceres results in orange without modifying logged poses.
+
+Local Ceres 2.2 on FR079's frozen training map: **49 processed** (scan
+stride 64, beam stride 10), **44 accepted, 3 insufficient support, 2 no
+improvement**. These are only matcher statuses. **35/35 Python/HTTP**
+tests passed; a synthetic C++ Ceres → Python validation test passed;
+Chromium displayed actual FR079 accepted-frame diagnostics using a
+fixture-backed API. Complete Ubuntu Docker CTest and independent
+localization accuracy remain **unverified**. No Actions were run or
+modified. [Ceres replay contract](ceres-replay.md).

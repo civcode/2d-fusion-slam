@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 const canvas = $("replay-canvas"), stage = $("replay-stage"), ctx = canvas.getContext("2d");
 let session = null, frame = null, index = -1, requestId = 0, playing = false, previousTick = 0, playTime = 0;
+let ceresAvailable = false;
 let map = null, mapImage = null, world = {scale: 20, x: 0, y: 0}, drag = null;
 const fmt = (x, digits=2) => Number(x).toFixed(digits);
 function label(id, value){ $(id).textContent = value; }
@@ -64,6 +65,22 @@ function render(){
     for(const p of frame.points){const point=coords(x+c*p[0]-s*p[1],y+s*p[0]+c*p[1]);ctx.moveTo(...origin);ctx.lineTo(...point);}ctx.stroke();
     ctx.fillStyle="#52e5b9";ctx.beginPath();
     for(const p of frame.points){const point=coords(x+c*p[0]-s*p[1],y+s*p[0]+c*p[1]);ctx.moveTo(point[0]+2.1,point[1]);ctx.arc(...point,2.1,0,Math.PI*2);}ctx.fill();
+    // Orange is an independently *computed* scan-to-frozen-map estimate,
+    // NOT independent physical truth. Only accepted matches are drawn.
+    if ($("replay-use-ceres").checked && frame.matching?.status === "accepted") {
+      const match=frame.matching, [mx,my,ma]=match.estimate;
+      const endpoint=coords(mx,my), ca=Math.cos(ma),sa=Math.sin(ma);
+      ctx.lineWidth=1.5;ctx.strokeStyle="#f6b35d";ctx.beginPath();
+      ctx.moveTo(...origin);ctx.lineTo(...endpoint);ctx.stroke();
+      ctx.fillStyle="#ffc978";ctx.beginPath();
+      for(const p of frame.points){
+        const point=coords(mx+ca*p[0]-sa*p[1],my+sa*p[0]+ca*p[1]);
+        ctx.moveTo(point[0]+2,point[1]);ctx.arc(...point,2,0,Math.PI*2);
+      }
+      ctx.fill();
+      ctx.save();ctx.translate(...endpoint);ctx.rotate(-ma);ctx.strokeStyle="#ffb65b";ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(15,0);ctx.lineTo(-10,-8);ctx.lineTo(-6,0);ctx.lineTo(-10,8);ctx.closePath();ctx.stroke();ctx.restore();
+    }
     ctx.save();ctx.translate(...origin);ctx.rotate(-yaw);ctx.fillStyle="#ffc978";
     ctx.beginPath();ctx.moveTo(15,0);ctx.lineTo(-9,-8);ctx.lineTo(-6,0);ctx.lineTo(-9,8);ctx.closePath();ctx.fill();ctx.restore();
   }
@@ -79,7 +96,17 @@ function updateFrameInfo(){
   label("replay-odom",frame.odom.map(v=>fmt(v,3)).join(", "));
   label("replay-hits",`${frame.hit_count} / ${frame.beam_count}`);
   label("replay-rendered",`${frame.points.length} sampled hits`);
-  label("replay-matching","Unavailable (not executed)");
+  const m=frame.matching;
+  if(!m){
+    label("replay-matching", frame.matching_state==="invalid" ? "Invalid Ceres sidecar (refused)" :
+      ceresAvailable ? "Not processed at this frame (sampled)" : "No Ceres results loaded");
+    label("replay-match-metrics","—");
+  } else {
+    label("replay-matching", `${m.status.replaceAll("_"," ")} · ${m.iterations} iterations`);
+    label("replay-match-metrics",`${(100*m.overlap).toFixed(1)}% overlap · ${m.supported_hits}/${m.input_hits} EDT hits · `+
+      `${m.mean_distance_m===null ? "no supported distance" : fmt(m.mean_distance_m,3)+" m mean distance"} · `+
+      `robust cost ${fmt(m.initial_robust_cost,2)} → ${fmt(m.robust_cost,2)}`);
+  }
   $("replay-slider").value=frame.index;
 }
 async function seek(i){
@@ -116,12 +143,19 @@ async function loadSession(name){
   if(!name){$("replay-empty").hidden=false;return;}
   try{
     session=await getJSON(`/api/replays/${encodeURIComponent(name)}`);
+    ceresAvailable=session.ceres?.status === "valid";
+    $("replay-use-ceres").disabled=!ceresAvailable;
+    $("replay-use-ceres").checked=false;
+    label("replay-ceres-source",ceresAvailable?
+      `${session.ceres.processed} matched scan attempts · ${session.ceres.accepted} accepted · frozen ${session.ceres.map_name}`:
+      session.ceres?.status==="invalid" ? session.ceres.error : "No native Ceres sidecar found");
     label("replay-dataset",session.source.dataset);
     label("replay-pose-kind",session.source.pose_kind.replaceAll("_"," "));
     label("replay-frame-kind",session.source.frame_id);
     label("replay-clock",session.source.timestamp_kind);
     label("replay-source-hash",session.source.source_sha256);
-    $("replay-slider").max=session.frame_count-1;setControls(true);alertUser("");
+    $("replay-slider").max=session.frame_count-1;setControls(true);
+    alertUser(session.ceres?.status==="invalid" ? session.ceres.error : "");
     await seek(0);fit();
   }catch(error){session=null;setControls(false);alertUser(`Session refused: ${error.message}`);}
 }
@@ -162,6 +196,7 @@ $("replay-refresh").addEventListener("click",()=>{refreshSessions();refreshMaps(
 $("session-list").addEventListener("change",event=>loadSession(event.target.value));
 $("overlay-map").addEventListener("change",event=>chooseMap(event.target.value));
 $("replay-fit").addEventListener("click",fit);
+$("replay-use-ceres").addEventListener("change",render);
 $("replay-play").addEventListener("click",()=>setPlaying(!playing));
 $("replay-step-back").addEventListener("click",()=>{setPlaying(false);seek(index-1);});
 $("replay-step-next").addEventListener("click",()=>{setPlaying(false);seek(index+1);});

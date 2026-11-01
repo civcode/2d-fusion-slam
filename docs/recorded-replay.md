@@ -3,7 +3,10 @@
 **Scope:** a read-only scan/trajectory viewer for `apps/demo`, not a running
 SLAM pipeline, independently verified trajectory benchmark or hardware driver.
 The browser displays estimates from the recording. It cannot infer physical
-pose accuracy, calibration, loop closures or Ceres scan-matching results.
+pose accuracy, calibration or loop closures. **Real Ceres diagnostics** can now be
+attached by the separate native exporter described in
+[Ceres replay instructions](ceres-replay.md); the original replay converter
+still supplies no such data.
 
 ## Quick start, no C++ build
 
@@ -137,8 +140,7 @@ navigation to localhost was blocked by the development platform.
 The full Docker/Ubuntu C++ matrix remains unverified here. No GitHub
 Actions execution was triggered.
 
-**Next:** supply validated calibration, per-beam acquisition times and
-independent loop measurements; then add a source-qualified Ceres result
-producer that can attach actual scan-matching diagnostics rather than
-fabricating them. Keep metric ground truth and FR079 frame registration
-claims separate until independently established.
+**Next:** independently validate LiDAR/IMU calibration and recorded timing,
+separate map-training queries from evaluation, and then assess Ceres
+tracking against independent measurements. Native Ceres diagnostic sidecars
+are now available, but they are **not** ground truth or graph factors.
