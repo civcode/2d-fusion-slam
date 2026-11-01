@@ -126,7 +126,7 @@ Estimate KnownMapTracker::observe(const Observation& frame) {
       d.source_fingerprint != field_->source()->fingerprint())
     return reject(Reason::source_mismatch, frame.stamp, matched.status);
   if (!finite_pose(matched.map_from_laser) || !d.full_rank ||
-      d.input_hits != frame.laser_hits.size() ||
+      d.input_hits != frame.laser_hits.size() || d.input_hits == 0 ||
       d.supported_hits < settings_.matching.min_supported_hits ||
       d.supported_hits > d.input_hits || d.unsupported_hits != d.input_hits - d.supported_hits ||
       !std::isfinite(d.overlap) || d.overlap < settings_.matching.minimum_overlap ||
