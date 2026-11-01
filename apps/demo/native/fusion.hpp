@@ -16,6 +16,7 @@ public:
   explicit FusionRuns(std::filesystem::path root);
   Json index() const;
   Json report(const std::string& run) const;
+  Json profile(const std::string& run) const;
   Json trajectories(const std::string& run) const;
   Json replay(const std::string& run) const;
   Json frame(const std::string& run,std::size_t index) const;
