@@ -18,6 +18,7 @@ public:
   std::string map_png(const std::string& name) const;
   Json list_replays() const;
   Json replay_info(const std::string& name) const;
+  Json replay_frames(const std::string& name) const;
   Json replay_frame(const std::string& name, std::size_t index) const;
 private:
   struct ReplaySession {Json data, match_info;std::map<std::size_t,Json> matches;};
