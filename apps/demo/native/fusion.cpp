@@ -201,9 +201,15 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
     need(attempted==(i%2==1)&&(!approved||attempted),
          "frozen-map source-excluded query partition mismatched");
     const auto state=m.at("status").str();
-    need((!attempted&&state=="training")||
-         (attempted&&(state=="accepted"||state=="rejected")),
-         "invalid match status");
+    const auto reason=m.at("reason").str();
+    need((!attempted&&state=="training"&&
+          reason=="not_evaluated_training_scan")||
+         (attempted&&approved&&state=="accepted"&&reason=="accepted")||
+         (attempted&&!approved&&state=="rejected"&&
+          (reason=="insufficient_support"||reason=="degenerate"||
+           reason=="no_improvement"||reason=="invalid_input"||
+           reason=="qualification_gate")),
+         "matcher gate reason/status/acceptance mismatch");
     if(attempted){if(approved)++accepted;else ++rejected;}
     need(m.at("cumulative_accepted").uint()==accepted &&
          m.at("cumulative_rejected").uint()==rejected,
@@ -212,8 +218,15 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
       const auto overlap=finite(m.at("overlap"),1.);
       need(overlap>=0&&m.at("supported_hits").uint()<=m.at("input_hits").uint()&&
            m.at("input_hits").uint()<=4096,"matcher geometry outside limits");
-      need(m.at("training_map_fingerprint").str().size()<=20,
+      const auto fingerprint=m.at("training_map_fingerprint").str();
+      need(!fingerprint.empty()&&fingerprint.size()<=20&&
+           (fingerprint.size()==1||fingerprint.front()!='0'),
            "malformed training-map fingerprint");
+      std::uint64_t identity{};
+      const auto [end,ec]=std::from_chars(fingerprint.data(),
+                                         fingerprint.data()+fingerprint.size(),identity);
+      need(ec==std::errc{}&&end==fingerprint.data()+fingerprint.size(),
+           "noncanonical training-map fingerprint");
     }
     const auto& insertion=frame.at("mapping");
     need(insertion.at("gyro_wheel_inserted").flag()&&
@@ -238,7 +251,8 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
   need(accepted==r.at("heldout_accepted").uint() &&
        rejected==r.at("heldout_rejected").uint() &&
        accepted+rejected==r.at("heldout_attempted").uint() &&
-       accepted_loops==r.at("graph_accepted_loops").uint(),
+       accepted_loops==r.at("graph_accepted_loops").uint() &&
+       accepted_loops<=r.at("graph_loop_candidates").uint(),
        "replay events disagree with fusion report");
   return s;
 }
