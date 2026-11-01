@@ -119,17 +119,22 @@ Estimate KnownMapTracker::observe(const Observation& frame) {
   } catch (const std::exception&) {
     return reject(Reason::match_rejected, frame.stamp);
   }
+  if (matched.status != matching::MatchStatus::accepted)
+    return reject(Reason::match_rejected, frame.stamp, matched.status);
   const auto& d = matched.diagnostics;
   if (d.source_revision != field_->source()->revision() ||
       d.source_fingerprint != field_->source()->fingerprint())
     return reject(Reason::source_mismatch, frame.stamp, matched.status);
-  if (matched.status != matching::MatchStatus::accepted ||
-      !finite_pose(matched.map_from_laser) || !d.full_rank ||
+  if (!finite_pose(matched.map_from_laser) || !d.full_rank ||
       d.input_hits != frame.laser_hits.size() ||
       d.supported_hits < settings_.matching.min_supported_hits ||
       d.supported_hits > d.input_hits || d.unsupported_hits != d.input_hits - d.supported_hits ||
       !std::isfinite(d.overlap) || d.overlap < settings_.matching.minimum_overlap ||
-      d.overlap > 1.0 || !std::isfinite(d.robust_cost))
+      d.overlap > 1.0 ||
+      std::abs(d.overlap - static_cast<double>(d.supported_hits) /
+                   static_cast<double>(d.input_hits)) > 1e-9 ||
+      !std::isfinite(d.robust_cost) || d.robust_cost < 0 ||
+      !std::isfinite(d.mean_distance_metres) || d.mean_distance_metres < 0)
     return reject(Reason::match_rejected, frame.stamp, matched.status);
   const Pose2 candidate_base = compose(matched.map_from_laser, inverse(base_from_laser_));
   if (!finite_pose(candidate_base) ||
@@ -163,8 +168,7 @@ Estimate KnownMapTracker::watchdog(TimeNs now_steady_ns) {
     return report(Reason::stale, stamp);
   }
   // Watchdog never republishes a previous pose as a new current estimate.
-  return report(state_ == State::tracking ? Reason::matched : Reason::match_rejected,
-                *last_scan_stamp_);
+  return report(Reason::no_new_observation, *last_scan_stamp_);
 }
 
 void KnownMapTracker::request_relocalization() noexcept {
