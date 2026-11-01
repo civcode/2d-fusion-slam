@@ -89,10 +89,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libssl3t64 zlib1g libstdc++6 ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
   && useradd --system --uid 10001 --home-dir /workspace --no-create-home viewer \
-  && mkdir -p /maps /workspace/apps/demo/web/static
+  && mkdir -p /maps /fusion /workspace/apps/demo/web/static
 WORKDIR /workspace
 COPY --from=demo-builder /workspace/build-native/fusion_slam_demo /usr/local/bin/fusion_slam_demo
 COPY --chown=viewer:viewer apps/demo/web/static /workspace/apps/demo/web/static
 USER viewer
 EXPOSE 8765
-CMD ["fusion_slam_demo", "--data-dir", "/maps", "--host", "0.0.0.0", "--allow-network", "--example-if-empty"]
+CMD ["fusion_slam_demo", "--data-dir", "/maps", "--fusion-dir", "/fusion", "--host", "0.0.0.0", "--allow-network", "--example-if-empty"]
