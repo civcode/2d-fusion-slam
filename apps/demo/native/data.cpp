@@ -521,8 +521,8 @@ ViewerData::ReplaySession ViewerData::replay(const std::string& name) const {
         need(!side.at(f).flag(),"unjustified Ceres source claim");
       const std::string mapname=side.at("map_name").str();
       const auto m=map(mapname);
-      need(side.at("map_fingerprint").uint()==m.snapshot->fingerprint()&&
-           side.at("map_revision").uint()==m.snapshot->revision()&&
+      need(side.at("map_fingerprint").str()==std::to_string(m.snapshot->fingerprint())&&
+           side.at("map_revision").str()==std::to_string(m.snapshot->revision())&&
            side.at("map_origin_verified").flag()==m.provenance.metric_origin_verified&&
            side.at("map_frame_id").str()==m.provenance.frame_id&&
            side.at("map_frame_id").str()==session.at("source").at("frame_id").str(),
@@ -570,7 +570,7 @@ ViewerData::ReplaySession ViewerData::replay(const std::string& name) const {
         need(status=="accepted"||status=="no_improvement"||
              status=="insufficient_support"||status=="degenerate"||
              status=="invalid_input","unrecognized Ceres match status");
-        need(row.at("map_fingerprint").uint()==m.snapshot->fingerprint(),
+        need(row.at("map_fingerprint").str()==std::to_string(m.snapshot->fingerprint()),
              "Ceres row map fingerprint mismatch");
         need(row.at("iterations").uint()<=1000,"Ceres iteration bound");
         const auto hits=row.at("input_hits").uint(),support=row.at("supported_hits").uint();
@@ -596,7 +596,7 @@ ViewerData::ReplaySession ViewerData::replay(const std::string& name) const {
       info=Json::dict();info.object={{"status",string("valid")},
         {"processed",num(rows.array.size())},{"accepted",num(accepted)},
         {"map_name",string(mapname)},
-        {"map_fingerprint",num(m.snapshot->fingerprint())},
+        {"map_fingerprint",string(std::to_string(m.snapshot->fingerprint()))},
         {"map_frame_id",string(m.provenance.frame_id)},
         {"independent_ground_truth",Json::boolean(false)},
         {"training_independence_verified",Json::boolean(false)},
