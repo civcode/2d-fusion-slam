@@ -1,6 +1,6 @@
 # 2D Fusion SLAM
 
-**Status: synthetic scan matcher, FR079 import, and reproducible reference-map frame diagnostics.** The C++20 core now parses Freiburg FR079 CARMEN logs, converts scans to matcher-native laser points and supports offline Catch2 3.16.1 and Ceres 2.2.0 dependencies. **This is not yet a complete SLAM system or a validated real-dataset SLAM benchmark.** See [implementation status](docs/implementation-status.md).
+**Status: tested synthetic GTSAM 4.3 Pose2 batch graph, versioned offline map export, and FR079 geometric proxy benchmark.** The C++20 core now parses Freiburg FR079 CARMEN logs, converts scans to matcher-native laser points and supports offline Catch2 3.16.1 and Ceres 2.2.0 dependencies. **This is not yet a complete SLAM system or a validated real-dataset SLAM benchmark.** See [implementation status](docs/implementation-status.md).
 
 The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optional **actually measured** wheel odometry. Three target modes share a portable core:
 
@@ -22,6 +22,7 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_motion`: sampled SE(2) interpolation and midpoint deskew diagnostics with laser mounting offset, explicit gyro-only/full-SE(2) capability and acquisition-time validity gates.
 - `slam_distance_field`: deep-copy immutable map snapshot with revision/content fingerprint, full-field exact centre-to-centre Euclidean distance transform, strict four-cell known-mask interpolation, finite gradients and source-version pinning.
 - `slam_match_geometry`: geometry-only robust Huber scan-to-EDT reference matcher with synthetic pose recovery, overlap and LiDAR Hessian-rank diagnostics, and conservative rejection of unknown/truncated evidence.
+- `slam_offline_graph` (optional, workstation only): GTSAM 4.3 Pose2 batch optimizer with fixed first pose, sequential verified odometry, robust and provenance-gated loop closures, rejected-loop diagnostics and deterministic synthetic regression. Its GTSAM backend was compiled and **2/2 tests passed locally**, including strict warnings/UBSan. **No FR079 or real-wheel graph-factor accuracy is claimed.**
 - `slam_match_ceres` (optional): Ceres cost-function/solver adapter. Its byte-identical source compiled and was **exercised at runtime** against Ceres 2.2.0 using an isolated analytic distance-field harness; the *complete repository Ceres CTest remains unverified*.
 - `slam_carmen`, `slam_carmen_geometry` and `slam_carmen_inspect`: strict FR079 `FLASER`/`RLASER`/`ODOM` parsing, 180° half-open angular layout, source scan IPC/logger times, conservative invalid-range classification, and native geometry-only matcher input without inventing per-beam times.
 - **Catch2 3.16.1**: user-provided release extracted, compiled and used for CARMEN parsing/geometry tests. CMake accepts `SLAM_CATCH2_SOURCE_DIR`, otherwise uses pinned upstream commit `08092139210881f01a34e60c5f2fd6afa0ea4024`.
@@ -30,7 +31,7 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_fr079_train_only`: a **separate** training-only 0.1 m occupancy/EDT map built from FR079 scans, frozen before Ceres or reference matching of withheld queries. A leakage test modifies held-out scans and checks the training map fingerprint is unchanged. Results are **geometric-fit proxies, not independent pose accuracy**.
 - **FR079 public dataset**: both uploaded complete logs parsed in local CTest (3,118 scans and 5,761 odometry records each). `slam_carmen_map` parses CARMENMAPFILEv020 reference grids at 3, 5 and 10 cm; the optional `slam_carmen_map_inspect` checks the real 5 cm grid. Archived CARMEN binary maps now decode with preserved known/unknown cells; map-to-trajectory registration and conversion into authoritative map snapshots remain unverified. See [FR079 setup](datasets/fr079/README.md).
 
-LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no fully verified Ceres-based SLAM pipeline**, GTSAM optimizer, Pi driver, recorder, ROS adapter or Web UI implemented.
+LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no full end-to-end SLAM pipeline**, independently validated real-data graph factor source, Pi driver, recorder, ROS adapter or Web UI implemented.
 
 ## Deterministic offline map export
 
@@ -77,6 +78,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [FR079 map-frame diagnostic evidence](datasets/fr079/alignment-evidence.json)
 - [FR079 training-only benchmark evidence](datasets/fr079/train-only-evidence.json)
 - [Air-gapped Catch2 and Ceres setup](docs/offline-source-dependencies.md)
+- [Offline GTSAM 4.3 pose-graph integration](docs/offline-pose-graph.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
-**Next:** validate the new train-only Ceres benchmark and complete whole-repository Ceres/Catch2 CTest on the checked-out source tree. Verify logged-pose provenance and independent external truth before claiming held-out localization accuracy; pursue map export/offline GTSAM thereafter. The current registration diagnostic uses a map derived from the source recording and is **not** an accuracy benchmark. Logged CARMEN pose fields are estimates, not ground truth. Follow with map export and offline GTSAM. Hardware acquisition progresses independently.
+**Next:** connect verified frontend measurements to the new offline batch graph without double-counting sources, benchmark false-loop rejection, and regenerate a *new* map generation after graph optimization only when held-out quality supports it. The reference pose graph currently uses synthetic factors, not unverified FR079 odometry. GTSAM remains excluded from the Raspberry Pi known-map localizer.

@@ -229,3 +229,7 @@ independent pose errors. See
 FUSMAP2D-v1 exports/imports a training-only FR079 occupancy map without known-mask or log-odds loss. The binary import regenerates identical EDT cell distances and preserves the immutable map fingerprint. The actual dataset export was byte-for-byte repeatable across runs.
 
 This is **map serialization integrity**, not independent map or localization accuracy, nor a real-world metric-frame calibration. See [map bundle](map-bundle-v1.md).
+
+### Initial Pose2 GTSAM reference (synthetic-only, 2026-11-01)
+
+A five-pose square graph now runs via the optional GTSAM 4.3 workstation target with a constrained first pose, sequential synthetic-exact odometry and a verified synthetic loop. A deliberately inconsistent candidate, a correlated evidence candidate and a duplicate are refused; an unsupported proposal cannot block a later valid loop. **The synthetic internal objective decreased 20.9136 → 1.97086.** This is partial B09 graph correctness evidence, **not** independent real-dataset ATE/RPE or a proven physical odometry/loop covariance. See [GTSAM offline build and graph contract](offline-pose-graph.md).

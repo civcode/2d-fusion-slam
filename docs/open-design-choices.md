@@ -236,3 +236,6 @@ A proposed optimization or alternate graph/recovery algorithm should carry a sho
 ~~~
 
 If a candidate offers no material improvement or cannot be evaluated honestly, **keep the simpler implementation** without weakening the rigorous data, time, map, evidence, and pose-validity contracts.
+
+
+**Implementation update (2026-11-01):** The minimal **GTSAM 4.3 Pose2 batch graph reference** described in the first topology choice is now implemented and passes focused synthetic tests. This does **not** imply verified fused wheel/gyro factors, validated real loop closures, incremental graph design, or a complete offline SLAM mapping pass. GTSAM stays out of the Pi known-map localizer. See [offline pose graph](offline-pose-graph.md).
