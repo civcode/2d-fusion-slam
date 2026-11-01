@@ -462,6 +462,14 @@ if(BUILD_TESTING)
           "$<TARGET_FILE:fusion_slam_demo>"
           "$<TARGET_FILE:slam_offline_fusion>")
       set_tests_properties(fusion_replay_http PROPERTIES TIMEOUT 240)
+      if(TARGET slam_fr079_offline)
+        add_test(NAME fr079_offline_http
+          COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_fr079_slam_http.py"
+            "$<TARGET_FILE:fusion_slam_demo>"
+            "$<TARGET_FILE:slam_fr079_offline>")
+        set_tests_properties(fr079_offline_http PROPERTIES
+          TIMEOUT 240 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+      endif()
     endif()
   endif()
 endif()
