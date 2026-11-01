@@ -191,6 +191,8 @@ MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
   r.map_fingerprint = generated.snapshot->fingerprint();
   r.map_revision = generated.snapshot->revision();
   r.width = g.width; r.height = g.height; r.resolution_m = g.resolution_m;
+  r.occupied_threshold_log_odds = options.occupied_threshold_log_odds;
+  r.free_threshold_log_odds = options.free_threshold_log_odds;
   for (std::size_t i = 0; i < cells.size(); ++i) {
     if (truth[i]) ++r.reference_wall_cells;
     // Cells at a classification boundary, even if observed, are unknown
@@ -215,6 +217,8 @@ MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
       else ++r.unknown_free_cells;
     }
   }
+  if (!r.reference_wall_cells)
+    throw std::invalid_argument("no rasterized reference walls in grid");
   const std::size_t union_count = r.true_positive + r.false_positive +
                                   r.false_negative + r.unknown_wall_cells;
   r.occupied_iou = fraction(r.true_positive, union_count);
@@ -265,6 +269,8 @@ void write_map_accuracy_json(std::ostream& out, const MapAccuracyReport& r,
       << ",\n  \"map_revision\": " << r.map_revision
       << ",\n  \"width\": " << r.width << ",\n  \"height\": " << r.height
       << ",\n  \"resolution_m\": " << r.resolution_m
+      << ",\\n  \\"occupied_threshold_log_odds\\": " << r.occupied_threshold_log_odds
+      << ",\\n  \\"free_threshold_log_odds\\": " << r.free_threshold_log_odds
       << ",\n  \"wall_raster_rule\": \"cell_center_within_half_diagonal\",\n"
       << "  \"confusion\": {\"tp\": " << r.true_positive
       << ", \"fp\": " << r.false_positive
