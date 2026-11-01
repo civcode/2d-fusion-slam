@@ -28,6 +28,7 @@ function setEmpty(visible, message) {
 function updateStats() {
   const m = metadata;
   $("synthetic-note").hidden = !m || m.truth_class !== "synthetic_exact";
+  $("fusion-map-note").hidden = !m || !selected.startsWith("fusion@");
   text("stat-size", m ? `${number(m.width)} × ${number(m.height)}` : "—");
   text("stat-resolution", m ? `${m.resolution_m * 100} cm per cell` : "Grid cells");
   text("stat-known", m ? number(m.known) : "—");
