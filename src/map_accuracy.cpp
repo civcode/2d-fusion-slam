@@ -172,7 +172,9 @@ std::vector<std::uint8_t> rasterize_reference_walls(
 MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
                                        const fixtures::Scene& scene,
                                        const MapAccuracyOptions& options) {
-  if (!generated.snapshot || generated.provenance.truth_class != "synthetic_exact" ||
+  if (!generated.snapshot ||
+      (generated.provenance.truth_class != "synthetic_exact" &&
+       generated.provenance.truth_class != "synthetic_estimated") ||
       !generated.provenance.metric_origin_verified ||
       generated.provenance.frame_id != "map" ||
       generated.provenance.source_id != scene.id)
