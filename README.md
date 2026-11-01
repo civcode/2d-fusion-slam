@@ -184,6 +184,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Native Ceres replay diagnostics and limitations](docs/ceres-replay.md)
 - [Training-excluded FR079 Ceres evaluation and report](docs/heldout-ceres-evaluation.md)
 - [Interactive recorded LiDAR replay and FUSREPLAY1](docs/recorded-replay.md)
+- [P2 read-only known-map tracking trust gate (synthetic foundation)](docs/known-map-tracker.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
 **Next:** source-rebuilt train-only map evaluation now checks that every Ceres query scan was excluded from the FR079 training map. See [held-out Ceres evaluation](docs/heldout-ceres-evaluation.md). This still does not provide independent physical ground truth, verified extrinsics or per-beam timestamps. A calibrated independent traversal is the next real-data gate.

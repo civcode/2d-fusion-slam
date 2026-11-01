@@ -107,6 +107,15 @@ target_include_directories(slam_match_geometry PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_match_geometry PUBLIC slam::distance_field)
 
+# Portable, read-only known-map trust/validity layer. Works without GTSAM or
+# Ceres and accepts an explicit Ceres matcher callback when linked by a consumer.
+add_library(slam_known_map STATIC src/known_map.cpp)
+add_library(slam::known_map ALIAS slam_known_map)
+target_compile_features(slam_known_map PUBLIC cxx_std_20)
+target_include_directories(slam_known_map PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_known_map PUBLIC slam::match_geometry)
+
 # Ceres is an optional private solver: core tests and map construction never
 # fetch solver dependencies or link GTSAM. Enable when the toolchain has Ceres.
 option(SLAM_ENABLE_CERES "Build the Ceres scan-to-map matcher if available" ON)
@@ -370,6 +379,9 @@ if(BUILD_TESTING)
       add_test(NAME fr079_sm_full_log COMMAND slam_carmen_inspect "${SLAM_FR079_SM_LOG}" 3118)
     endif()
   endif()
+  add_executable(slam_known_map_test tests/known_map_test.cpp)
+  target_link_libraries(slam_known_map_test PRIVATE slam::known_map)
+  add_test(NAME known_map_tracker COMMAND slam_known_map_test)
   add_executable(slam_match_geometry_test tests/matcher_test.cpp)
   target_link_libraries(slam_match_geometry_test PRIVATE slam::match_geometry)
   add_test(NAME match_geometry COMMAND slam_match_geometry_test)
