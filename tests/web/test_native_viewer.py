@@ -132,6 +132,25 @@ class NativeViewerApi(unittest.TestCase):
             center = 45 * (120 * 4 + 1) + 1 + 60 * 4
             self.assertEqual(uncompressed[center:center+4],
                              bytes([225, 237, 241, 255]))
+        # Repeated PNG and cell inspection must reuse an intact cached map.
+        with self.get("/api/maps/record.slammap/image.png") as r:
+            self.assertEqual(r.read(), png)
+        self.assertEqual(self.api("/api/maps/record.slammap")["fingerprint"],
+                         metadata["fingerprint"])
+        # Replacing the file must invalidate both snapshot and PNG caching.
+        original_bytes = self.map.read_bytes()
+        try:
+            self.map.write_bytes(b"invalid replacement")
+            with self.assertRaises(error.HTTPError) as exc:
+                self.get("/api/maps/record.slammap")
+            self.assertEqual(exc.exception.code, 422)
+            with self.assertRaises(error.HTTPError) as exc:
+                self.get("/api/maps/record.slammap/image.png")
+            self.assertEqual(exc.exception.code, 422)
+        finally:
+            self.map.write_bytes(original_bytes)
+        self.assertEqual(self.api("/api/maps/record.slammap")["fingerprint"],
+                         metadata["fingerprint"])
         for route, mark in (("/", b"<!DOCTYPE html"), ("/app.js", b"fetch("),
                             ("/replay", b"replay"), ("/replay.js", b"replay"),
                             ("/replay.css", b"replay")):
@@ -149,7 +168,14 @@ class NativeViewerApi(unittest.TestCase):
         self.assertEqual(s["format"], "FUSREPLAY1")
         self.assertEqual(s["frame_count"], 56)
         self.assertEqual(s["ceres"]["status"], "absent")
+        batch = self.api("/api/replays/record.slamreplay.json/frames")
+        self.assertEqual(batch["format"], "FUSREPLAYFRAMES1")
+        self.assertEqual(batch["source_sha256"], s["source"]["source_sha256"])
+        self.assertEqual(len(batch["frames"]), s["frame_count"])
+        self.assertEqual(batch["frames"][0]["matching_state"], "absent")
+        self.assertIsNone(batch["frames"][0]["matching"])
         f = self.api("/api/replays/record.slamreplay.json/frame/0")
+        self.assertEqual(batch["frames"][0], f)
         self.assertEqual(f["matching_state"], "absent")
         self.assertIsNone(f["matching"])
         self.assertEqual(f["points"], self.session["frames"][0]["points"])
@@ -185,6 +211,10 @@ class NativeViewerApi(unittest.TestCase):
         self.assertEqual(active["ceres"]["accepted"], 1)
         matched = self.api("/api/replays/record.slamreplay.json/frame/0")
         self.assertEqual(matched["matching"]["status"], "accepted")
+        batch = self.api("/api/replays/record.slamreplay.json/frames")
+        self.assertEqual(batch["frames"][0], matched)
+        self.assertEqual(batch["frames"][1]["matching_state"], "valid")
+        self.assertIsNone(batch["frames"][1]["matching"])
 
         sidecar["replay_sha256"] = "0" * 64
         side.write_text(json.dumps(sidecar))
@@ -192,6 +222,9 @@ class NativeViewerApi(unittest.TestCase):
         self.assertEqual(rejected["ceres"]["status"], "invalid")
         self.assertIsNone(self.api(
             "/api/replays/record.slamreplay.json/frame/0")["matching"])
+        invalid_batch = self.api("/api/replays/record.slamreplay.json/frames")
+        self.assertEqual(invalid_batch["frames"][0]["matching_state"], "invalid")
+        self.assertIsNone(invalid_batch["frames"][0]["matching"])
 
         # A forged held-out selection must never present source-index
         # separation without the actual frozen FR079 training-map source.
