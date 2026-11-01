@@ -158,6 +158,16 @@ integrity and does not mutate, recover or roll back map generations.
 For a Docker-only launch with no Python on the host and for security
 notes, see [Web UI guide](docs/web-ui.md).
 
+
+### Manual native viewer verification
+
+From a full source checkout, use `bash scripts/verify-native-demo.sh`
+to build the standalone C++ viewer and execute `native_viewer_json`,
+`native_web_api`, `demo_fixture_native` and the existing
+`web_ui_unit` compatibility tests. It never dispatches GitHub Actions
+or downloads dependencies. The original Python server is retained
+for rollback while native Docker and HTTP tests await execution.
+
 ### Native C++ demo build
 
 The existing HTML/CSS/JavaScript is unchanged. A separate POSIX C++20
