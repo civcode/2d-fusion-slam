@@ -419,6 +419,53 @@ void item(std::ostream& out,const char* name,const Simulation& sim,
   slam::evaluation::write_map_accuracy_json(out,score,sim.scene);
   out<<"}"<<(comma?",\n":"\n");
 }
+void write_path(std::ostream& out,const char* name,
+                const std::vector<Pose2>& poses,bool comma=true) {
+  out<<"\""<<name<<"\":[";
+  for(std::size_t i=0;i<poses.size();++i){
+    if(i)out<<",";
+    const auto& p=poses[i];
+    out<<"["<<p.translation.x()<<","<<p.translation.y()<<","<<p.yaw_rad<<"]";
+  }
+  out<<"]"<<(comma?",\n":"\n");
+}
+void export_trajectories(const std::filesystem::path& output,
+                         const Simulation& sim,const Prepared& p,
+                         const LidarOnly& lidar,const Matched& matched,
+                         const GraphOutput& graph) {
+  std::ofstream out(output);
+  if(!out)throw std::runtime_error("failed opening trajectory export");
+  out<<std::setprecision(17);
+  out<<"{\n\"format\":\"FUSPOSES1\","
+     <<"\n\"frame_id\":\"map\","
+     <<"\n\"clock_domain\":101,"
+     <<"\n\"clock_epoch\":\"1\","
+     <<"\n\"angle_units\":\"radians\","
+     <<"\n\"length_units\":\"metres\","
+     <<"\n\"reference_class\":\"synthetic_exact\","
+     <<"\n\"timestamps_ns\":[";
+  for(std::size_t i=0;i<sim.sensors.scans.size();++i){
+    if(i)out<<",";
+    // JSON string prevents nanosecond quantization in JavaScript viewers.
+    out<<"\""<<sim.sensors.scans[i].midpoint.ns<<"\"";
+  }
+  out<<"],\n\"paths\":{\n";
+  write_path(out,"wheel_only",p.wheel_only);
+  write_path(out,"lidar_only",lidar.poses);
+  write_path(out,"gyro_wheel",p.gyro_wheel);
+  write_path(out,"fused_scan_matched",matched.poses,!graph.poses.empty());
+  if(!graph.poses.empty())write_path(out,"graph_optimized",graph.poses,false);
+  out<<"},\n\"synthetic_truth_for_scoring\":";
+  out<<"[";
+  for(std::size_t i=0;i<sim.reference.size();++i){
+    if(i)out<<",";
+    const auto& truth=sim.reference[i];
+    out<<"["<<truth.translation.x()<<","<<truth.translation.y()
+       <<","<<truth.yaw_rad<<"]";
+  }
+  out<<"]\n}\n";
+  if(!out)throw std::runtime_error("failed writing trajectory JSON");
+}
 void execute(const Simulation& sim,const std::filesystem::path& directory,
              bool synthetic_loops) {
   if(std::filesystem::exists(directory))
@@ -440,6 +487,7 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   export_bundle(directory/"lidar_only.slammap",lidar_map);
   export_bundle(directory/"gyro_wheel.slammap",fused_map);
   export_bundle(directory/"fused_scan_matched.slammap",matched_map);
+  export_trajectories(directory/"trajectories.json",sim,p,lidar,matched,graph);
   std::optional<slam::mapping::MapBundle> graph_map;
   if(!graph.poses.empty()) {
     graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()));
