@@ -96,6 +96,37 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## Estimated-pose synthetic mapping benchmark
+
+\`slam_synthetic_mapping_benchmark\` now generates apartment and warehouse
+laser scans along deterministic synthetic routes, estimates all poses **after
+the first anchor** using biased relative odometry, and improves eligible
+held-out scans with the actual immutable-EDT geometry matcher. It rebuilds
+and exports **two** FUSMAP2D maps (odometry baseline versus matched candidate)
+and evaluates both against exact synthetic wall truth. Reports include
+occupancy IoU/coverage/wall distances and independently scored trajectory
+RMSE/p95; **regressions are reported, not hidden**.
+
+The scan matcher uses an immutable **even-scan training map** and queries
+only **odd scans**, without using per-frame truth poses for mapping. The
+reference geometry is used only for synthetic ray generation and the
+after-the-fact accuracy evaluation. This is a reproducible local
+scan-to-map front-end experiment, **not** full sensor-fused GTSAM SLAM or
+measured real-world accuracy.
+
+\`\`\`sh
+cmake -S . -B build -G Ninja -DBUILD_TESTING=ON \
+  -DSLAM_ENABLE_CATCH2=OFF -DSLAM_ENABLE_CERES=OFF \
+  -DSLAM_ENABLE_GTSAM=OFF
+cmake --build build --target slam_synthetic_mapping_benchmark \
+  slam_map_accuracy_cli --parallel 2
+./build/slam_synthetic_mapping_benchmark apartment /tmp/slam-apartment-run1
+./build/slam_synthetic_mapping_benchmark warehouse /tmp/slam-warehouse-run1
+\`\`\`
+
+See [the synthetic mapping benchmark protocol](docs/synthetic-mapping-benchmark.md)
+for the held-out split, FUSSYNTHBENCH1 JSON and the new CTests.
+
 ## Ground-truth synthetic map accuracy
 
 `slam_map_accuracy_cli` compares an exported FUSMAP2D binary map to the
@@ -197,6 +228,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Interactive recorded LiDAR replay and FUSREPLAY1](docs/recorded-replay.md)
 - [P2 read-only known-map tracking trust gate (synthetic foundation)](docs/known-map-tracker.md)
 - [Ground-truth map accuracy: synthetic IoU, coverage and wall distance](docs/map-accuracy.md)
+- [Estimated-pose synthetic mapping benchmark and reproducible truth comparisons](docs/synthetic-mapping-benchmark.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
 **Next:** source-rebuilt train-only map evaluation now checks that every Ceres query scan was excluded from the FR079 training map. See [held-out Ceres evaluation](docs/heldout-ceres-evaluation.md). This still does not provide independent physical ground truth, verified extrinsics or per-beam timestamps. A calibrated independent traversal is the next real-data gate.
