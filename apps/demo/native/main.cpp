@@ -188,6 +188,15 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
   }
   if(path.starts_with(replays)){
     auto name=path.substr(replays.size());
+    // All scans in one bounded, validated response: the browser can seek and
+    // animate without repeatedly parsing the recording on this single-threaded server.
+    if(name.ends_with("/frames")){
+      name.remove_suffix(7);
+      if(name.empty()||name.find('/')!=std::string_view::npos)
+        return error(404,"invalid replay path");
+      if(!query.empty())return error(422,"unsupported replay query");
+      return json(data.replay_frames(std::string(name)));
+    }
     constexpr std::string_view marker="/frame/";
     const auto frame=name.find(marker);
     if(frame!=std::string_view::npos){
