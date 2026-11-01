@@ -11,6 +11,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import socket
+import struct
+import zlib
 import sys
 import tempfile
 import time
@@ -111,7 +114,21 @@ class NativeViewerApi(unittest.TestCase):
                     self.assertAlmostEqual(actual[key], expected[key], places=12, msg=key)
         with self.get("/api/maps/record.slammap/image.png") as r:
             self.assertEqual(r.headers["Content-Type"], "image/png")
-            self.assertEqual(r.read(8), b"\x89PNG\r\n\x1a\n")
+            png = r.read()
+            self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertEqual(png[12:16], b"IHDR")
+            width, height = struct.unpack(">II", png[16:24])
+            self.assertEqual((width, height), (120, 90))
+            self.assertEqual(png[24:29], b"\x08\x06\x00\x00\x00")
+            self.assertEqual(png[-8:-4], b"IEND")
+            length = struct.unpack(">I", png[33:37])[0]
+            self.assertEqual(png[37:41], b"IDAT")
+            uncompressed = zlib.decompress(png[41:41+length])
+            self.assertEqual(len(uncompressed), 90 * (120 * 4 + 1))
+            self.assertEqual(uncompressed[:5], bytes([0, 21, 34, 54, 255]))
+            center = 45 * (120 * 4 + 1) + 1 + 60 * 4
+            self.assertEqual(uncompressed[center:center+4],
+                             bytes([225, 237, 241, 255]))
         for route, mark in (("/", b"<!DOCTYPE html"), ("/app.js", b"fetch("),
                             ("/replay", b"replay"), ("/replay.js", b"replay"),
                             ("/replay.css", b"replay")):
@@ -215,6 +232,17 @@ class NativeViewerApi(unittest.TestCase):
         with self.assertRaises(error.HTTPError) as e:
             self.get("/api/replays/linked.slamreplay.json")
         self.assertEqual(e.exception.code, 422)
+
+    def test_oversized_http_headers_fail_closed(self):
+        endpoint = self.url.removeprefix("http://")
+        host, port = endpoint.split(":")
+        with socket.create_connection((host, int(port)), timeout=4) as sock:
+            sock.settimeout(4)
+            payload = ("GET /api/maps HTTP/1.1\r\n" +
+                       "X-Long: " + "A" * 9000 + "\r\n\r\n")
+            sock.sendall(payload.encode("ascii"))
+            first = sock.recv(512)
+            self.assertIn(b"400", first.split(b"\r\n", 1)[0])
 
     def test_synthetic_only_if_folder_empty(self):
         self.child.terminate()
