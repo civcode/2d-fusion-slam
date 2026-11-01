@@ -224,15 +224,15 @@ target_link_libraries(slam_map_bundle PUBLIC slam::distance_field)
 find_package(OpenSSL QUIET COMPONENTS Crypto)
 # FR079 sequential LiDAR + embedded scan-time odometry SLAM.
 # No known-map reference or logged laser trajectory enters this estimator.
-add_library(slam_fr079_offline STATIC src/fr079_offline.cpp)
-add_library(slam::fr079_offline ALIAS slam_fr079_offline)
-target_compile_features(slam_fr079_offline PUBLIC cxx_std_20)
-target_include_directories(slam_fr079_offline PUBLIC
+add_library(slam_fr079_slam_frontend STATIC src/fr079_offline.cpp)
+add_library(slam::fr079_offline ALIAS slam_fr079_slam_frontend)
+target_compile_features(slam_fr079_slam_frontend PUBLIC cxx_std_20)
+target_include_directories(slam_fr079_slam_frontend PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
-target_link_libraries(slam_fr079_offline PUBLIC
+target_link_libraries(slam_fr079_slam_frontend PUBLIC
   slam::carmen slam::map_bundle slam::match_geometry)
 if(TARGET slam_match_ceres)
-  target_link_libraries(slam_fr079_offline PUBLIC slam::match_ceres)
+  target_link_libraries(slam_fr079_slam_frontend PUBLIC slam::match_ceres)
 endif()
 if(ZLIB_FOUND AND OpenSSL_FOUND)
   add_executable(slam_fr079_offline src/fr079_offline_cli.cpp)
