@@ -233,6 +233,7 @@ Mask all(std::size_t n) {return Mask(n,true);}
 struct Matched {
   std::vector<Pose2> poses;
   std::vector<slam::matching::MatchResult> outcomes;
+  Mask accepted_mask; // passed *all* source/rank/innovation gates
   std::size_t attempted{},accepted{},rejected{};
   std::string backend;
 };
@@ -275,6 +276,7 @@ Matched match_heldout(const Simulation& sim,const Prepared& p) {
 #endif
   result.poses=p.gyro_wheel;
   result.outcomes.resize(p.gyro_wheel.size());
+  result.accepted_mask.assign(p.gyro_wheel.size(),false);
   for(std::size_t i=1;i<result.poses.size();i+=2) {
     const Pose2 seed=slam::compose(p.gyro_wheel[i],kBaseFromLaser);
     auto candidate=match(field,p.gyro_deskewed[i],seed);
@@ -283,6 +285,7 @@ Matched match_heldout(const Simulation& sim,const Prepared& p) {
       // Convert matched laser pose back into map-from-base exactly.
       result.poses[i]=slam::compose(candidate.map_from_laser,
                                    slam::inverse(kBaseFromLaser));
+      result.accepted_mask[i]=true;
       ++result.accepted;
     } else ++result.rejected;
     result.outcomes[i]=std::move(candidate);
@@ -355,7 +358,8 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
       "independent_simulated_loop_sensor_v1",true,true};
     for(const auto& measurement:sim.independent_loop_measurements){
       const auto i=measurement.to,j=measurement.from;
-      if(i>=matcher.outcomes.size()||i<=j+15)
+      if(i>=matcher.outcomes.size()||i<=j+15||
+         !matcher.accepted_mask[i])
         continue;
       // Existing geometry diagnostics and source fingerprint of the fixed
       // training map must corroborate independently sourced loop proposals.
