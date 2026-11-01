@@ -214,3 +214,39 @@ docker compose run --rm -v "$PWD/benchmarks:/results" \
 
 This is NOT an online scheduling/real-time validation. See
 [profiling methodology](../../docs/fusion-profiling.md).
+
+
+## Real FR079 SLAM maps and replay
+
+The optional native SLAM executable slam_fr079_offline now reconstructs
+a map from scratch using FR079 CARMEN scan-level odometry and LiDAR
+measurements, then exports a .slammap and matching .slamreplay.json
+into the same output directory. This is **not** the old FR079
+training-only logged-laser-pose reconstruction.
+
+For Docker, with the FR079 recording already available locally:
+
+~~~sh
+export BUILD_JOBS=28 SLAM_DOCKER_JOBS=28
+export FR079_LOG=/absolute/path/to/fr079.log.gz
+docker compose build test demo
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  --entrypoint ./build-docker/slam_fr079_offline \
+  test /input/fr079.log.gz /output/fr079-slam
+docker compose up -d demo
+~~~
+
+Open / and select fr079-slam.slammap. Open /replay and select
+fr079-slam.slamreplay.json to replay the *estimated* trajectory and
+LiDAR hits, with a final-map overlay when selected. Frame matching
+decisions and timing distributions are exported separately to
+fr079-slam.matches.json and fr079-slam.report.json.
+
+This is a causal LiDAR+odometry **incremental frontend**: it does not
+read the logged laser pose estimates as initializations, use the
+archived reference map, fabricate gyro or per-beam timestamps, or
+claim registered ground truth. Laser-to-odom extrinsics remain an
+identity assumption. No independent loop closures are applied.
+See [full FR079 SLAM protocol](../../docs/fr079-offline-slam.md).
