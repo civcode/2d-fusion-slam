@@ -126,6 +126,7 @@ The new directory contains:
 | `graph_optimized.slammap` | Optional GTSAM-optimized map when GTSAM is compiled |
 | `trajectories.json` | FUSPOSES1 timestamped estimated pose paths, nanosecond timestamps as strings and separately labeled synthetic reference for scoring |
 | `fusion_report.json` | FUSFUSION1 with fixed-gauge translation RMSE/p95, yaw RMSE, FUSMAPACC1 metrics, and held-out/LiDAR-only rejection-reason histograms |
+| `fusion_replay.json` | FUSFUSREPLAY1 actual per-frame source-excluded match decisions, sampled deskewed laser rays, map insertion flags, cumulative counts and optional independent synthetic GTSAM loop events |
 
 The generated map's provenance is `synthetic_estimated`, and the
 separate **reference** is `synthetic_exact`. Evaluation uses the exact
@@ -169,3 +170,6 @@ recomputed, and primary outputs repeated byte-for-byte. Results reveal failed
 LiDAR-only bootstrap and poor warehouse map accuracy despite successful program
 execution. See [measured results and limitations](slam-evaluation.md). These
 runs do not consume the web UI workshop replay and do not validate hardware.
+
+
+To visualize the completed process, see [the read-only Fusion Replay Web UI](fusion-replay.md) at `/fusion`. Its final occupancy image and optimized graph path are explicitly post-run results; the accumulated points are sampled observations, not an intermediate map reconstruction.
