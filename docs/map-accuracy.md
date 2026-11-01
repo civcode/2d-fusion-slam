@@ -76,12 +76,19 @@ end-to-end fixture and validates JSON and refused mismatches.
 
 The evaluator refuses a map unless **all** of the following match:
 
-1. `provenance.truth_class == "synthetic_exact"`;
+1. `provenance.truth_class` is `synthetic_exact` for oracle-produced
+   fixtures or `synthetic_estimated` for estimated-pose synthetic maps;
 2. `provenance.metric_origin_verified == true`;
 3. `provenance.frame_id == "map"`;
 4. `provenance.source_id == scene.id` (e.g. `synthetic-apartment-v1`);
 5. The map covers **every reference wall endpoint**, including its boundary,
    so no metric can silently omit harder portions of the scene.
+
+The `synthetic_estimated` map class means the *reference geometry* is exact
+synthetic truth; it **does not** assert that SLAM reconstructed the map
+correctly. See [estimated-pose synthetic mapping](synthetic-mapping-benchmark.md)
+for the measured odometry-baseline versus scan-matched comparison. The
+oracle-pose demonstration remains only a file-format plumbing check.
 
 These metadata fields are **declarations by the producer**, not authenticated
 physical calibration. Benchmark producers must demonstrate that they used the
