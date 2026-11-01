@@ -221,6 +221,39 @@ target_include_directories(slam_map_bundle PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_map_bundle PUBLIC slam::distance_field)
 
+# FR079 sequential LiDAR + embedded scan-time odometry SLAM.
+# No known-map reference or logged laser trajectory enters this estimator.
+add_library(slam_fr079_offline STATIC src/fr079_offline.cpp)
+add_library(slam::fr079_offline ALIAS slam_fr079_offline)
+target_compile_features(slam_fr079_offline PUBLIC cxx_std_20)
+target_include_directories(slam_fr079_offline PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_fr079_offline PUBLIC
+  slam::carmen slam::map_bundle slam::match_geometry)
+if(TARGET slam_match_ceres)
+  target_link_libraries(slam_fr079_offline PUBLIC slam::match_ceres)
+endif()
+if(ZLIB_FOUND AND OpenSSL_FOUND)
+  add_executable(slam_fr079_offline src/fr079_offline_cli.cpp)
+  target_compile_features(slam_fr079_offline PRIVATE cxx_std_20)
+  target_link_libraries(slam_fr079_offline PRIVATE
+    slam::fr079_offline ZLIB::ZLIB OpenSSL::Crypto)
+  if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    add_test(NAME fr079_offline_slam
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_offline_test.py"
+        "$<TARGET_FILE:slam_fr079_offline>")
+    set_tests_properties(fr079_offline_slam PROPERTIES TIMEOUT 240)
+    if(SLAM_FR079_LOG)
+      add_test(NAME fr079_offline_real_data
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_offline_test.py"
+          "$<TARGET_FILE:slam_fr079_offline>" "${SLAM_FR079_LOG}")
+      set_tests_properties(fr079_offline_real_data PROPERTIES TIMEOUT 600)
+    endif()
+  endif()
+endif()
+
 # Offline Ceres-to-replay diagnostics: writes JSON to stdout, never changes maps.
 if(TARGET slam_match_ceres AND ZLIB_FOUND)
   add_executable(slam_ceres_replay_export src/ceres_replay_export.cpp)
