@@ -237,8 +237,8 @@ void write_pose(std::ostream& out, const PoseError& e) {
 void write_report(std::ostream& out, const Dataset& d, const FrontendStats& stats,
                   const PoseError& odom, const PoseError& matched,
                   std::uint64_t training_map_fingerprint,
-                  const slam::mapping::MapAccuracyReport& baseline_map,
-                  const slam::mapping::MapAccuracyReport& rebuilt_map) {
+                  const slam::evaluation::MapAccuracyReport& baseline_map,
+                  const slam::evaluation::MapAccuracyReport& rebuilt_map) {
   out << std::setprecision(12);
   out << "{\n  \"format\":\"FUSSYNTHBENCH1\","
       << "\n  \"scene\":\"" << d.scene.id << "\","
