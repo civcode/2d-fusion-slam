@@ -209,3 +209,16 @@ See [FR079 evidence](../datasets/fr079/alignment-evidence.json) and
 [setup](../datasets/fr079/README.md). The B08 Ceres-linked project
 suite and a genuinely training-only FR079 matcher benchmark remain
 **outstanding**.
+
+
+### FR079 training-only scan-to-map geometric proxy
+
+A training-only map now excludes **all** observations with scan indices
+divisible by 5 from map insertion **and map bounds**. A leakage test
+mutates held-out observations and confirms that the immutable
+training-map fingerprint is unaffected. The real Ceres 2.2.0 run on
+`fr079.log.gz` evaluated 52 withheld queries against 416
+mapped training scans: 42 improved, 10 unchanged; overlap
+0.840449 → 0.851909. These are **geometric fit statistics**, not
+independent pose errors. See
+[training-only reproducible evidence](../datasets/fr079/train-only-evidence.json).

@@ -80,3 +80,34 @@ CTest (including Jacobian and rank/outlier rejection), a justified
 rigid map-registration model, and a training-only map with held-out
 FR079 scan-to-map matching against a truthful reference or explicitly
 proxy quality metrics. No GitHub Actions were used.
+
+
+## 2026-11-01 — FR079 training-only scan matching
+
+Implemented `slam_fr079_train_only`: build mutable occupancy only
+from nonheldout scan indices and bounds, publish a frozen immutable
+map/EDT generation, then evaluate withheld scans using either the
+existing Ceres 2.2.0 matcher (if installed) or an explicitly selected
+reference matcher. A unit regression modifies every withheld scan and
+its logged pose, confirming the training-map fingerprint is unchanged.
+
+**Local focused validation:** project-compatible C++20 map/matcher
+interfaces linked with real Ceres 2.2.0, plus the existing synthetic
+matcher Ceres regression test: **2/2 CTest tests passed** normally and
+with `-Wall -Wextra -Wpedantic -Werror -fsanitize=undefined`.
+This was a **focused locally assembled build**, not the whole-project
+CMake test matrix. The supplied full `fr079.log.gz` gave 416 mapped
+training frames, 624 heldout frames, 52 evaluated queries; 42 Ceres
+accepted improvements and 10 no-improvements. Mean overlap improved
+0.840449 → 0.851909 and robust cost dropped 86.2551 → 80.4663.
+
+**Truth limitations:** this is a real-data **geometric proxy**.
+The logged laser poses used for map placement and heldout seed
+perturbations are estimates, not independent truth. Temporal
+correlations and possible upstream scan-matching correlation remain.
+No ATE/RPE, IMU timing or external map-frame pose accuracy is proven.
+See [FR079 training-only evidence](../datasets/fr079/train-only-evidence.json).
+
+**Remaining gates:** full source-tree Ceres/Catch2 test matrix, a
+measured independent pose reference or separate traversal, detailed
+false-lock/bias profiling, then deterministic offline map export/graph.

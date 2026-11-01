@@ -142,7 +142,36 @@ set(SLAM_FR079_MAP "" CACHE FILEPATH "Locally supplied 5cm CARMEN binary occupan
 set(SLAM_FR079_LOG "" CACHE FILEPATH "Locally provided fr079.log.gz (opt-in)")
 set(SLAM_FR079_SM_LOG "" CACHE FILEPATH "Locally provided fr079-sm.log.gz (opt-in)")
 
+# Build a frozen scan-to-map benchmark only from training observations.
+add_library(slam_fr079_train_only STATIC src/fr079_train_only.cpp)
+add_library(slam::fr079_train_only ALIAS slam_fr079_train_only)
+target_compile_features(slam_fr079_train_only PUBLIC cxx_std_20)
+target_include_directories(slam_fr079_train_only PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_fr079_train_only PUBLIC slam::carmen slam::match_geometry)
+if(TARGET slam_match_ceres)
+  target_link_libraries(slam_fr079_train_only PUBLIC slam::match_ceres)
+endif()
+if(ZLIB_FOUND)
+  add_executable(slam_fr079_train_only_benchmark src/fr079_train_only_cli.cpp)
+  target_compile_features(slam_fr079_train_only_benchmark PRIVATE cxx_std_20)
+  target_link_libraries(slam_fr079_train_only_benchmark PRIVATE
+    slam::fr079_train_only ZLIB::ZLIB)
+endif()
+
 if(BUILD_TESTING)
+  add_executable(slam_fr079_train_only_test tests/fr079_train_only_test.cpp)
+  target_link_libraries(slam_fr079_train_only_test PRIVATE slam::fr079_train_only)
+  add_test(NAME fr079_train_only_unit COMMAND slam_fr079_train_only_test)
+  if(TARGET slam_fr079_train_only_benchmark AND SLAM_FR079_LOG)
+    if(TARGET slam_match_ceres)
+      add_test(NAME fr079_train_only_ceres
+        COMMAND slam_fr079_train_only_benchmark "${SLAM_FR079_LOG}")
+    else()
+      add_test(NAME fr079_train_only_reference
+        COMMAND slam_fr079_train_only_benchmark "${SLAM_FR079_LOG}" --reference)
+    endif()
+  endif()
   if(TARGET slam_fr079_alignment_inspect AND SLAM_FR079_MAP AND SLAM_FR079_SM_LOG)
     add_test(NAME fr079_alignment_diagnostic
       COMMAND slam_fr079_alignment_inspect "${SLAM_FR079_SM_LOG}" "${SLAM_FR079_MAP}")

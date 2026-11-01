@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-01",
+  "experiment": "fr079_train_only_proxy_v1",
+  "recording_sha256": "4500f9c9791d16a1698ccdff90b66655506dfd0696b6f7bfd1d463e74e695361",
+  "parameters": {
+    "holdout_rule": "index % 5 == 0",
+    "training_rule": "index % 5 != 0 and index % 6 == 1",
+    "heldout_query_stride": 12,
+    "beam_stride": 4,
+    "range_min_m": 0.1,
+    "range_max_m": 18,
+    "grid_resolution_m": 0.1,
+    "edt_truncation_m": 0.7,
+    "seed_perturbation_xyyaw": [
+      0.07,
+      -0.05,
+      0.02
+    ]
+  },
+  "result": {
+    "dataset_scans": 3118,
+    "training_eligible": 2494,
+    "training_inserted": 416,
+    "heldout": 624,
+    "evaluated": 52,
+    "accepted": 42,
+    "no_improvement": 10,
+    "rejected_support": 0,
+    "rejected_degenerate": 0,
+    "mean_initial_overlap": 0.840449,
+    "mean_final_overlap": 0.851909,
+    "mean_initial_robust_cost": 86.2551,
+    "mean_final_robust_cost": 80.4663,
+    "mean_displacement_from_logged_pose_m": 0.0728145,
+    "map_fingerprint": "13991754243820308900",
+    "solver": "Ceres 2.2.0"
+  },
+  "map_uses_heldout": false,
+  "independent_ground_truth": false,
+  "per_beam_time_verified": false,
+  "statistically_independent_query": false,
+  "validation": "Focused local CMake project with project-compatible core/map/matcher APIs and Ceres 2.2.0: 2/2 CTests passed normally and under strict warnings/UBSan; full repository CTest has not been run.",
+  "interpretation": "Geometric fit proxy, NOT localization accuracy, ATE or RPE"
+}

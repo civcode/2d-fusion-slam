@@ -126,3 +126,50 @@ held-out SLAM evaluation. See [versioned measured evidence](alignment-evidence.j
 A true benchmark needs a training-only map, independent ground truth
 (or explicitly labeled proxy metrics), and physically justified frame
 registration before running the Ceres tracker against FR079.
+
+
+## FR079 training-only map and Ceres scan-matching proxy
+
+The new `slam_fr079_train_only_benchmark` does **not** consume the
+archived FR079 reference map, which contains observations from the full
+recording. Instead it builds a new 0.10 m occupancy map from a
+deterministic **training-only** subset of `fr079.log.gz`:
+indices divisible by 5 are withheld entirely, and nonheldout indices
+with remainder 1 modulo 6 contribute mapped scans. Training scans
+alone define grid bounds. Withholding **includes** scan geometry and
+logged poses; neither can influence the immutable training snapshot.
+
+Every 12th held-out query is matched against that frozen map with
+Ceres (or explicit `--reference` mode). Seed = the held-out
+scan's logged pose estimate plus (0.07 m, -0.05 m, 0.02 rad).
+No missing/invalid/range-over-18-m beam generates free-space evidence.
+The synthetic leakage unit test mutates held-out laser observations
+and poses and requires the training-map fingerprint to remain identical.
+
+~~~sh
+cmake -S . -B build -G Ninja \
+  -DBUILD_TESTING=ON -DSLAM_ENABLE_CERES=ON -DSLAM_REQUIRE_CERES=ON \
+  -DCeres_DIR=/path/to/ceres-prefix/lib/cmake/Ceres \
+  -DSLAM_ENABLE_CATCH2=ON \
+  -DSLAM_CATCH2_SOURCE_DIR=/path/to/Catch2-3.16.1 \
+  -DSLAM_FR079_LOG=/path/to/fr079.log.gz
+cmake --build build
+ctest --test-dir build --output-on-failure
+./build/slam_fr079_train_only_benchmark /path/to/fr079.log.gz
+~~~
+
+This data is not shipped in Git and the real-data CTest only registers
+when `SLAM_FR079_LOG` is specified. Ceres selection fails
+closed when Ceres is absent. Append `--reference` to
+explicitly select the lightweight local reference matcher.
+
+**Results on supplied file:** 3,118 scans; 2,494 eligible training,
+416 inserted map scans; 624 held out, 52 evaluated queries; 42 accepted
+Ceres improvements, 10 unchanged. Overlap 0.840449 → 0.851909;
+mean robust geometric cost 86.2551 → 80.4663.
+The logged trajectory is used for both map placement and held-out
+pose initialization. Such pose estimates can already incorporate scan
+matching, and adjacent scans share geometry. **This is not external
+ground-truth accuracy or a statistically independent traversal.**
+Do not report ATE/RPE or physical beam-time claims from this test.
+See [versioned result evidence](train-only-evidence.json).
