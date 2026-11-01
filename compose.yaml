@@ -9,6 +9,7 @@ services:
       - "127.0.0.1:8765:8765"
     volumes:
       - ./apps/demo/maps:/maps:ro
+      - ./apps/demo/fusion:/fusion:ro
     init: true
     restart: "no"
 
