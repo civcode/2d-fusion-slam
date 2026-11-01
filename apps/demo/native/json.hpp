@@ -203,7 +203,17 @@ private:
       while(pos_<s_.size()&&s_[pos_]>='0'&&s_[pos_]<='9')++pos_;
       if(pos_==p)throw std::invalid_argument("invalid JSON exponent");
     }
-    return Json::number(std::string(s_.substr(start,pos_-start)));
+    const auto raw=s_.substr(start,pos_-start);
+    // Preserve integer lexemes exactly (64-bit map identities are not
+    // binary64). However reject nonfinite/out-of-range fractional or
+    // exponent numbers before they enter the read-only replay tree.
+    if(raw.find_first_of(".eE")!=std::string_view::npos) {
+      double checked{};
+      const auto [end,err]=std::from_chars(raw.data(),raw.data()+raw.size(),checked);
+      if(err!=std::errc{}||end!=raw.data()+raw.size()||!std::isfinite(checked))
+        throw std::invalid_argument("JSON floating point outside finite range");
+    }
+    return Json::number(std::string(raw));
   }
 };
 inline Json parse_json(std::string_view input) {return JsonParser(input).parse();}
