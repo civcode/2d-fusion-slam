@@ -316,3 +316,28 @@ engine is unavailable in this workspace; Docker image compilation and
 full Ubuntu CTest remain **unverified**. GitHub Actions were not run
 or modified. See [demo README](../apps/demo/README.md) and
 [Docker commands](docker-development.md).
+
+## 2026-11-01 — Self-contained synthetic web demo and native-format regression
+
+The default `docker compose up --build demo` can now show a visibly
+labeled **synthetic** workshop without FR079 input or host-side C++
+dependencies. The Python startup generates a temporary FUSMAP2D v1
+fixture only when the mounted directory contains no .slammap and no
+CURRENT registry. The underlying viewer remains read-only and never
+writes into a user's map folder. Existing map files, including corrupt
+ones, and registry pointers always take precedence.
+
+The fixture is explicitly not a measurement, calibrated metric origin,
+or independent robot pose truth. The new
+`demo_fixture_native` CTest cross-verifies the fixture via the real
+C++ FUSMAP2D importer, while `web_ui_unit` exercises the local HTTP
+server and prevents fallback from masking a damaged registry.
+
+**Local validation:** 17/17 Python unit and CLI HTTP tests passed;
+a real synthetic fixture was successfully parsed by the original
+`slam_map_inspect` executable with matching metadata and fingerprint;
+Node verified the updated JavaScript syntax. The complete repo-wide
+CTest and actual Docker image build remain unverified because a Docker
+engine is unavailable; no GitHub Actions were invoked.
+See [demo instructions](../apps/demo/README.md) and
+[web UI documentation](web-ui.md).

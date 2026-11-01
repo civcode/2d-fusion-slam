@@ -27,6 +27,14 @@ if(BUILD_TESTING)
         -p "test_*.py" -v)
     set_tests_properties(web_ui_unit PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Cross-language FUSMAP2D fixture parity: the bundled synthetic demo
+    # must parse identically in the real C++ inspector and Python dashboard.
+    add_test(NAME demo_fixture_native
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/check_native_fixture.py"
+        "$<TARGET_FILE:slam_map_inspect>")
+    set_tests_properties(demo_fixture_native PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
   endif()
 endif()
 

@@ -20,6 +20,8 @@ mkdir -p /tmp/slam-maps
 
 # Start read-only viewer; choose a directory containing *.slammap
 python3 apps/demo/main.py --data-dir /tmp/slam-maps --port 8765
+# Or, if no map export is available yet, show a labeled synthetic example:
+python3 apps/demo/main.py --data-dir apps/demo/maps --example-if-empty
 ~~~
 
 Open **http://127.0.0.1:8765/**. The UI shows the available maps on the
@@ -57,7 +59,7 @@ demo and native build/tests, and [compose.yaml](../compose.yaml) starts
 the demo or runs tests explicitly.
 
 ```sh
-# Put an existing .slammap export in apps/demo/maps first.
+# No map files necessary: the empty-directory demo shows a synthetic map.
 docker compose up --build demo
 # Open http://127.0.0.1:8765
 
@@ -66,7 +68,14 @@ docker compose run --build --rm test
 ```
 
 The demo stage installs **Python only**, not Ceres/GTSAM/Catch2, because
-it is a read-only map viewer. The test target builds against Ubuntu 24.04
+it is a read-only map viewer. Its `--example-if-empty` option supplies a
+deterministic **synthetic** workshop when the read-only mounted map
+directory contains neither a .slammap file nor a CURRENT registry.
+The map is created only in an isolated temporary directory. Any real
+map or registry takes precedence; malformed data stays visible as an
+error rather than silently switching to the sample.
+A prominent browser notice labels synthetic data as **not measured
+LiDAR** and not verified metric world-frame alignment. The test target builds against Ubuntu 24.04
 APT packages and requires the native solvers. The map files are mounted
 read-only from `./apps/demo/maps` to `/maps`, and
 are ignored by Git and excluded from the Docker build context.
@@ -123,7 +132,7 @@ the \`web_ui_unit\` CTest is registered and runs with the native suite.
 The root Dockerfile's native `test` target includes Python and its CTest
 entry; the minimal `demo` target needs only Python to serve maps.
 
-**Local evidence (2026-11-01):** 11/11 unittest cases passed. The
+**Initial local evidence (2026-11-01):** 11/11 unittest cases passed. The
 real FR079 FUSMAP2D export was decoded with its known/unknown counts,
 revision and original fingerprint preserved. A synthetic map generated
 by the Python test fixture was imported successfully by the existing
@@ -138,3 +147,23 @@ this environment.
 **Next:** After a real calibrated recording/pose publication interface
 exists, design an authenticated live status channel; do not invent
 live robot positions in this offline dashboard.
+
+### Synthetic startup fixture and cross-language verification
+
+`apps/demo/web/example.py` generates a **schematic** 120×90 cell
+FUSMAP2D v1 workshop with occupied, free and unknown cells; it does not
+model an LD19 acquisition or reconstruct a trajectory. Its metadata
+explicitly says `truth_class=synthetic_exact` and
+`metric_origin_verified=false`. The standalone viewer remains
+read-only; only the startup option creates a disposable temporary
+map, never a `generation-*.slammap` or user-data `CURRENT` pointer.
+The regenerated binary is independently parsed by the C++ native
+`slam_map_inspect` executable using the
+`demo_fixture_native` CTest. The existing `web_ui_unit` CTest runs
+the actual server CLI HTTP smoke, no-leakage checks, corrupted-registry
+precedence and frontend-safe-browsing assertions.
+
+**Extended local validation:** 17/17 Python tests, the real CLI over
+loopback HTTP, Node JavaScript syntax and C++/Python native-format
+parity passed. The actual Ubuntu Docker build and complete repository
+CTest matrix remain unverified in this workspace.

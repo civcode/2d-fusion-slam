@@ -25,7 +25,7 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_offline_graph` (optional, workstation only): GTSAM 4.3 Pose2 batch optimizer with fixed first pose, sequential verified odometry, robust and provenance-gated loop closures, rejected-loop diagnostics and deterministic synthetic regression. Its GTSAM backend was compiled and **2/2 tests passed locally**, including strict warnings/UBSan. **No FR079 or real-wheel graph-factor accuracy is claimed.**
 - `slam_offline_generation` (optional with GTSAM): source-qualified frontend loop admission, graph optimization, two immutable occupancy/map-bundle rebuilds, **separate synthetic held-out map quality evaluation**, and fail-closed candidate selection that keeps the incumbent on rejection. GTSAM, map export and mapping do not run on the Pi known-map localizer.
 - `slam_map_registry` (Linux): **durable FUSMAP2D map-generation selection** with atomic file/pointer publication, expected-incumbent checks, restart recovery, corruption fallback and explicit rollback. The optional offline graph bridge publishes only after the existing quality gate accepts the candidate; see [map-generation registry](docs/map-generation-registry.md).
-- **`apps/demo/` offline map console:** a lightweight read-only Python 3.10+ web UI for authoritative `.slammap` exports and the `FUSGEN1` active/previous registry. It renders known/free/occupied/unknown cells, pans/zooms, checks data integrity, shows map provenance and supports cell inspection. **No live pose, robot commands, map promotion or fabricated sensor status.** See [Web UI guide](docs/web-ui.md).
+- **`apps/demo/` offline map console:** an immediately runnable, synthetic-example-capable, read-only Python 3.10+ web UI for authoritative `.slammap` exports and the `FUSGEN1` active/previous registry. It renders known/free/occupied/unknown cells, pans/zooms, checks data integrity, shows map provenance and supports cell inspection. **No live pose, robot commands, map promotion or fabricated sensor status.** See [Web UI guide](docs/web-ui.md).
 - `slam_match_ceres` (optional): Ceres cost-function/solver adapter. Its byte-identical source compiled and was **exercised at runtime** against Ceres 2.2.0 using an isolated analytic distance-field harness; the *complete repository Ceres CTest remains unverified*.
 - `slam_carmen`, `slam_carmen_geometry` and `slam_carmen_inspect`: strict FR079 `FLASER`/`RLASER`/`ODOM` parsing, 180° half-open angular layout, source scan IPC/logger times, conservative invalid-range classification, and native geometry-only matcher input without inventing per-beam times.
 - **Catch2 3.16.1**: user-provided release extracted, compiled and used for CARMEN parsing/geometry tests. CMake accepts `SLAM_CATCH2_SOURCE_DIR`, otherwise uses pinned upstream commit `08092139210881f01a34e60c5f2fd6afa0ea4024`.
@@ -84,6 +84,8 @@ ROS or a compiled web framework. After exporting a FUSMAP2D map:
 mkdir -p /tmp/slam-maps
 ./build/slam_fr079_map_export /path/to/fr079.log.gz /tmp/slam-maps/fr079-training
 python3 apps/demo/main.py --data-dir /tmp/slam-maps --port 8765
+# For an empty directory only, demonstrate the map UI with fake geometry:
+python3 apps/demo/main.py --data-dir apps/demo/maps --example-if-empty
 ~~~
 
 Open **http://127.0.0.1:8765/**. You can also point `--data-dir`
@@ -103,8 +105,9 @@ the [root Dockerfile](Dockerfile) provides separate **demo** and
 native test target uses Ubuntu APT Ceres/GTSAM/Catch2 dependencies.
 
 ```sh
-# Place *.slammap files in apps/demo/maps, then:
+# Out of the box: opens a clearly labeled synthetic workshop map.
 docker compose up --build demo           # http://127.0.0.1:8765
+# Add *.slammap files to apps/demo/maps/ for real offline map inspection.
 docker compose run --build --rm test    # C++ + Python CTest
 ```
 

@@ -48,4 +48,4 @@ WORKDIR /workspace
 COPY --chown=viewer:viewer apps/demo /workspace/apps/demo
 USER viewer
 EXPOSE 8765
-CMD ["python3", "apps/demo/main.py", "--data-dir", "/maps", "--host", "0.0.0.0", "--allow-network"]
+CMD ["python3", "apps/demo/main.py", "--data-dir", "/maps", "--host", "0.0.0.0", "--allow-network", "--example-if-empty"]

@@ -42,7 +42,8 @@ The older `docker/Dockerfile.apt` has been removed. Its dependency
 installation remains in the root `dependencies` stage.
 
 ```sh
-# Browser demo; place local *.slammap exports in apps/demo/maps.
+# Browser demo works with an empty map directory: synthetic example by default.
+# Optionally place your real *.slammap exports in apps/demo/maps.
 docker compose up --build demo
 # Open http://127.0.0.1:8765
 
@@ -58,7 +59,9 @@ docker run --rm fusion-slam:test
 ```
 
 The `test` service is behind a Compose profile and does **not**
-start with `docker compose up demo`. The `demo` image doesn't
+start with `docker compose up demo`. If no map exists, the demo
+displays an explicitly labeled synthetic map without writing to the
+mounted map directory; source data and the CURRENT registry take precedence. The `demo` image doesn't
 need Ceres/GTSAM/Catch2 to **view** existing binary maps; the native
 `build`/`test` targets require them. The demo service binds
 host port 8765 to loopback and mounts files read-only. Do not expose
@@ -136,7 +139,8 @@ download; `FETCHCONTENT_FULLY_DISCONNECTED=ON` adds protection.
 
 Before executing CTest, the runner also asserts that the expected
 `match_ceres`, `core_catch2`, `pose_graph`,
-`offline_map_promotion`, `map_registry` and `map_bundle` CTests are registered. It
+`offline_map_promotion`, `map_registry`, `map_bundle`, `web_ui_unit`
+and `demo_fixture_native` CTests are registered. It
 will not print a misleading green test run after silently skipping a
 solver or the detailed tests.
 

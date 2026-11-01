@@ -17,6 +17,7 @@ import threading
 from urllib.parse import parse_qs, urlsplit
 
 from .bundle import BundleError, parse_registry, read_bundle
+from .example import data_dir_or_example
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE / "static"
@@ -175,6 +176,8 @@ def run(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True,
                         help="directory containing FUSMAP2D .slammap files or FUSGEN1 CURRENT")
+    parser.add_argument("--example-if-empty", action="store_true",
+                        help="show a disposable labeled synthetic map only when the map directory is empty")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", choices=("127.0.0.1", "0.0.0.0"), default="127.0.0.1",
                         help="bind interface; defaults to loopback only")
@@ -185,20 +188,23 @@ def run(argv: list[str] | None = None):
         parser.error("port must be 1..65535")
     if args.host == "0.0.0.0" and not args.allow_network:
         parser.error("binding to all interfaces requires explicit --allow-network")
-    viewer = Dashboard(args.data_dir)
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    server.viewer = viewer
-    print(f"Read-only SLAM map dashboard: http://127.0.0.1:{server.server_port}", flush=True)
-    if args.host == "0.0.0.0":
-        print("WARNING: HTTP has no authentication; bind Docker host port to 127.0.0.1 only.", flush=True)
-    print(f"Map directory: {viewer.root}", flush=True)
-    print("No live robot status, robot commands, map publication or recovery actions exposed.", flush=True)
-    try:
-        server.serve_forever(poll_interval=0.2)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    with data_dir_or_example(args.data_dir, args.example_if_empty) as directory:
+        viewer = Dashboard(directory)
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+        server.viewer = viewer
+        print(f"Read-only SLAM map dashboard: http://127.0.0.1:{server.server_port}", flush=True)
+        if args.host == "0.0.0.0":
+            print("WARNING: HTTP has no authentication; bind Docker host port to 127.0.0.1 only.", flush=True)
+        if args.example_if_empty and directory != args.data_dir.resolve():
+            print("SYNTHETIC EXAMPLE ONLY: no user map or CURRENT was found.", flush=True)
+        print(f"Map directory: {viewer.root}", flush=True)
+        print("No live robot status, robot commands, map publication or recovery actions exposed.", flush=True)
+        try:
+            server.serve_forever(poll_interval=0.2)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
 
 
 if __name__ == "__main__":
