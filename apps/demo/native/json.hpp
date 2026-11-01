@@ -2,6 +2,7 @@
 // Minimal strictly typed, bounded JSON for offline SLAM replay and sidecars.
 // No network, dependency, unsafe JSON "number via double" fingerprint coercion.
 #include <charconv>
+#include <limits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -207,7 +208,15 @@ private:
 };
 inline Json parse_json(std::string_view input) {return JsonParser(input).parse();}
 inline Json jint(std::uint64_t n){return Json::number(std::to_string(n));}
-inline Json jreal(double n){if(!std::isfinite(n))throw std::invalid_argument("non-finite JSON");return Json::number(std::to_string(n));}
+inline Json jreal(double n) {
+  if(!std::isfinite(n))throw std::invalid_argument("non-finite JSON");
+  char buf[64];
+  const auto [end,err]=std::to_chars(buf,buf+sizeof(buf),n,
+                                   std::chars_format::general,
+                                   std::numeric_limits<double>::max_digits10);
+  if(err!=std::errc{})throw std::runtime_error("cannot encode JSON number");
+  return Json::number(std::string(buf,end));
+}
 inline void need(bool yes,const char* why){if(!yes)throw std::invalid_argument(why);}
 inline bool keys(const Json& v,std::initializer_list<std::string_view> names) {
   if(v.kind!=Json::Kind::object||v.object.size()!=names.size())return false;
