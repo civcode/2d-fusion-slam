@@ -656,3 +656,46 @@ Complete repository CMake/CTest/Docker runtime could not be executed
 here because network restrictions prevent a local checkout. The user's
 earlier fixes on main were preserved. No GitHub Actions were configured
 or executed. See [Fusion Replay](fusion-replay.md).
+
+
+## 2026-11-01 — Unified fusion Map Explorer and compute profiling
+
+- Standard native /api/maps now lists validated completed fusion-run
+  FUSMAP2D files alongside ordinary standalone maps. Each ID uses a
+  strictly parsed fusion@run@method alias and supports PNG, metadata
+  and occupancy-cell inspection through the same read-only viewer.
+  The map frontend selects the latest suitable fusion scan-matched
+  result by default when only the workshop fallback would otherwise
+  be selected, and accepts deep links from Fusion Replay.
+- /replay clarifies that warehouse/apartment sessions are real offline
+  FUSFUSREPLAY1 outputs at /fusion, not CARMEN FUSREPLAY1 logs.
+- New C++20 steady_clock fusion profiler with CMake
+  SLAM_PROFILE_FUSION ON/OFF. Stage samples include gyro integration,
+  every deskewed frame, source-excluded Ceres/reference match,
+  immutable training map, LiDAR-only baseline, GTSAM and all final
+  map builds. Includes p50/p95, total/mean/max, and a **synthetic
+  offline** fusion processing FPS / frame-budget comparison. Individual
+  map-insertion samples are explicitly nested and excluded from
+  critical-path summation to prevent double counting.
+- FUSPROFILE1 sidecar and read-only native fusion profile API checked
+  against authoritative scene/matcher/frame-count/scan-period claims.
+  Fusion Replay displays a compute panel and stage bottlenecks, or
+  states the profile is unavailable for old runs.
+- Added manual-only scripts/benchmark-fusion.py: optional warmup,
+  repeated apartment/warehouse trials, exclusive CSV, external whole
+  process time and profiler-based effective fusion FPS. Docker test
+  builder supports SLAM_PROFILE_FUSION ON/OFF. BUILD_JOBS=28 maps to
+  SLAM_DOCKER_JOBS=28 as before.
+- Extended Python native HTTP/offline CLIs and standalone C++ profile
+  tests. The map integration tests check identical metadata and
+  screenshots through both map routes, and corrupt profile rejection.
+
+**Measured result status:** None published. The latest source was
+read from main before these commits. Native source-level and JavaScript
+checks can be performed here; a full local repository checkout and
+native Docker/Ceres/GTSAM test run are unavailable to this tool session.
+The FPS score is an offline synthetic *throughput proxy* and does NOT
+establish live real-time capability or device-level worst-case latency.
+No GitHub Actions were executed.
+
+See [Fusion profiling and benchmark reproducibility](fusion-profiling.md).
