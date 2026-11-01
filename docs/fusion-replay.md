@@ -92,3 +92,33 @@ fingerprints, and tests corrupt/symlinked inputs and denied HTTP writes.
 the user's intervening build/test fixes. A full native CMake/CTest/Docker
 execution is not verified in this ChatGPT container because GitHub cannot
 be cloned to its local filesystem. No GitHub Actions were run.
+
+
+## Fusion maps in the regular Map Explorer
+
+The regular Map Explorer at / now merges its traditional .slammap list
+with each validated Fusion Replay run. A run's maps are displayed under
+names such as "apartment-001 / fused_scan_matched" and
+"warehouse-001 / graph_optimized" (only methods actually produced are
+shown). The API alias /api/maps/fusion@{run}@{method} supports the
+same metadata, occupancy PNG and cell inspector as a standalone map.
+No files are copied; the original authoritative bundle must match
+the FUSFUSION1 fingerprint in that run. The existing workshop sample
+remains an optional fallback, not the preferred map when fusion results
+are available.
+
+Select **Explore fusion map** in /fusion to open the selected method's
+completed map directly in the normal Map Explorer. The map image
+is the *final* map, not a map state from an intermediate replay frame.
+
+## Native compute profiling
+
+Updated runs also write fusion_profile.json (FUSPROFILE1).
+The native /api/fusion/runs/{id}/profile endpoint validates scene,
+matcher, scan period and frame count before displaying offline compute
+FPS, frame-proxy p95, and stage bottlenecks in the Fusion Replay details.
+Older run directories without a profiling file are still replayable;
+regenerate with the updated CLI to obtain measurements.
+
+See [profiling and Docker benchmark instructions](fusion-profiling.md)
+for the precise critical-path and real-time limitations.
