@@ -59,7 +59,7 @@ RUN cmake -S . -B build-native -G Ninja \
 FROM ubuntu:24.04 AS demo
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libssl3t64 zlib1g ca-certificates \
+      libssl3t64 zlib1g libstdc++6 ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
   && useradd --system --uid 10001 --home-dir /workspace --no-create-home viewer \
   && mkdir -p /maps /workspace/apps/demo/web/static
