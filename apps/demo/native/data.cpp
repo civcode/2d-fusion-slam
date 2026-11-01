@@ -641,6 +641,25 @@ Json ViewerData::replay_info(const std::string& name) const {
     {"trajectory",trajectory}};
   return info;
 }
+Json ViewerData::replay_frames(const std::string& name) const {
+  // One bounded read/parse/validation per playback session, not once per
+  // animation frame. All Ceres overlays remain source-provenance checked.
+  const auto r=replay(name);
+  Json frames=Json::list();
+  frames.array.reserve(r.data.at("frames").array.size());
+  for(std::size_t i=0;i<r.data.at("frames").array.size();++i) {
+    Json frame=r.data.at("frames").at(i);
+    const auto found=r.matches.find(i);
+    frame.object["matching"]=found==r.matches.end()?Json{}:found->second;
+    frame.object["matching_state"]=r.match_info.at("status");
+    frames.array.push_back(std::move(frame));
+  }
+  Json result=Json::dict();
+  result.object={{"format",Json::text("FUSREPLAYFRAMES1")},
+                 {"source_sha256",r.data.at("source").at("source_sha256")},
+                 {"frames",std::move(frames)}};
+  return result;
+}
 Json ViewerData::replay_frame(const std::string& name,std::size_t index) const {
   const auto r=replay(name);
   need(index<r.data.at("frames").array.size(),"replay frame out of range");
