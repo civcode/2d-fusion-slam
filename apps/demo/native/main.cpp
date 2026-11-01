@@ -1,4 +1,5 @@
 #include "apps/demo/native/data.hpp"
+#include "apps/demo/native/fusion.hpp"
 
 #include <charconv>
 #include <cerrno>
@@ -53,7 +54,8 @@ std::string asset(std::string_view name,const std::filesystem::path& root){
   if(!in)throw std::runtime_error("cannot open web asset");
   std::ostringstream data;data<<in.rdbuf();return data.str();
 }
-Response route(slam::viewer::ViewerData& data,const std::filesystem::path& static_root,
+Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
+               const std::filesystem::path& static_root,
                std::string_view target) {
   if(target.size()>2048) return error(400,"request URL too long");
   const auto q=target.find('?');
@@ -64,12 +66,48 @@ Response route(slam::viewer::ViewerData& data,const std::filesystem::path& stati
       {"mode",Json::text("read-only-offline")}};
     return json(std::move(r));
   }
+  if(path=="/api/fusion/runs")return json(fusion.index());
+  constexpr std::string_view fusion_prefix="/api/fusion/runs/";
+  if(path.starts_with(fusion_prefix)){
+    if(!query.empty())return error(422,"unsupported fusion query");
+    const auto rest=path.substr(fusion_prefix.size());
+    const auto slash=rest.find('/');
+    const auto id=std::string(rest.substr(0,slash));
+    if(id.empty())return error(404,"invalid fusion run");
+    if(slash==std::string_view::npos)return json(fusion.report(id));
+    const auto sub=rest.substr(slash+1);
+    if(sub=="trajectories")return json(fusion.trajectories(id));
+    if(sub=="replay")return json(fusion.replay(id));
+    constexpr std::string_view frame_marker="frame/";
+    if(sub.starts_with(frame_marker)){
+      std::size_t frame=0;
+      if(!decimal(sub.substr(frame_marker.size()),frame)||frame>=10000)
+        return error(404,"invalid fusion frame index");
+      return json(fusion.frame(id,frame));
+    }
+    constexpr std::string_view map_marker="maps/";
+    if(sub.starts_with(map_marker)){
+      auto method=sub.substr(map_marker.size());
+      bool image=false;
+      if(method.ends_with("/image.png")){
+        method.remove_suffix(std::string_view("/image.png").size());image=true;
+      }
+      if(method.empty()||method.find('/')!=std::string_view::npos)
+        return error(404,"invalid fusion map method");
+      if(image)return {200,"image/png",fusion.map_png(id,std::string(method))};
+      return json(fusion.map_metadata(id,std::string(method)));
+    }
+    return error(404,"unknown fusion endpoint");
+  }
   if(path=="/api/maps") return json(data.list_maps());
   if(path=="/api/replays") return json(data.list_replays());
   if(path=="/"||path=="/index.html"||path=="/app.js"||
      path=="/styles.css"||path=="/replay"||path=="/replay.html"||
-     path=="/replay.js"||path=="/replay.css") {
+     path=="/replay.js"||path=="/replay.css"||
+     path=="/fusion"||path=="/fusion.html"||
+     path=="/fusion.js"||path=="/fusion.css") {
     const auto file=path=="/"?"index.html":path=="/replay"?"replay.html":
+                    path=="/fusion"?"fusion.html":
                     std::string(path.substr(1));
     const auto mime=file.ends_with(".js")?"text/javascript; charset=utf-8":
                     file.ends_with(".css")?"text/css; charset=utf-8":
@@ -142,6 +180,7 @@ void reply(int fd,const Response& r){
   }
 }
 void handle(int client,slam::viewer::ViewerData& viewer,
+            slam::viewer::FusionRuns& fusion,
             const std::filesystem::path& static_root) {
   timeval timeout{3,0};
   ::setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
@@ -171,12 +210,13 @@ void handle(int client,slam::viewer::ViewerData& viewer,
     }
     const auto method=first.substr(0,sp),target=first.substr(sp+1,other-sp-1);
     if(method!="GET"){reply(client,error(405,"read-only dashboard: only GET allowed"));return;}
-    reply(client,route(viewer,static_root,target));
+    reply(client,route(viewer,fusion,static_root,target));
   }catch(const std::invalid_argument& e){reply(client,error(422,e.what()));}
   catch(const std::filesystem::filesystem_error&){reply(client,error(422,"invalid viewer file"));}
   catch(const std::exception&){reply(client,error(500,"internal viewer error"));}
 }
-void serve(slam::viewer::ViewerData& viewer,const std::filesystem::path& static_root,
+void serve(slam::viewer::ViewerData& viewer,slam::viewer::FusionRuns& fusion,
+           const std::filesystem::path& static_root,
            unsigned port,bool broad){
   const int listener=::socket(AF_INET,SOCK_STREAM,0);
   if(listener<0)throw std::runtime_error("cannot open server socket");
@@ -197,7 +237,7 @@ void serve(slam::viewer::ViewerData& viewer,const std::filesystem::path& static_
   for(;;){
     const int fd=::accept(listener,nullptr,nullptr);
     if(fd<0){if(errno==EINTR)continue;throw std::runtime_error("viewer accept failed");}
-    handle(fd,viewer,static_root);
+    handle(fd,viewer,fusion,static_root);
     ::close(fd);
   }
 }
@@ -205,10 +245,10 @@ void serve(slam::viewer::ViewerData& viewer,const std::filesystem::path& static_
 }
 int main(int argc,char** argv) {
   try{
-    std::filesystem::path maps,replays;
+    std::filesystem::path maps,replays,fusion_directory;
     const std::filesystem::path static_root=FUSION_VIEWER_STATIC_ROOT;
     unsigned port=8765;bool allow_network=false,broad=false,example=false;
-    bool has_replays=false;
+    bool has_replays=false,has_fusion=false;
     for(int i=1;i<argc;++i){
       const std::string arg=argv[i];
       auto value=[&]()->std::string{
@@ -217,6 +257,7 @@ int main(int argc,char** argv) {
       };
       if(arg=="--data-dir")maps=value();
       else if(arg=="--replay-dir"){replays=value();has_replays=true;}
+      else if(arg=="--fusion-dir"){fusion_directory=value();has_fusion=true;}
       else if(arg=="--port"){
         const auto val=value();
         std::size_t v=0;
@@ -234,7 +275,7 @@ int main(int argc,char** argv) {
       else if(arg=="--example-if-empty")example=true;
       else if(arg=="--help"){
         std::cout<<"Usage: fusion_slam_demo --data-dir MAP_DIR [--replay-dir REPLAY_DIR] "
-          "[--port PORT] [--host 127.0.0.1|0.0.0.0] "
+          "[--fusion-dir RUNS_DIR] [--port PORT] [--host 127.0.0.1|0.0.0.0] "
           "[--allow-network] [--example-if-empty]\n";
         return 0;
       }
@@ -244,9 +285,10 @@ int main(int argc,char** argv) {
     if(broad&&!allow_network)throw std::invalid_argument(
        "binding to non-loopback requires explicit --allow-network");
     slam::viewer::ViewerData viewer(maps,has_replays?replays:maps,example&&!has_replays);
+    slam::viewer::FusionRuns fusion(has_fusion?fusion_directory:maps);
 #ifdef __unix__
     std::signal(SIGPIPE,SIG_IGN);
-    serve(viewer,static_root,port,broad);
+    serve(viewer,fusion,static_root,port,broad);
 #else
     throw std::runtime_error("native demo server requires POSIX sockets");
 #endif
