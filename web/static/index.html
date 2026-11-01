@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#091322">
+  <title>2D Fusion SLAM — Map Console</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Map navigation">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="15" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 4"/><circle cx="20" cy="20" r="7" stroke="currentColor" stroke-width="1.8"/><path d="M20 20 31 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="20" cy="20" r="2.5" fill="currentColor"/></svg>
+        </div>
+        <div><div class="brand-name">FUSION <span>SLAM</span></div><div class="brand-caption">MAP CONSOLE / 01</div></div>
+      </div>
+      <div class="sidebar-section">
+        <div class="label-heading"><span>WORKSPACE</span><span class="tiny-tag">LOCAL</span></div>
+        <div class="nav-active"><span class="nav-icon">▦</span> Map explorer <span class="nav-marker"></span></div>
+      </div>
+      <div class="sidebar-section maps-section">
+        <div class="section-heading"><span>MAP GENERATIONS</span><button id="refresh" class="icon-btn" type="button" aria-label="Refresh map directory" title="Refresh map directory">↻</button></div>
+        <div id="map-list" class="map-list" aria-live="polite"><div class="list-placeholder">Scanning available maps…</div></div>
+      </div>
+      <div class="side-footer">
+        <div class="side-footer-eyebrow">RUNTIME MODE</div>
+        <div class="offline-status"><span class="pulse-dot"></span> Offline viewer</div>
+        <p>Maps and generation pointers are read from disk. No live robot connection is available.</p>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="breadcrumb">WORKSPACE <span>/</span> <strong>MAP EXPLORER</strong></div>
+        <div class="top-actions"><div class="read-only-pill"><span class="lock-icon" aria-hidden="true">⌁</span> READ ONLY</div><div id="clock-status" class="top-status">FUSMAP2D v1</div></div>
+      </header>
+      <div class="workspace">
+        <section class="heading-block">
+          <div class="eyebrow">OFFLINE MAPPING / DATA INSPECTION</div>
+          <div class="title-line"><div><h1>Map explorer<span class="accent-dot">.</span></h1><p>Explore occupancy, inspect cells, and review saved map generations.</p></div><span class="mode-label">01 / OFFLINE</span></div>
+        </section>
+        <div id="warning" class="warning" role="status" hidden></div>
+        <section class="summary-grid" aria-label="Map statistics">
+          <div class="stat"><span class="stat-label">MAP DIMENSIONS</span><div class="stat-value" id="stat-size">—</div><span class="stat-sub" id="stat-resolution">Grid cells</span></div>
+          <div class="stat"><span class="stat-label">OBSERVED CELLS</span><div class="stat-value" id="stat-known">—</div><span class="stat-sub" id="stat-known-fraction">Coverage of available grid</span></div>
+          <div class="stat"><span class="stat-label">OCCUPIED CELLS</span><div class="stat-value" id="stat-occupied">—</div><span class="stat-sub">Known log-odds above zero</span></div>
+          <div class="stat"><span class="stat-label">MAP REVISION</span><div class="stat-value" id="stat-revision">—</div><span class="stat-sub" id="stat-verified">No file loaded</span></div>
+        </section>
+        <section class="content-grid">
+          <div class="map-panel">
+            <div class="panel-header"><div><div class="panel-kicker">SPATIAL VIEW</div><h2 id="map-title">Occupancy grid</h2></div><div class="map-tools"><button id="fit" class="tool-button" title="Fit map to view" type="button">Fit map</button><button id="zoom-out" class="tool-button square" title="Zoom out" aria-label="Zoom out" type="button">−</button><span id="zoom-readout" class="zoom-readout">—</span><button id="zoom-in" class="tool-button square" title="Zoom in" aria-label="Zoom in" type="button">+</button></div></div>
+            <div id="map-stage" class="map-stage" tabindex="0" aria-label="Interactive map; drag to pan, scroll to zoom, click to inspect a cell">
+              <canvas id="map-canvas" role="img" aria-label="Rendered authoritative occupancy map"></canvas>
+              <div id="map-empty" class="map-empty"><div class="empty-graphic"><span>◈</span><span class="orbit"></span></div><h3>No map selected</h3><p>Place a <code>.slammap</code> export in your map directory, then refresh.</p></div>
+              <div class="map-overlay" id="map-overlay" hidden><span class="overlay-dot"></span> GRID FRAME · Y UP</div>
+            </div>
+            <div class="map-foot"><div class="legend"><span><i class="key occupied"></i> Occupied</span><span><i class="key free"></i> Free</span><span><i class="key uncertain"></i> Neutral</span><span><i class="key unknown"></i> Unknown</span></div><div class="map-hint">Scroll to zoom · Drag to pan · Click a cell</div></div>
+          </div>
+          <aside class="inspector">
+            <section class="detail-card"><div class="panel-kicker">MAP METADATA</div><h2>Source &amp; frame</h2><dl class="detail-list"><div><dt>Frame ID</dt><dd id="meta-frame">—</dd></div><div><dt>Source</dt><dd id="meta-source">—</dd></div><div><dt>Origin (x, y)</dt><dd id="meta-origin">—</dd></div><div><dt>Grid yaw</dt><dd id="meta-yaw">—</dd></div><div><dt>Fingerprint</dt><dd id="meta-fingerprint" class="monospace">—</dd></div><div><dt>Metric origin</dt><dd id="meta-calibrated">Unverified</dd></div></dl></section>
+            <section class="detail-card cell-card"><div class="panel-kicker">CELL INSPECTOR</div><h2>Selected cell</h2><p class="cell-prompt" id="cell-prompt">Click a cell on the map to inspect its occupancy evidence.</p><dl class="detail-list" id="cell-details" hidden><div><dt>Grid coordinates</dt><dd id="cell-xy">—</dd></div><div><dt>World coordinates</dt><dd id="cell-world">—</dd></div><div><dt>Observed</dt><dd id="cell-observed">—</dd></div><div><dt>Occupancy probability</dt><dd id="cell-prob">—</dd></div><div><dt>Log-odds</dt><dd id="cell-logodds">—</dd></div></dl></section>
+            <section class="notice-card"><div class="notice-dot">i</div><p><strong>About these maps</strong><br>The viewer checks binary file integrity, but logged poses and frame alignment are not automatically ground truth. No live tracking or map promotion occurs here.</p></section>
+          </aside>
+        </section>
+        <footer class="bottom-bar"><span><span class="green-dot">●</span> LOCAL FILE VIEWER</span><span>FUSMAP2D v1 <span class="sep">/</span> NO ROBOT CONTROL</span></footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

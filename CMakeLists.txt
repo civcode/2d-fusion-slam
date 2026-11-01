@@ -16,6 +16,20 @@ endif()
 
 include(CTest)
 
+# The offline viewer has no C++ runtime dependency; run its standalone
+# Python standard-library tests whenever Python >= 3.10 is installed.
+if(BUILD_TESTING)
+  find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME web_ui_unit
+      COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+        -s "${CMAKE_CURRENT_SOURCE_DIR}/tests/web"
+        -p "test_*.py" -v)
+    set_tests_properties(web_ui_unit PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  endif()
+endif()
+
 # System/toolchain-provided Eigen only: core builds never download dependencies.
 find_package(Eigen3 3.3 QUIET CONFIG)
 if(NOT TARGET Eigen3::Eigen)

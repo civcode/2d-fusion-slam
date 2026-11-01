@@ -259,3 +259,39 @@ network filesystem semantics, and real-data ground-truth-qualified map
 promotion. This is a local Linux filesystem design and its integrity
 checks are not an authenticity/security mechanism. GitHub Actions were
 neither run nor modified. See [persistent registry guide](map-generation-registry.md).
+
+## 2026-11-01 — Read-only offline Web UI
+
+Implemented a lightweight Python 3.10+ standard-library dashboard with
+responsive browser UI, spatial map viewer (pan/zoom, Y-up), per-cell
+occupancy and world-coordinate inspection, frame/source metadata and
+map-generation status. Its server reads authoritative **FUSMAP2D-v1**
+binary bundles, checks footer and snapshot fingerprints, validates
+cell bounds, observed masks and log-odds, and reads the **FUSGEN1**
+`CURRENT` pointer without modifying it.
+
+The API is deliberately **read-only**. No motor controls, live robot
+pose, ROS telemetry, map publication, rollback or automatic recovery
+are implemented. The server defaults to localhost and requires explicit
+`--allow-network` to bind broadly for Docker, with guidance to bind the
+published host port to loopback. Paths, request sizes, data formats and
+symlinks are guarded; note FNV integrity is **not authentication**.
+
+**Validation:** 11/11 Python unittest checks passed locally, including
+real HTTP requests, corrupt map/pointer handling, malformed paths,
+symlink rejection, and refusal of state-changing HTTP methods.
+The real FR079 export (391 x 539, fingerprint
+`13991754243820308900`) passed the new Python parser; a Python test
+fixture was independently imported by the existing C++ map inspector.
+Chromium rendered the real FR079 raster with working zoom and click-to-
+inspect using local API fixtures: browser HTTP navigation was blocked by
+the development platform, so a full browser-over-HTTP navigation check
+could not be performed, although the HTTP API was tested independently.
+No Docker engine or GitHub Actions were used in validation.
+
+The Web UI has a CTest entry `web_ui_unit` whenever Python 3.10+ is
+found; the Docker APT image now includes Python and the Docker wrapper
+requires that test to appear. The full repository CMake/CTest matrix
+and Ubuntu Docker run remain unverified for this commit.
+
+See [Web UI guide](web-ui.md).

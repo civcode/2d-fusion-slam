@@ -25,6 +25,7 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_offline_graph` (optional, workstation only): GTSAM 4.3 Pose2 batch optimizer with fixed first pose, sequential verified odometry, robust and provenance-gated loop closures, rejected-loop diagnostics and deterministic synthetic regression. Its GTSAM backend was compiled and **2/2 tests passed locally**, including strict warnings/UBSan. **No FR079 or real-wheel graph-factor accuracy is claimed.**
 - `slam_offline_generation` (optional with GTSAM): source-qualified frontend loop admission, graph optimization, two immutable occupancy/map-bundle rebuilds, **separate synthetic held-out map quality evaluation**, and fail-closed candidate selection that keeps the incumbent on rejection. GTSAM, map export and mapping do not run on the Pi known-map localizer.
 - `slam_map_registry` (Linux): **durable FUSMAP2D map-generation selection** with atomic file/pointer publication, expected-incumbent checks, restart recovery, corruption fallback and explicit rollback. The optional offline graph bridge publishes only after the existing quality gate accepts the candidate; see [map-generation registry](docs/map-generation-registry.md).
+- **`web/` offline map console:** a lightweight read-only Python 3.10+ web UI for authoritative `.slammap` exports and the `FUSGEN1` active/previous registry. It renders known/free/occupied/unknown cells, pans/zooms, checks data integrity, shows map provenance and supports cell inspection. **No live pose, robot commands, map promotion or fabricated sensor status.** See [Web UI guide](docs/web-ui.md).
 - `slam_match_ceres` (optional): Ceres cost-function/solver adapter. Its byte-identical source compiled and was **exercised at runtime** against Ceres 2.2.0 using an isolated analytic distance-field harness; the *complete repository Ceres CTest remains unverified*.
 - `slam_carmen`, `slam_carmen_geometry` and `slam_carmen_inspect`: strict FR079 `FLASER`/`RLASER`/`ODOM` parsing, 180° half-open angular layout, source scan IPC/logger times, conservative invalid-range classification, and native geometry-only matcher input without inventing per-beam times.
 - **Catch2 3.16.1**: user-provided release extracted, compiled and used for CARMEN parsing/geometry tests. CMake accepts `SLAM_CATCH2_SOURCE_DIR`, otherwise uses pinned upstream commit `08092139210881f01a34e60c5f2fd6afa0ea4024`.
@@ -33,7 +34,7 @@ The planned system uses an **LD19 2D LiDAR and MPU6050 gyroscope**, with optiona
 - `slam_fr079_train_only`: a **separate** training-only 0.1 m occupancy/EDT map built from FR079 scans, frozen before Ceres or reference matching of withheld queries. A leakage test modifies held-out scans and checks the training map fingerprint is unchanged. Results are **geometric-fit proxies, not independent pose accuracy**.
 - **FR079 public dataset**: both uploaded complete logs parsed in local CTest (3,118 scans and 5,761 odometry records each). `slam_carmen_map` parses CARMENMAPFILEv020 reference grids at 3, 5 and 10 cm; the optional `slam_carmen_map_inspect` checks the real 5 cm grid. Archived CARMEN binary maps now decode with preserved known/unknown cells; map-to-trajectory registration and conversion into authoritative map snapshots remain unverified. See [FR079 setup](datasets/fr079/README.md).
 
-LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no full end-to-end SLAM pipeline**, independently validated real-data graph factor source, Pi driver, recorder, ROS adapter or Web UI implemented.
+LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not verified recordings from the physical device. The LD19 packet timestamp's exact physical beam-reference time remains **unverified**; its current beam timing model is provisional and deliberately not accepted as calibrated moving-scan map evidence. There is **no full end-to-end SLAM pipeline**, independently validated real-data graph factor source, Pi driver, recorder, ROS adapter or **live robot Web UI** implemented. The available web console is an offline map viewer only.
 
 ## Deterministic offline map export
 
@@ -74,6 +75,24 @@ The [versioned dependency Release](https://github.com/civcode/2d-fusion-slam/rel
 CMake prefers an installed Catch2 package; it does not fetch Catch2 if
 the restored package is available.
 
+## Local web UI — available now
+
+The offline map console needs **Python 3.10+ only**, not Ceres, GTSAM,
+ROS or a compiled web framework. After exporting a FUSMAP2D map:
+
+~~~sh
+mkdir -p /tmp/slam-maps
+./build/slam_fr079_map_export /path/to/fr079.log.gz /tmp/slam-maps/fr079-training
+python3 scripts/web-ui.py --data-dir /tmp/slam-maps --port 8765
+~~~
+
+Open **http://127.0.0.1:8765/**. You can also point `--data-dir`
+at an existing persistent generation directory containing `CURRENT` and
+`generation-*.slammap`. The console is **read-only**, checks binary
+integrity and does not mutate, recover or roll back map generations.
+For a Docker-only launch with no Python on the host and for security
+notes, see [Web UI guide](docs/web-ui.md).
+
 ## Docker / APT build and tests
 
 For a self-contained **Ubuntu 24.04** build, install Docker on the host
@@ -107,6 +126,7 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Offline GTSAM 4.3 pose-graph integration](docs/offline-pose-graph.md)
 - [Offline map candidate rebuilding, comparison and rollback](docs/offline-map-generation.md)
 - [Persistent map-generation registry and recovery](docs/map-generation-registry.md)
+- [Offline map Web UI: launch, Docker and API](docs/web-ui.md)
 - [Specification migration notes](docs/documentation-migration-notes.md)
 
 **Next:** verify the new durable map registry in the complete Docker/Ubuntu build and add independent, calibrated sensor packet lineage before attempting real-data map promotion. Then add measured fault-injection/power-loss tests and retention policy. The current graph/map quality gate is still synthetic-only; real-world accuracy and FR079 map-frame truth remain unresolved.

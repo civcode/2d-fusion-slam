@@ -13,7 +13,7 @@ RUN set -eux; \
     fi; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      ca-certificates build-essential cmake ninja-build pkg-config \
+      ca-certificates build-essential cmake ninja-build pkg-config python3 \
       libeigen3-dev zlib1g-dev libceres-dev libgtsam-dev catch2; \
     for spec in 'libceres-dev:2.2.' 'libgtsam-dev:4.2.' 'catch2:3.4.'; do \
       name="${spec%%:*}"; version="${spec#*:}"; \

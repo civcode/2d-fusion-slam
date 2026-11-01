@@ -117,7 +117,7 @@ directories from the image's build context.
   major/minor versions, but is not a bit-for-bit pinned APT snapshot or
   base-image digest. For immutable reproducibility, record the built
   image digest or use a reviewed apt snapshot/locked base.
-- The default `test` command runs synthetic/unit CTests. It does **not**
+- The APT image also includes Python 3 for the **read-only offline map viewer** (see [Web UI instructions](web-ui.md)). The Docker wrapper requires the `web_ui_unit` CTest to be registered. The default `test` command runs synthetic/unit CTests. It does **not**
   silently download FR079 archives or make claims of independent
   real-dataset localization accuracy.
 - This development workspace did **not** expose a working Docker engine,
