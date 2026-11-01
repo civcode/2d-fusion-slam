@@ -94,6 +94,47 @@
       card.append(dot,name,value,detail);scores.append(card);
     }
   }
+  function showProfile(profile) {
+    const ids=["fusion-prof-fps","fusion-prof-input","fusion-prof-budget",
+               "fusion-prof-p95","fusion-prof-compute"];
+    if(!profile){
+      for(const id of ids)shown(id,"—");
+      shown("fusion-profile-stages","No native profile for this run. Regenerate it with the updated slam_offline_fusion.");
+      return;
+    }
+    shown("fusion-prof-input",fmt(profile.input_rate_fps,2)+" Hz");
+    if(!profile.profiled){
+      for(const id of ids.filter(x=>x!=="fusion-prof-input"))shown(id,"disabled");
+      shown("fusion-profile-stages","Build with -DSLAM_PROFILE_FUSION=ON to capture stage measurements.");
+      return;
+    }
+    shown("fusion-prof-fps",fmt(profile.effective_processing_fps,2)+" frames/s");
+    shown("fusion-prof-budget",profile.average_offline_budget_met?
+      "Average under input budget · not live-verified":"Average exceeds input budget");
+    shown("fusion-prof-p95",fmt(profile.frame_proxy_p95_ms,2)+" ms offline proxy");
+    shown("fusion-prof-compute",fmt(profile.fusion_compute_ms,2)+" ms");
+    const pane=el("fusion-profile-stages");
+    pane.replaceChildren();
+    const stages=Object.entries(profile.stages)
+      .filter(([,entry])=>entry.calls>0)
+      .sort((a,b)=>b[1].total_ms-a[1].total_ms).slice(0,8);
+    for(const [name,entry] of stages) {
+      const card=document.createElement("div");card.className="fusion-score";
+      const dot=document.createElement("span");dot.className="marker";
+      dot.style.background="#5ba9cf";
+      const title=document.createElement("b");title.textContent=name.replaceAll("_"," ");
+      const score=document.createElement("span");
+      score.textContent=fmt(entry.total_ms,1)+" ms";
+      const detail=document.createElement("small");
+      detail.textContent=entry.calls+" calls · p95 "+fmt(entry.p95_ms,2)+" ms";
+      card.append(dot,title,score,detail);pane.append(card);
+    }
+  }
+  function updateExplorerLink() {
+    const method=el("fusion-map").value||"fused_scan_matched";
+    el("fusion-open-map").href=runId?
+      "/?map="+encodeURIComponent("fusion@"+runId+"@"+method):"/";
+  }
   function bounds() {
     let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
     const add=(x,y)=>{if(Number.isFinite(x)&&Number.isFinite(y)){
@@ -272,14 +313,16 @@
     mapImage=null;mapMeta=null;
     setReady(false);showMessage("");
     if(!name){
+      showProfile(null);updateExplorerLink();
       for(const id of ["fusion-scene","fusion-backend","fusion-accepted","fusion-loops"])shown(id,"—");
       el("fusion-scores").textContent="Select a completed run.";
       draw();return;
     }
     try {
       const base=urlBase();
-      const [r,p,t]=await Promise.all([
-        getJson(base),getJson(base+"/trajectories"),getJson(base+"/replay")]);
+      const [r,p,t,profile]=await Promise.all([
+        getJson(base),getJson(base+"/trajectories"),getJson(base+"/replay"),
+        getJson(base+"/profile").catch(()=>null)]);
       if(token!==loadingToken)return;
       if(r.frames!==t.frame_count || p.timestamps_ns.length!==t.frames.length)
         throw new Error("replay and report frame counts differ");
@@ -290,7 +333,7 @@
       }
       $map.replaceChildren(new Option("None — observation trail only",""));
       for(const method of methods())$map.add(new Option(labels[method]+" · final",method));
-      $map.value="";frameIndex=0;setMetrics();setReady(true);
+      $map.value="";frameIndex=0;setMetrics();showProfile(profile);updateExplorerLink();setReady(true);
       el("fusion-slider").max=String(t.frames.length-1);
       resize();fit();setFrame(0);
       shown("fusion-map-note","Hit samples accumulate using the scan-matched estimated trajectory. They are NOT intermediate occupancy. Select a final map separately.");
@@ -334,7 +377,7 @@
     playing=true;lastTime=0;carry=0;shown("fusion-play","❚❚ Pause");
   }
   $run.addEventListener("change",()=>loadRun($run.value));
-  $map.addEventListener("change",()=>selectMap($map.value));
+  $map.addEventListener("change",()=>{updateExplorerLink();selectMap($map.value);});
   el("fusion-refresh").addEventListener("click",refresh);
   el("fusion-fit").addEventListener("click",fit);
   el("fusion-play").addEventListener("click",togglePlay);
