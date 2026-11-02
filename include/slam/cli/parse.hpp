@@ -27,7 +27,7 @@ inline Positionals parse_positionals(
   options.parse_positional({"args"});
   options.positional_help(synopsis);
   const auto parsed=options.parse(argc,argv);
-  if(parsed.count("help"))return {true,{},options.help()};
+  if(parsed.count("help")&&parsed["help"].as<bool>())return {true,{},options.help()};
   const auto values=parsed.count("args")?
       parsed["args"].as<std::vector<std::string>>():
       std::vector<std::string>{};
