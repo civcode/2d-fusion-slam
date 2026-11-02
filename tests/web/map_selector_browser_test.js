@@ -140,6 +140,14 @@ async function main(){
   assert.equal(radio(nodes,"fusion@apartment-001@graph_optimized").checked,true);
   assert.equal(radio(nodes,"fusion@apartment-001@lidar_only").checked,false);
   assert.equal(a.methodDisplay("graph_optimized").label,"Graph optimized");
+  const future=a.groupMaps([{
+    id:"fusion@warehouse-002@experimental_refine",
+    role:"fusion",name:"warehouse-002 / experimental_refine",
+    scene:"synthetic-warehouse-v1"
+  }]);
+  assert.equal(future.groups[0].variants[0].method,"experimental_refine");
+  assert.equal(a.methodDisplay("experimental_refine").label,
+    "Experimental Refine");
 
   // Opening a run chooses its best *available* variant, not an absent graph.
   nodes[2].children[0].handlers.click({preventDefault(){}});
