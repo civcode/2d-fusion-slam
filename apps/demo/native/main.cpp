@@ -115,7 +115,10 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
           const std::string key="fusion@"+id+"@"+method;
           item.object={{"id",Json::text(key)},
                        {"name",Json::text(id+" / "+method)},
-                       {"role",Json::text("fusion")}};
+                       {"role",Json::text("fusion")},
+                       {"run_id",Json::text(id)},
+                       {"method",Json::text(method)},
+                       {"scene",report.at("scene")}};
           listing.object.at("maps").array.push_back(std::move(item));
         }
       }catch(const std::exception&){
