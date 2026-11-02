@@ -47,6 +47,8 @@ struct MatchResult {
   std::size_t ceres_invalid_unknown_cells{}, ceres_invalid_truncated{}, ceres_invalid_outside_grid{}, ceres_invalid_other{};
   std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
   std::string ceres_termination{"not_run"};
+  std::size_t support_aware_selected_hits{}, support_aware_skipped_hits{};
+  std::size_t support_aware_stages{}, support_aware_accepted_stages{};
   // No posterior covariance is asserted. This is a conditioned tracking pose,
   // NOT an independent LiDAR graph factor, even with a geometry-only objective.
 };
@@ -69,6 +71,14 @@ struct MatchResult {
 // Implemented in src/match_ceres.cpp and enabled only when a Ceres toolchain
 // is available. Uses the same independent geometry diagnostics and gating.
 [[nodiscard]] MatchResult match_ceres(
+    std::shared_ptr<const mapping::DistanceField> field,
+    const std::vector<Eigen::Vector2d>& laser_points,
+    Pose2 initial_map_from_laser, const MatchSettings& settings = {});
+// Opt-in bounded multi-stage Ceres matcher. Every residual is selected only
+// when its complete pose-step region has real, observed EDT support. No
+// fabricated residual is supplied for unknown cells. The legacy path above
+// remains the default for A/B comparisons.
+[[nodiscard]] MatchResult match_ceres_support_aware(
     std::shared_ptr<const mapping::DistanceField> field,
     const std::vector<Eigen::Vector2d>& laser_points,
     Pose2 initial_map_from_laser, const MatchSettings& settings = {});
