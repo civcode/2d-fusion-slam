@@ -25,6 +25,7 @@ struct Fr079SlamOptions {
   double max_correction_m{0.40};
   double max_correction_yaw_rad{0.17};
   bool use_ceres{true};
+  bool support_aware_ceres{false}; // opt-in; legacy Ceres remains the default
   // Optional diagnostic observer: receives only the last accepted estimated
   // pose, query scan, and a *previously built* immutable map snapshot.
   // Never influences SLAM state, and never supplies ground-truth poses.
@@ -44,6 +45,8 @@ struct Fr079SlamFrame {
   std::size_t ceres_invalid_residual_evaluations{};
   std::size_t ceres_invalid_unknown_cells{},ceres_invalid_truncated{},ceres_invalid_outside_grid{},ceres_invalid_other{};
   std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
+  std::size_t support_aware_selected_hits{},support_aware_skipped_hits{};
+  std::size_t support_aware_stages{},support_aware_accepted_stages{};
   std::string ceres_termination{"not_run"};
   double overlap{}, robust_cost{};
   double field_ms{}, match_ms{}, insertion_ms{}, frame_ms{};
@@ -57,7 +60,10 @@ struct Fr079SlamResult {
   std::size_t total_invalid_residual_evaluations{};
   std::size_t total_invalid_unknown_cells{},total_invalid_truncated{},total_invalid_outside_grid{},total_invalid_other{};
   std::size_t total_unsuccessful_steps{};
+  std::size_t total_support_aware_selected_hits{},total_support_aware_skipped_hits{};
+  std::size_t total_support_aware_stages{},total_support_aware_accepted_stages{};
   bool used_ceres{};
+  bool used_support_aware_ceres{};
   // No graph constraints from correlated scan-to-map results or logged poses.
   bool graph_optimized{false};
   bool independent_ground_truth{false};
