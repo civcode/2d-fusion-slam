@@ -216,7 +216,10 @@ MatchResult match_ceres_support_aware(
       xy=bx;yaw=byaw;
       break;
     }
-    if(selected.empty())break;
+    if(selected.empty()) {
+      result.support_aware_no_safe_stage=true;
+      break;
+    }
 
     result.support_aware_selected_hits+=selected.size();
     result.support_aware_skipped_hits+=points.size()-selected.size();
@@ -297,7 +300,8 @@ MatchResult match_ceres_support_aware(
     result.map_from_laser=current;
     result.diagnostics=current_all;
     result.status=MatchStatus::accepted;
-  }else result.status=MatchStatus::no_improvement;
+  }else result.status=result.support_aware_no_safe_stage?
+      MatchStatus::insufficient_support:MatchStatus::no_improvement;
   return result;
 }
 
