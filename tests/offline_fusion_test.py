@@ -487,7 +487,7 @@ class OfflineFusionExperiment(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             prior=pathlib.Path(root)/"baseline"
             proposed=pathlib.Path(root)/"lidar-loops"
-            args=("--continuous-cost","--lidar-only-bootstrap",
+            args=("--lidar-only-bootstrap",
                   "--lidar-only-predict-first","--match-stride","1")
             baseline=run(EXE,"office",str(prior),*args)
             self.assertEqual(baseline.returncode,0,baseline.stderr)
