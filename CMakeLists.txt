@@ -536,6 +536,12 @@ if(BUILD_TESTING)
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_match_beam_tools_test.py")
     set_tests_properties(fusion_match_beam_tools PROPERTIES TIMEOUT 30)
+    add_test(NAME fusion_scene_diversity
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_scene_diversity_test.py"
+        "$<TARGET_FILE:slam_offline_fusion>"
+        "$<TARGET_FILE:slam_map_accuracy_cli>")
+    set_tests_properties(fusion_scene_diversity PROPERTIES TIMEOUT 480)
     if(TARGET fusion_slam_demo)
       add_test(NAME fusion_replay_http
         COMMAND "${Python3_EXECUTABLE}"
