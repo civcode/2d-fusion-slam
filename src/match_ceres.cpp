@@ -264,10 +264,23 @@ MatchResult match_ceres_support_aware(
        summary.termination_type==ceres::USER_FAILURE)break;
     const Pose2 trial{{pose[0],pose[1]},wrap_yaw(pose[2])};
     const auto candidate_all=evaluate_geometry(*field,points,trial,settings);
+    // Never allow a formerly supported observation to disappear merely
+    // because a different beam became supported. Supported-hit counts alone
+    // can conceal this sort of evidence swapping.
+    bool lost_previous_support=false;
+    for(const auto& p:points) {
+      if(!p.allFinite())continue;
+      if(field->sample_map(slam::transform(current,p)) &&
+         !field->sample_map(slam::transform(trial,p))) {
+        lost_previous_support=true;
+        break;
+      }
+    }
     // The subset Ceres objective is not enough to accept a pose. Re-check
     // ALL original beams against exactly the pinned prior map. A loss of
     // support, rank, overlap or global robust-cost improvement is rejected.
-    if(candidate_all.supported_hits<current_all.supported_hits||
+    if(lost_previous_support||
+       candidate_all.supported_hits<current_all.supported_hits||
        candidate_all.overlap<settings.minimum_overlap||
        !candidate_all.full_rank||
        candidate_all.robust_cost>=current_all.robust_cost-1e-10)
