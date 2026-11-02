@@ -28,6 +28,10 @@ int main() {
   auto empty_field = DistanceField::build(empty);
   require(!empty_field->has_obstacles(), "no occupied cells means no EDT support");
   require(!empty_field->sample_map({1.5, 1.5}), "empty map no false residual");
+  const auto empty_cost=empty_field->sample_matching_cost({1.5,1.5});
+  require(close(empty_cost.metres,empty_field->truncation_metres()) &&
+          close(empty_cost.gradient_map.norm(),0),
+          "empty map is capped and has no invented wall gradient");
   require(empty_field->support_map({1.5, 1.5})==DistanceSupport::no_obstacles,
           "empty EDT classified without fabricated data");
   require(empty->revision() == 0, "empty revision");
@@ -54,6 +58,10 @@ int main() {
   const auto sample = field->sample_map({2.10,2.05});
   require(sample && close(sample->metres, 0.05, 1e-8), "bilinear centre interpolation");
   require(close(sample->gradient_map.x(), 1.0, 1e-8), "bilinear analytical gradient");
+  const auto continuous_known=field->sample_matching_cost({2.10,2.05});
+  require(close(continuous_known.metres,sample->metres,1e-12) &&
+          (continuous_known.gradient_map-sample->gradient_map).norm()<1e-12,
+          "finite and strict fields match exactly where strict support exists");
   require(!field->sample_map({-1,0}) && !field->sample_map({4.0,2}), "outside not zero residual");
   require(field->support_map({-1,0})==DistanceSupport::outside_grid,
           "out of bounds classified");
@@ -85,6 +93,14 @@ int main() {
   require(!partial->supports_disk_map({3.15,3.15},0.01),
           "unknown wedges cannot satisfy support certificate");
   require(!partial->sample_map({2.05,2.05}), "even hit needs fully known bilinear support");
+  const auto unknown_cost=partial->sample_matching_cost({3.15,3.15});
+  require(close(unknown_cost.metres,partial->truncation_metres()) &&
+          close(unknown_cost.gradient_map.norm(),0),
+          "unknown space is maximum cost with no false wall attraction");
+  const auto mixed=partial->sample_matching_cost({2.05,2.05});
+  require(mixed.metres>=0&&mixed.metres<=partial->truncation_metres() &&
+          mixed.gradient_map.allFinite(),
+          "unknown-adjacent wall is finitely interpolated");
 
   // Test rotated map gradient in the world frame and capped support.
   config.map_from_grid = {{10,-5}, std::numbers::pi/2};
@@ -103,9 +119,30 @@ int main() {
   require(rot_sample && close(rot_sample->metres,0.05,1e-7), "rotated distances");
   require(close(rot_sample->gradient_map.x(),-sample->gradient_map.y(),1e-7) &&
           close(rot_sample->gradient_map.y(),sample->gradient_map.x(),1e-7), "rotated gradient in world frame");
+  const auto rotated_cost=rotfield->sample_matching_cost(
+      transform(config.map_from_grid,{2.10,2.05}));
+  require(close(rotated_cost.metres,rot_sample->metres,1e-8) &&
+          (rotated_cost.gradient_map-rot_sample->gradient_map).norm()<1e-8,
+          "finite matcher gradient rotates correctly into world coordinates");
   auto truncated=DistanceField::build(snapshot,0.20);
   require(close(*truncated->cell_distance(0,0),0.20), "truncation cap");
   require(!truncated->sample_map({0.5,0.5}), "truncated plateau excluded");
+  require(close(truncated->sample_matching_cost({0.5,0.5}).metres,0.20),
+          "truncated observed cells have finite maximum cost");
+  for(const Eigen::Vector2d query:std::vector<Eigen::Vector2d>{
+      {-100.,-100.},{-0.04,2.05},{0.01,2.05},{3.99,2.05},{200.,200.}}) {
+    const auto cost=truncated->sample_matching_cost(query);
+    require(std::isfinite(cost.metres)&&cost.metres>=0&&cost.metres<=0.20 &&
+            cost.gradient_map.allFinite(),
+            "off-grid costs stay finite, capped, and differentiable");
+  }
+  const double h=1e-5;
+  const auto near_edge=truncated->sample_matching_cost({0.04,2.05});
+  const double numerical_x=
+      (truncated->sample_matching_cost({0.04+h,2.05}).metres-
+       truncated->sample_matching_cost({0.04-h,2.05}).metres)/(2*h);
+  require(close(near_edge.gradient_map.x(),numerical_x,1e-6),
+          "interpolated border gradient agrees with finite difference");
   require(truncated->support_map({0.5,0.5})==DistanceSupport::truncated,
           "truncation boundary classified");
   require(!truncated->supports_disk_map({0.5,0.5},0.0),
