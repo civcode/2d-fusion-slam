@@ -994,6 +994,14 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
       if(k)out<<",";
       out<<"["<<hits[k].x()<<","<<hits[k].y()<<"]";
     }
+    out<<"],\"raw_points_laser\":[";
+    // Laser-frame hit endpoints *before* gyro/wheel deskew, sampled only
+    // for the read-only UI. These are not a world-frame point cloud.
+    const auto& raw_hits=p.raw_lidar[i];
+    for(std::size_t k=0;k<raw_hits.size();k+=2){
+      if(k)out<<",";
+      out<<"["<<raw_hits[k].x()<<","<<raw_hits[k].y()<<"]";
+    }
     out<<"],\"matching\":{\"attempted\":"<<(attempted?"true":"false")
        <<",\"accepted\":"<<(approved?"true":"false")
        <<",\"status\":\""<<status<<"\",\"reason\":\""<<reason<<"\""
