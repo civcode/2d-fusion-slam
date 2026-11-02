@@ -220,7 +220,7 @@ void save_report(const std::filesystem::path& file,
   const auto frames=result.frames.size();
   const double span=result.frames.back().scan_time_s-result.frames.front().scan_time_s;
   const double scan_rate=(frames>1&&span>0)?(frames-1)/span:0;
-  const double compute_ms=slam_ms;
+  const double compute_ms=std::max(0.0,slam_ms-result.capture_benchmark_ms);
   out<<std::setprecision(12)
      <<"{\"format\":\"FUSFR079SLAM1\","
      <<"\"dataset\":\"FR079 CARMEN LiDAR and logged odometry\","
@@ -263,6 +263,8 @@ void save_report(const std::filesystem::path& file,
      <<",\"profiling\":{\"clock\":\"std::chrono::steady_clock\""
      <<",\"input_load_ms\":"<<loading_ms
      <<",\"slam_compute_ms\":"<<compute_ms
+     <<",\"slam_wall_including_capture_ms\":"<<slam_ms
+     <<",\"capture_benchmark_ms\":"<<result.capture_benchmark_ms
      <<",\"estimated_offline_fps\":"<<(compute_ms>0?frames*1000./compute_ms:0)
      <<",\"artifact_export_before_report_ms\":"<<export_ms
      <<",\"field_total_ms\":"<<result.total_field_ms
