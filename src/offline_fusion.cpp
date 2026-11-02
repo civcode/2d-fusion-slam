@@ -10,6 +10,7 @@
 #include "slam/motion/trajectory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +50,7 @@ struct FusionMatchOptions {
   // Alternate A/B path: LiDAR relative motion predicts pose before EDT.
   bool lidar_only_predict_first{};
   bool lidar_loop_closure{}; // opt-in correlated LiDAR closure for fused graph
+  bool mapping_ablation{}; // separate fixed-graph mapping experiment
 };
 std::size_t posint(std::string_view value,std::size_t max) {
   if(value.empty()||value.front()=='0'||
@@ -299,10 +301,11 @@ slam::mapping::MapBundle make_map(const Simulation& sim,
                                   const Points& scans,
                                   const Mask& use,
                                   const FusionMatchOptions& options,
-                                  slam::fusion::PipelineProfiler* profiler=nullptr) {
+                                  slam::fusion::PipelineProfiler* profiler=nullptr,
+                                  const slam::mapping::GridConfig* grid_override=nullptr) {
   if(poses.size()!=scans.size()||poses.size()!=use.size())
     throw std::invalid_argument("map pose/ray size mismatch");
-  slam::mapping::OccupancyGrid grid(sim.grid);
+  slam::mapping::OccupancyGrid grid(grid_override?*grid_override:sim.grid);
   for(std::size_t i=0;i<poses.size();++i)if(use[i]) {
     if(profiler) {
       slam::fusion::PipelineProfiler::Scope sample(*profiler,"fused_map_insert",i,true);
@@ -1013,6 +1016,160 @@ void write_path(std::ostream& out,const char* name,
     out<<"["<<p.translation.x()<<","<<p.translation.y()<<","<<p.yaw_rad<<"]";
   }
   out<<"]"<<(comma?",\n":"\n");
+}
+// A smooth map-frame correction field carries the optimized scan-midpoint
+// poses onto the original high-rate fused gyro/wheel trajectory. It does
+// NOT consult reference poses, sensor simulation motion, or scoring maps.
+// This estimates corrected intra-scan motion (a model), not a new
+// independently measured beam-time trajectory.
+Points redeskew_with_graph(const Simulation& sim,const Prepared& p,
+                           const GraphOutput& graph) {
+  const std::size_t n=sim.sensors.scans.size();
+  if(graph.poses.size()!=n||p.gyro_wheel.size()!=n||n<2)
+    throw std::invalid_argument("graph re-deskew scan count mismatch");
+  std::vector<Pose2> correction;
+  correction.reserve(n);
+  for(std::size_t i=0;i<n;++i)
+    correction.push_back(slam::compose(
+        graph.poses[i],slam::inverse(p.gyro_wheel[i])));
+  const auto& scans=sim.sensors.scans;
+  std::vector<slam::motion::TimedPose> corrected_samples;
+  corrected_samples.reserve(p.integrated.fused.size());
+  for(const auto& sample:p.integrated.fused) {
+    const auto stamp=sample.time.ns;
+    auto upper=std::lower_bound(scans.begin(),scans.end(),stamp,
+        [](const auto& scan,slam::TimeNs ns) {
+          return scan.midpoint.ns<ns;
+        });
+    Pose2 offset;
+    if(upper==scans.begin())offset=correction.front();
+    else if(upper==scans.end())offset=correction.back();
+    else {
+      const auto hi=static_cast<std::size_t>(upper-scans.begin());
+      if(stamp==upper->midpoint.ns)offset=correction[hi];
+      else {
+        const auto lo=hi-1;
+        const auto from=scans[lo].midpoint.ns;
+        const auto to=scans[hi].midpoint.ns;
+        const double alpha=double(stamp-from)/double(to-from);
+        const auto movement=slam::log_se2(slam::compose(
+            slam::inverse(correction[lo]),correction[hi]));
+        offset=slam::compose(correction[lo],slam::exp_se2({
+            alpha*movement.dx,alpha*movement.dy,alpha*movement.dyaw}));
+      }
+    }
+    corrected_samples.push_back({sample.time,
+        slam::compose(offset,sample.odom_from_base)});
+  }
+  const slam::motion::SampledTrajectory track(
+      std::move(corrected_samples),
+      slam::motion::TrajectoryCapability::full_se2);
+  Points points;
+  points.reserve(n);
+  for(std::size_t i=0;i<n;++i) {
+    const auto at_midpoint=track.at(scans[i].midpoint);
+    if(!at_midpoint||
+       (at_midpoint->translation-graph.poses[i].translation).norm()>1e-6||
+       std::abs(slam::wrap_yaw(
+           at_midpoint->yaw_rad-graph.poses[i].yaw_rad))>1e-6)
+      throw std::runtime_error("re-deskew correction lost graph midpoint anchor");
+    const auto result=slam::motion::deskew_hits(
+        scans[i],track,kBaseFromLaser);
+    if(!result||!result->suitable_for_moving_map_insertion()||
+       result->hits.size()!=p.gyro_deskewed[i].size())
+      throw std::runtime_error("graph re-deskew lacks trusted beam coverage");
+    auto& cloud=points.emplace_back();
+    cloud.reserve(result->hits.size());
+    for(const auto& hit:result->hits)cloud.push_back(hit.point_laser_reference);
+  }
+  return points;
+}
+
+// Fixed-trajectory mapping-only ablation. All methods reuse the exact same
+// optimized scan-midpoint graph poses; the optimizer is never rerun and
+// the ground-truth scene is only consulted AFTER each map was reconstructed.
+void export_mapping_ablation(const std::filesystem::path& directory,
+    const Simulation& sim,const Prepared& p,const GraphOutput& graph,
+    const FusionMatchOptions& options) {
+  if(graph.poses.empty())throw std::invalid_argument(
+      "mapping ablation requires an optimized GTSAM trajectory");
+  const auto redeskewed=redeskew_with_graph(sim,p,graph);
+  const auto out_dir=directory/"mapping_ablation";
+  if(!std::filesystem::create_directory(out_dir))
+    throw std::runtime_error("failed creating mapping ablation output directory");
+  std::ofstream out(directory/"mapping_ablation.json");
+  if(!out)throw std::runtime_error("failed opening mapping ablation JSON");
+  out<<std::setprecision(14);
+  const std::size_t n=graph.poses.size();
+  const std::size_t cut=n-static_cast<std::size_t>(std::ceil(.12*double(n)));
+  struct Evidence {const char* id;double hit,free;};
+  constexpr std::array<Evidence,4> evidence{{
+      {"baseline",.85,-.4},
+      {"stronger_hit",1.2,-.4},
+      {"gentler_free",.85,-.2},
+      {"combined",1.2,-.2}
+  }};
+  struct Window {const char* id;std::size_t begin,end;};
+  const std::array<Window,3> windows{{
+      {"full",0,n},{"early",0,cut},{"late",cut,n}
+  }};
+  out<<"{\n\"format\":\"FUSMAPABL1\","
+     <<"\n\"source\":\"graph_optimized_fixed_estimated_poses\","
+     <<"\n\"scene\":\""<<sim.scene.id<<"\","
+     <<"\n\"reference_usage\":\"posthoc_scoring_only\","
+     <<"\n\"original_trajectory_and_maps_unchanged\":true,"
+     <<"\n\"redeskew_model\":\"interpolated_graph_to_gyro_wheel_map_frame_corrections_over_high_rate_fused_track\","
+     <<"\n\"region_note\":\"early_and_late_maps_are_scored_against_full_scene_truth_not_region_specific_truth\","
+     <<"\n\"variants\":[";
+  bool first=true;
+  for(std::size_t method=0;method<2;++method) {
+    const Points& scans=method==0?p.gyro_deskewed:redeskewed;
+    const char* deskew=method==0?"gyro_wheel_original":"graph_corrected_motion_model";
+    for(const auto& window:windows) {
+      Mask included(n,false);
+      for(std::size_t i=window.begin;i<window.end;++i)included[i]=true;
+      for(const auto& odds:evidence) {
+        auto grid=sim.grid;
+        grid.hit_log_odds=odds.hit;
+        grid.free_log_odds=odds.free;
+        const auto map=make_map(sim,graph.poses,scans,included,options,
+                                nullptr,&grid);
+        const std::string id=std::string(window.id)+"_"+deskew+"_"+odds.id;
+        // Export each reconstructed occupancy map independently for
+        // inspection with existing FUSMAP2D-compatible tooling.
+        const auto map_path=std::string("mapping_ablation/")+id+".slammap";
+        export_bundle(directory/map_path,map);
+        const auto score=slam::evaluation::evaluate_map_accuracy(map,sim.scene);
+        const auto tolerant=slam::evaluation::evaluate_wall_tolerances(
+            map,sim.scene);
+        if(!first)out<<",";
+        first=false;
+        out<<"\n{\"id\":\""<<id<<"\","
+           <<"\"window\":\""<<window.id<<"\","
+           <<"\"begin_frame\":"<<window.begin<<","
+           <<"\"end_frame_exclusive\":"<<window.end<<","
+           <<"\"deskew\":\""<<deskew<<"\","
+           <<"\"hit_log_odds\":"<<odds.hit<<","
+           <<"\"free_log_odds\":"<<odds.free<<","
+           <<"\"map_path\":\""<<map_path<<"\","
+           <<"\"map\":";
+        slam::evaluation::write_map_accuracy_json(out,score,sim.scene);
+        out<<",\"wall_tolerance_scores\":[";
+        bool first_distance=true;
+        for(const auto& m:tolerant) {
+          if(!first_distance)out<<",";
+          first_distance=false;
+          out<<"{\"tolerance_m\":"<<m.tolerance_m
+             <<",\"precision\":"<<m.predicted_near_reference
+             <<",\"recall\":"<<m.reference_near_predicted
+             <<",\"f1\":"<<m.symmetric_f1<<"}";
+        }
+        out<<"]}";
+      }
+    }
+  }
+  out<<"\n]}\n";
+  if(!out)throw std::runtime_error("failed writing mapping ablation JSON");
 }
 void export_trajectories(const std::filesystem::path& output,
                          const Simulation& sim,const Prepared& p,
