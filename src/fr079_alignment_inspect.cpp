@@ -33,8 +33,8 @@ int main(int argc,char** argv) {
   if(parsed.help){std::cout<<parsed.usage;return 0;}
   const auto& cli_args=parsed.values;
   try {
-    const auto log=gzip_read(cli_args[0],128*1024*1024);
-    const auto mapfile=gzip_read(cli_args[1],128*1024*1024);
+    const auto log=gzip_read(cli_args[0].c_str(),128*1024*1024);
+    const auto mapfile=gzip_read(cli_args[1].c_str(),128*1024*1024);
     const std::vector<std::uint8_t> binary(mapfile.begin(),mapfile.end());
     const auto map=slam::datasets::parse_carmen_map(binary);
     slam::datasets::CarmenReader reader;
