@@ -30,10 +30,10 @@ int bin(double range){
 }
 
 Fr079CaptureBenchmark::Fr079CaptureBenchmark(
-    const std::string& csv_path,const std::string& sha,bool ceres,
+    const std::string& csv_path,const std::string& sha,bool ceres,bool support_aware,
     std::size_t every,std::size_t max_frames)
     : output_(csv_path),source_sha256_(sha),use_ceres_(ceres),
-      every_(every),max_frames_(max_frames) {
+      support_aware_(support_aware),every_(every),max_frames_(max_frames) {
   if(!output_)throw std::runtime_error("cannot open FR079 capture benchmark CSV");
   if(sha.size()!=64||every<1||max_frames<1||max_frames>100)
     throw std::invalid_argument("invalid FR079 capture benchmark setup");
@@ -98,7 +98,9 @@ void Fr079CaptureBenchmark::probe(
         matching::MatchResult fit;
 #ifdef SLAM_HAS_CERES
         if(use_ceres_)
-          fit=matching::match_ceres(field,points,seed,settings);
+          fit=support_aware_?
+            matching::match_ceres_support_aware(field,points,seed,settings):
+            matching::match_ceres(field,points,seed,settings);
         else
 #endif
           fit=matching::match_reference(field,points,seed,settings);
@@ -112,7 +114,7 @@ void Fr079CaptureBenchmark::probe(
         output_<<"FUSFR079CAPTURE1,"<<source_sha256_
                <<",same_run_accepted_pose_proxy_not_ground_truth,"
                <<frame<<","<<snapshot->revision()<<","<<snapshot->fingerprint()
-               <<","<<(use_ceres_?"ceres":"reference")
+               <<","<<(support_aware_?"ceres_support_aware":(use_ceres_?"ceres":"reference"))
                <<","<<truncation<<","<<xy_bounds[bounds]
                <<","<<yaw_bounds[bounds]*180./kPi
                <<","<<dx<<","<<dy<<","<<da
