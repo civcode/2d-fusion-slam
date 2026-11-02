@@ -10,6 +10,9 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from fusion_match_beam_sweep import command, validate, parser
 from fusion_bootstrap_compare import compare
+from fusion_beam_generalization import summarize
+from contextlib import redirect_stdout
+from io import StringIO
 
 
 def main():
@@ -95,6 +98,26 @@ def main():
             assert "control map changed" in str(exc)
         else:
             raise AssertionError("modified wheel-only map was not rejected")
+        # Cross-scene robustness comparisons use paired phase-zero
+        # beam densities, not misleading pooled unpaired averages.
+        evidence=[
+            {"scene":"warehouse","matcher":"continuous","match_stride":"4",
+             "match_offset":"0","map_method":"lidar_only",
+             "translation_rmse_m":"4.0","occupied_iou":"0.04"},
+            {"scene":"warehouse","matcher":"continuous","match_stride":"1",
+             "match_offset":"0","map_method":"lidar_only",
+             "translation_rmse_m":"1.0","occupied_iou":"0.1"},
+            {"scene":"warehouse","matcher":"continuous","match_stride":"4",
+             "match_offset":"1","map_method":"lidar_only",
+             "translation_rmse_m":"5.0","occupied_iou":"0.03"},
+        ]
+        with StringIO() as out, redirect_stdout(out):
+            result=summarize(evidence)
+            output=out.getvalue()
+        assert ("warehouse","continuous",0) in result
+        assert ("warehouse","continuous",1) in result
+        assert "scene-level 1/1 improved" in output
+        assert "stride  4 ->  1: 0/1 worse" in output
         options.map_stride=0
         try:
             validate(options,parser())
