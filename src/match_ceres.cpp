@@ -2,6 +2,7 @@
 
 #include <ceres/ceres.h>
 
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <utility>
@@ -14,8 +15,10 @@ namespace {
 // fails (not a fabricated zero-cost LiDAR sample) and the match is rejected.
 class EdfHitCost final : public ceres::SizedCostFunction<1,3> {
  public:
-  EdfHitCost(const mapping::DistanceField& field, Eigen::Vector2d point, double sigma)
-      : field_(field), point_(std::move(point)), sigma_(sigma) {}
+  EdfHitCost(const mapping::DistanceField& field, Eigen::Vector2d point, double sigma,
+             std::atomic<std::size_t>& invalid_evaluations)
+      : field_(field), point_(std::move(point)), sigma_(sigma),
+        invalid_evaluations_(invalid_evaluations) {}
   bool Evaluate(double const* const* params, double* residuals, double** jacobians) const override {
     const double* a = params[0];
     const double cosine = std::cos(a[2]);
@@ -23,7 +26,7 @@ class EdfHitCost final : public ceres::SizedCostFunction<1,3> {
     const Eigen::Vector2d world{a[0] + cosine*point_.x() - sine*point_.y(),
                                 a[1] + sine*point_.x() + cosine*point_.y()};
     const auto value = field_.sample_map(world);
-    if (!value) return false;
+    if (!value) { invalid_evaluations_.fetch_add(1, std::memory_order_relaxed); return false; }
     residuals[0] = value->metres / sigma_;
     if (jacobians && jacobians[0]) {
       double* jac = jacobians[0];
@@ -38,6 +41,7 @@ class EdfHitCost final : public ceres::SizedCostFunction<1,3> {
   const mapping::DistanceField& field_;
   Eigen::Vector2d point_;
   double sigma_;
+  std::atomic<std::size_t>& invalid_evaluations_;
 };
 } // namespace
 
@@ -57,13 +61,14 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
   }
   if (!initial.full_rank) { result.status = MatchStatus::degenerate; return result; }
   double pose[3]{seed.translation.x(), seed.translation.y(), seed.yaw_rad};
+  std::atomic<std::size_t> invalid_evaluations{0};
   ceres::Problem problem;
   const double c = std::cos(seed.yaw_rad), s = std::sin(seed.yaw_rad);
   for (const auto& p : points) {
     if (!p.allFinite()) continue;
     const Eigen::Vector2d at_seed{pose[0]+c*p.x()-s*p.y(),pose[1]+s*p.x()+c*p.y()};
     if (!field->sample_map(at_seed)) continue; // omitted, not zero weighted
-    problem.AddResidualBlock(new EdfHitCost(*field,p,settings.sigma_metres),
+    problem.AddResidualBlock(new EdfHitCost(*field,p,settings.sigma_metres,invalid_evaluations),
                              new ceres::HuberLoss(settings.huber_delta),pose);
   }
   for(int i=0;i<2;++i) {
@@ -80,6 +85,17 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
   ceres::Solver::Summary summary;
   ceres::Solve(options,&problem,&summary);
   result.iterations = static_cast<unsigned>(summary.iterations.size());
+  result.ceres_invalid_residual_evaluations=invalid_evaluations.load(std::memory_order_relaxed);
+  result.ceres_unsuccessful_steps=static_cast<std::size_t>(summary.num_unsuccessful_steps);
+  result.ceres_successful_steps=static_cast<std::size_t>(summary.num_successful_steps);
+  switch(summary.termination_type) {
+    case ceres::CONVERGENCE:result.ceres_termination="convergence";break;
+    case ceres::NO_CONVERGENCE:result.ceres_termination="no_convergence";break;
+    case ceres::FAILURE:result.ceres_termination="failure";break;
+    case ceres::USER_SUCCESS:result.ceres_termination="user_success";break;
+    case ceres::USER_FAILURE:result.ceres_termination="user_failure";break;
+    default:result.ceres_termination="unknown";break;
+  }
   if (summary.termination_type == ceres::FAILURE ||
       summary.termination_type == ceres::USER_FAILURE) {
     result.status = MatchStatus::no_improvement;
