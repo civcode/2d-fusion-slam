@@ -76,7 +76,7 @@ bool valid_scene(const std::string& scene) {
     "synthetic-office-v1", "synthetic-loft-v1",
     "synthetic-atrium-v1", "synthetic-industrial-v1",
     "synthetic-warehouse_asymmetric-v1"};
-  return std::find(scenes.begin(),scenes.end(),scene)!=scenes.end();
+  return std::find(scenes.begin(),scenes.end(),std::string_view{scene})!=scenes.end();
 }
 std::size_t size_array(const Json& j,std::size_t bound,const char* what) {
   need(j.kind==Json::Kind::array && j.array.size()<=bound,what);
