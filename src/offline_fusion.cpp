@@ -48,6 +48,7 @@ struct FusionMatchOptions {
   bool lidar_only_bootstrap{};
   // Alternate A/B path: LiDAR relative motion predicts pose before EDT.
   bool lidar_only_predict_first{};
+  bool lidar_loop_closure{}; // opt-in correlated LiDAR closure for fused graph
 };
 std::size_t posint(std::string_view value,std::size_t max) {
   if(value.empty()||value.front()=='0'||
@@ -718,15 +719,95 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
 struct GraphLoopEvent {
   std::size_t from{},to{};
   std::string decision;
+  std::string source{"independently_simulated_relative_pose"};
+  double overlap{},registration_error_m{};
 };
 struct GraphOutput {
   std::vector<Pose2> poses;
   std::vector<GraphLoopEvent> events;
   std::size_t accepted_loops{},loop_candidates{};
+  std::size_t lidar_registration_attempted{},lidar_registration_verified{};
   std::string status;
 };
+struct LiDARLoopProposals {
+  std::vector<slam::graph::LoopCandidate> candidates;
+  std::vector<GraphLoopEvent> rejected;
+  std::size_t attempted{};
+};
+// Estimated poses shortlist nonadjacent places. Only LiDAR matching produces
+// a relative loop transform; synthetic truth is never an estimator input.
+LiDARLoopProposals detect_lidar_loops(const Prepared& p,const Matched& matched,
+                                      const FusionMatchOptions& options) {
+  LiDARLoopProposals found;
+  const auto& poses=matched.poses;
+  std::size_t last_verified_to=0;
+  for(std::size_t i=48;i<poses.size();i+=6) {
+    if(last_verified_to && i-last_verified_to<18)continue;
+    struct Nearby {std::size_t j;double distance;};
+    std::vector<Nearby> nearby;
+    for(std::size_t j=0;j+40<i;j+=6) {
+      const Pose2 relative=slam::compose(slam::inverse(poses[j]),poses[i]);
+      if(relative.translation.norm()<=.78 &&
+         std::abs(slam::wrap_yaw(relative.yaw_rad))<=.26)
+        nearby.push_back({j,relative.translation.norm()});
+    }
+    std::sort(nearby.begin(),nearby.end(),[](const auto& a,const auto& b){
+      return a.distance<b.distance;
+    });
+    const auto current=sample_matching_hits(
+        p.gyro_deskewed[i],options.match_stride,options.match_offset);
+    const std::size_t tries=std::min<std::size_t>(4,nearby.size());
+    std::optional<slam::graph::LoopCandidate> best;
+    double best_overlap=-1.,best_error=1e9;
+    for(std::size_t k=0;k<tries;++k) {
+      const auto j=nearby[k].j;
+      const auto previous=sample_matching_hits(
+          p.gyro_deskewed[j],options.match_stride,options.match_offset);
+      const auto previous_laser=slam::compose(poses[j],kBaseFromLaser);
+      const auto current_laser=slam::compose(poses[i],kBaseFromLaser);
+      const Pose2 prior=slam::compose(slam::inverse(previous_laser),current_laser);
+      const auto reg=slam::matching::register_consecutive_scans(
+          previous,current,prior,false);
+      ++found.attempted;
+      const double overlap=std::min(reg.forward_overlap,reg.reverse_overlap);
+      const double translation_innovation=
+          (reg.previous_from_current.translation-prior.translation).norm();
+      const double yaw_innovation=std::abs(slam::wrap_yaw(
+          reg.previous_from_current.yaw_rad-prior.yaw_rad));
+      if(!reg.accepted || !reg.correspondence_rank ||
+         reg.forward_inliers<80 || reg.reverse_inliers<80 ||
+         overlap<.82 || reg.mean_error_m>.11 ||
+         translation_innovation>.55 || yaw_innovation>.17) {
+        found.rejected.push_back({j,i,"insufficient_geometry",
+                                  "lidar_scan_registration",overlap,
+                                  reg.mean_error_m});
+        continue;
+      }
+      const Pose2 base_relative=slam::compose(kBaseFromLaser,
+          slam::compose(reg.previous_from_current,
+                        slam::inverse(kBaseFromLaser)));
+      const slam::graph::FactorProvenance provenance{
+          slam::graph::EvidenceClass::lidar_scan_registration,
+          "synthetic_gyro_deskewed_lidar_scan_pair_v1",true,false};
+      slam::graph::LoopCandidate candidate{
+          {j,i,base_relative,.20,.20,.14,provenance},
+          std::min(reg.forward_inliers,reg.reverse_inliers),overlap,true};
+      if(!best || overlap>best_overlap+1e-8 ||
+         (std::abs(overlap-best_overlap)<1e-8 &&
+          reg.mean_error_m<best_error)) {
+        best=candidate;best_overlap=overlap;best_error=reg.mean_error_m;
+      }
+    }
+    if(best) {
+      found.candidates.push_back(*best);
+      last_verified_to=i;
+    }
+  }
+  return found;
+}
 GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
-                           const Matched& matcher,bool synthetic_loops) {
+                           const Matched& matcher,bool synthetic_loops,
+                           const FusionMatchOptions& options) {
   GraphOutput output;
 #ifndef SLAM_FUSION_WITH_GTSAM
   (void)sim;(void)p;(void)matcher;(void)synthetic_loops;
