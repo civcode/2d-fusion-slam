@@ -29,9 +29,9 @@ int main() {
       if(std::abs(dx)>1e-6&&std::abs(dy)>1e-6)angled=true;
     }
     require(angled, "new scenes contain non-axis-aligned structure");
-    const auto first=simulate_scan(sample,{{2.0,2.0},0.}, {}, {},
+    const auto first=simulate_scan(sample,{{3.0,3.0},0.}, {}, {},
                                    {2'000'000'000,1,1}, 240);
-    const auto again=simulate_scan(sample,{{2.0,2.0},0.}, {}, {},
+    const auto again=simulate_scan(sample,{{3.0,3.0},0.}, {}, {},
                                    {2'000'000'000,1,1}, 240);
     for(std::size_t i=0;i<first.beams.size();++i)
       require(first.beams[i].range_m==again.beams[i].range_m,
