@@ -280,6 +280,19 @@ revisit detection along the misaligned segment, while refusing weak
 or ambiguous shelf matches. Simply increasing loop weight cannot
 replace missing measurements.
 
+## Fixed-graph occupancy and re-deskew diagnostics
+
+An additional **opt-in** `--mapping-ablation` experiment reconstructs 24
+alternative maps from the **same GTSAM graph poses**, varying hit/free
+log-odds, original versus graph-corrected high-rate beam deskew, and
+early/middle versus last-12% scan contributions. It preserves the original
+graph map and exposes 10/25/50 cm wall-distance precision, recall and F1
+**alongside unchanged exact-cell occupied IoU**. This requires a fresh run
+with timed scans (the web replay is downsampled), and extra maps are
+saved under `mapping_ablation/`; they are not automatically listed as
+normal Map Explorer methods. See the full reproducible workflow:
+[fixed-graph mapping ablation](fusion-mapping-ablation.md).
+
 ## Honest visualization
 
 The same native Fusion page offers two distinct read-only views:
