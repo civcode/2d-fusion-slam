@@ -219,8 +219,9 @@ def main():
             raise RuntimeError(f"{label} failed ({result.returncode}):\n{tail}")
         run_rows = score_rows(a.out_dir/label, scene, matcher, stride, label, a, offset)
         for item in run_rows:
-            if item["map_method"] not in (
-                "wheel_only", "gyro_wheel", "fused_scan_matched"):
+            # Fused matched maps legitimately vary with matching stride/phase.
+            # Only wheel/gyro baselines are independent of LiDAR matching.
+            if item["map_method"] not in ("wheel_only", "gyro_wheel"):
                 continue
             key = (scene, item["map_method"])
             old = controls.setdefault(key, item["map_fingerprint"])
