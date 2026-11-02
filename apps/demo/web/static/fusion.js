@@ -15,6 +15,10 @@
     graph_optimized:"Graph optimized"
   };
   const $run = el("fusion-runs"), $map = el("fusion-map");
+  const $view=el("fusion-view");
+  const routeParams=new URLSearchParams(window.location.search);
+  const requestedRun=routeParams.get("run")||"";
+  const requestedView=routeParams.get("view")==="lidar"?"lidar":"slam";
   let report=null, poses=null, trace=null, runId="", frameIndex=0;
   let mapImage=null, mapMeta=null, loadingToken=0, imageToken=0;
   let playing=false, lastTime=0, carry=0, view={x:0,y:0,scale:20};
@@ -27,6 +31,23 @@
   const fmt = (n,digits=2) => Number.isFinite(Number(n)) ?
     Number(n).toFixed(digits) : "—";
   const methods = () => poses ? Object.keys(poses.paths) : [];
+  const lidarView=()=> $view.value==="lidar";
+  const scanPoints=frame=>lidarView() && Array.isArray(frame.raw_points_laser)?
+    frame.raw_points_laser:frame.points_laser;
+  const scanPose=()=>poses.paths[lidarView()?"lidar_only":"fused_scan_matched"];
+  function setView(mode) {
+    const rawAvailable=!!trace&&trace.frames.every(f=>
+      Array.isArray(f.raw_points_laser));
+    const option=$view.querySelector('option[value="lidar"]');
+    option.disabled=!rawAvailable;
+    $view.value=mode==="lidar"&&rawAvailable?"lidar":"slam";
+    shown("fusion-view-note",lidarView()?
+      "Raw LiDAR replay: pre-deskew sensor-frame hits projected using the estimated LiDAR-only pose at each scan midpoint. These are not ground-truth world hits.":
+      "SLAM replay: gyro/wheel deskewed LiDAR hits projected using the scan-matched estimated pose. Trajectories and match decisions come from the completed run.");
+    if(trace)setFrame(frameIndex);
+    if(mode==="lidar"&&!rawAvailable&&trace)
+      showMessage("This run predates raw LiDAR replay. Regenerate its fusion artifacts to enable raw scan mode.");
+  }
   const visible = method => {
     const input=document.querySelector('input[data-path="'+method+'"]');
     return !!input && !input.closest("label").hidden && input.checked;
@@ -56,7 +77,8 @@
     const elapsed=(Number(f.time_ns)-Number(trace.frames[0].time_ns))*1e-9;
     shown("fusion-time",fmt(elapsed,2)+" s elapsed");
     shown("fusion-scan-hits",f.hits+" / "+f.beam_count+
-      " ("+f.points_laser.length+" plotted)");
+      " ("+scanPoints(f).length+" plotted)");
+    shown("fusion-scan-kind",lidarView()?"Raw, not deskewed":"Gyro/wheel deskewed");
     shown("fusion-match-status",f.matching.status);
     shown("fusion-match-reason",f.matching.reason.replaceAll("_"," "));
     shown("fusion-supported",f.matching.attempted ?
@@ -214,14 +236,15 @@
   }
   function dots() {
     if(!el("fusion-history").checked)return;
-    const path=poses.paths.fused_scan_matched;
-    ctx.fillStyle="#2ac39b";ctx.globalAlpha=.25;
+    const path=scanPose();
+    ctx.fillStyle=lidarView()?"#b99df8":"#2ac39b";ctx.globalAlpha=.25;
     const radius=Math.max(.45/view.scale,.009);
     for(let i=0;i<=frameIndex;i++){
       const frame=trace.frames[i],p=path[i];
       // Replay samples are downsampled again for accumulated-dot clarity.
-      for(let k=0;k<frame.points_laser.length;k+=4){
-        const at=worldLaser(p,frame.points_laser[k]);
+      const points=scanPoints(frame);
+      for(let k=0;k<points.length;k+=4){
+        const at=worldLaser(p,points[k]);
         ctx.fillRect(at[0]-radius,at[1]-radius,2*radius,2*radius);
       }
     }
@@ -229,12 +252,13 @@
   }
   function beams() {
     if(!el("fusion-hits").checked)return;
-    const pose=poses.paths.fused_scan_matched[frameIndex];
+    const pose=scanPose()[frameIndex];
     const frame=trace.frames[frameIndex];
     const origin=worldLaser(pose,[0,0]);
-    ctx.lineWidth=.75/view.scale;ctx.strokeStyle="rgba(92,230,188,.3)";
-    ctx.fillStyle="#66f2bd";
-    for(const point of frame.points_laser) {
+    ctx.lineWidth=.75/view.scale;
+    ctx.strokeStyle=lidarView()?"rgba(185,157,248,.3)":"rgba(92,230,188,.3)";
+    ctx.fillStyle=lidarView()?"#c1a7f8":"#66f2bd";
+    for(const point of scanPoints(frame)) {
       const hit=worldLaser(pose,point);
       ctx.beginPath();ctx.moveTo(origin[0],origin[1]);
       ctx.lineTo(hit[0],hit[1]);ctx.stroke();
@@ -264,9 +288,16 @@
     if(!trace||!poses)return;
     ctx.setTransform(dpr*view.scale,0,0,-dpr*view.scale,
                      dpr*view.x,dpr*view.y);
-    renderMap();dots();loopEdges();
-    for(const key of Object.keys(poses.paths))
-      if(visible(key))pathLayer(poses.paths[key],key);
+    renderMap();dots();
+    if(!lidarView()) {
+      loopEdges();
+      for(const key of Object.keys(poses.paths))
+        if(visible(key))pathLayer(poses.paths[key],key);
+    } else {
+      // Raw hits are projected in the LiDAR-only estimator's own pose
+      // frame; never display them as though they came from fused deskew.
+      pathLayer(poses.paths.lidar_only,"lidar_only");
+    }
     if(el("fusion-truth").checked)
       pathLayer(poses.synthetic_truth_for_scoring,"synthetic_truth_for_scoring");
     beams();
@@ -334,6 +365,7 @@
       $map.replaceChildren(new Option("None — observation trail only",""));
       for(const method of methods())$map.add(new Option(labels[method]+" · final",method));
       $map.value="";frameIndex=0;setMetrics();showProfile(profile);updateExplorerLink();setReady(true);
+      setView($view.value);
       el("fusion-slider").max=String(t.frames.length-1);
       resize();fit();setFrame(0);
       shown("fusion-map-note","Hit samples accumulate using the scan-matched estimated trajectory. They are NOT intermediate occupancy. Select a final map separately.");
@@ -350,7 +382,11 @@
       $run.replaceChildren(new Option("Choose a fusion run",""));
       for(const item of found.runs)$run.add(new Option(item.name,item.id));
       if(!found.runs.length)showMessage("No fusion runs found. Pass --fusion-dir pointing to a directory containing slam_offline_fusion output directories.");
-      else {$run.value=found.runs[0].id;await loadRun($run.value);}
+      else {
+        $run.value=found.runs.some(x=>x.id===requestedRun)?
+          requestedRun:found.runs[0].id;
+        await loadRun($run.value);
+      }
     }catch(error){$run.replaceChildren(new Option("Unable to list runs",""));
       showMessage("Fusion run discovery failed: "+error.message);}
   }
@@ -377,6 +413,7 @@
     playing=true;lastTime=0;carry=0;shown("fusion-play","❚❚ Pause");
   }
   $run.addEventListener("change",()=>loadRun($run.value));
+  $view.addEventListener("change",()=>{showMessage("");setView($view.value);});
   $map.addEventListener("change",()=>{updateExplorerLink();selectMap($map.value);});
   el("fusion-refresh").addEventListener("click",refresh);
   el("fusion-fit").addEventListener("click",fit);
@@ -418,6 +455,7 @@
     view.x=x-(x-view.x)*ratio;view.y=y-(y-view.y)*ratio;
     view.scale=next;draw();
   },{passive:false});
+  $view.value=requestedView;
   new ResizeObserver(resize).observe(stage);
   requestAnimationFrame(tick);
   refresh();
