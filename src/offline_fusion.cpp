@@ -511,9 +511,18 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
       // wheel/gyro or simulator-relative-motion input to registration.
       const auto previous_scan=sample_matching_hits(
           p.raw_lidar[last_accepted_scan],options.match_stride);
-      const auto registered=slam::matching::register_consecutive_scans(
+      auto registered=slam::matching::register_consecutive_scans(
           previous_scan,matching_hits,
-          has_relative_scan?last_relative_scan:Pose2{});
+          has_relative_scan?last_relative_scan:Pose2{},
+          !has_relative_scan||i-last_accepted_scan>1);
+      if(!registered.accepted&&has_relative_scan) {
+        // A failed constant-relative-motion guess can be retried using a
+        // bounded wider LiDAR-only initialization; still no map insertion
+        // or state mutation without passing registration gates.
+        const auto recovery=slam::matching::register_consecutive_scans(
+            previous_scan,matching_hits,Pose2{},true);
+        if(recovery.accepted)registered=recovery;
+      }
       evidence.registration_forward_inliers=registered.forward_inliers;
       evidence.registration_reverse_inliers=registered.reverse_inliers;
       evidence.registration_forward_overlap=registered.forward_overlap;
