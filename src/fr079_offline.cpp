@@ -130,6 +130,14 @@ Fr079SlamResult run_fr079_offline_slam(
   require(!opt.continuous_cost_ceres||opt.use_ceres,"continuous-cost matching requires Ceres");
   require(!(opt.continuous_cost_ceres&&opt.support_aware_ceres),
           "select only one experimental Ceres matcher");
+  require(opt.ablation_mode=="none"||
+          opt.ablation_mode=="finite-seed-legacy"||
+          opt.ablation_mode=="finite-all-legacy"||
+          opt.ablation_mode=="finite-seed-continuous",
+          "invalid matcher ablation mode");
+  require(opt.ablation_mode=="none"||
+          (opt.use_ceres&&opt.continuous_cost_ceres&&!opt.support_aware_ceres),
+          "matcher ablation requires continuous-cost Ceres");
   result.used_support_aware_ceres=opt.use_ceres&&opt.support_aware_ceres;
   result.used_continuous_cost_ceres=opt.use_ceres&&opt.continuous_cost_ceres;
   result.frames.reserve(scans.size());
@@ -180,6 +188,7 @@ Fr079SlamResult run_fr079_offline_slam(
         settings.maximum_step_translation_m=.12;
         settings.maximum_step_yaw_rad=.08;
         const auto scan_match_points=points(scan,opt.match_beam_stride,opt.max_hit_range_m);
+        frame.match_input_beams=scan_match_points.size();
         const auto start_match=Clock::now();
         // The last cached field contains strictly earlier scans, with an
         // intentionally bounded refresh cadence; current scan never trains
@@ -188,8 +197,13 @@ Fr079SlamResult run_fr079_offline_slam(
 #ifdef SLAM_HAS_CERES
         if(opt.use_ceres)
           candidate=opt.continuous_cost_ceres?
-            matching::match_ceres_continuous(
-              cached_field,scan_match_points,frame.predicted,settings):
+            (opt.ablation_mode=="none"?
+              matching::match_ceres_continuous(
+                cached_field,scan_match_points,frame.predicted,settings):
+              matching::match_ceres_continuous_ablation(
+                cached_field,scan_match_points,frame.predicted,settings,
+                opt.ablation_mode!="finite-all-legacy",
+                opt.ablation_mode!="finite-seed-continuous")):
             opt.support_aware_ceres?
             matching::match_ceres_support_aware(
               cached_field,scan_match_points,frame.predicted,settings):
@@ -202,6 +216,16 @@ Fr079SlamResult run_fr079_offline_slam(
         frame.match_ms=milliseconds(start_match,Clock::now());
         result.total_match_ms+=frame.match_ms;
         const auto& d=candidate.diagnostics;
+        frame.solver_residual_blocks=candidate.solver_residual_blocks;
+        frame.candidate_evaluated=candidate.candidate_evaluated;
+        frame.seed_supported_hits=candidate.seed_supported_hits;
+        frame.candidate_supported_hits=candidate.candidate_supported_hits;
+        frame.seed_strict_cost=candidate.seed_strict_cost;
+        frame.candidate_strict_cost=candidate.candidate_strict_cost;
+        frame.seed_finite_cost=candidate.seed_finite_cost;
+        frame.candidate_finite_cost=candidate.candidate_finite_cost;
+        frame.candidate_translation_m=candidate.candidate_translation_m;
+        frame.candidate_rotation_rad=candidate.candidate_rotation_rad;
         frame.ceres_invalid_residual_evaluations=candidate.ceres_invalid_residual_evaluations;
         frame.ceres_continuous_unknown_evaluations=candidate.ceres_continuous_unknown_evaluations;
         frame.ceres_continuous_truncated_evaluations=candidate.ceres_continuous_truncated_evaluations;
