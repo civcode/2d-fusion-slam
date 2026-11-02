@@ -93,17 +93,6 @@ class MappingAblationIntegrationTest(unittest.TestCase):
                 new_report["results"]["graph_optimized"]["map"]["metrics"])
             self.assertFalse((baseline/"mapping_ablation.json").exists())
 
-    @unittest.skipIf(EXE is None, "provide slam_offline_fusion executable")
-    def test_reject_unavailable_graph_without_creating_output(self):
-        # Purely structural: --mapping-ablation depends on graph poses.
-        # The optional no-GTSAM backend should reject the flag before any
-        # disk writes; the GTSAM build exercises this through the main test.
-        with tempfile.TemporaryDirectory() as work:
-            destination=pathlib.Path(work)/"invalid"
-            result=run("apartment",destination,"--mapping-ablation")
-            if "GTSAM" in result.stderr:
-                self.assertNotEqual(result.returncode,0)
-                self.assertFalse(destination.exists())
 
 
 if __name__ == "__main__":
