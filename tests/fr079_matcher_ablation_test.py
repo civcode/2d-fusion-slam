@@ -17,6 +17,7 @@ def main():
         root = Path(temp)
         dataset = root / "fixture.log"
         dataset.write_text(carmen_fixture())
+        saved = {}
         for stride in (1, 4, 8):
             for mode in modes:
                 tag = f"{mode}-s{stride}"
@@ -31,6 +32,8 @@ def main():
                 run(binary, dataset, prefix, *flags)
                 report = json.loads(prefix.with_suffix(".report.json").read_text())
                 matches = json.loads(prefix.with_suffix(".matches.json").read_text())["frames"]
+                trajectory = json.loads(prefix.with_suffix(".trajectory.json").read_text())["poses"]
+                saved[(mode, stride)] = (matches, trajectory)
                 assert report["frames"] == 55
                 assert report["match_beam_stride"] == stride
                 assert report["match_beam_phase"] == 0
@@ -56,6 +59,27 @@ def main():
                 if mode == "continuous":
                     assert all(f["solver_residual_blocks"] == f["match_input_beams"]
                                for f in matches if f["solver_residual_blocks"] > 0)
+        # Equal historical maps and equal seed poses imply an identical
+        # seed-supported cohort before closed-loop trajectories diverge.
+        legacy, old_pose = saved[("legacy", 4)]
+        finite_seed, new_pose = saved[("finite-seed-legacy", 4)]
+        compared = 0
+        for old, new, op, np in zip(legacy, finite_seed, old_pose, new_pose):
+            if op["prior"] != np["prior"]:
+                break
+            assert old["match_input_beams"] == new["match_input_beams"]
+            assert old["solver_residual_blocks"] == new["solver_residual_blocks"]
+            compared += 1
+            if op["estimated"] != np["estimated"]:
+                break
+        assert compared > 3
+        # Raw phase-zero beams are nested: stride 8 ⊂ stride 4 ⊂ stride 1.
+        one, _ = saved[("continuous", 1)]
+        four, _ = saved[("continuous", 4)]
+        eight, _ = saved[("continuous", 8)]
+        for f1, f4, f8 in zip(one, four, eight):
+            if f1["attempted"] and f4["attempted"] and f8["attempted"]:
+                assert f8["match_input_beams"] <= f4["match_input_beams"] <= f1["match_input_beams"]
         # Verify phase selection changes the raw sampled indices without
         # modifying mapping-beam stride or the CARMEN input.
         run(binary, dataset, root/"shifted", "--continuous-cost",
