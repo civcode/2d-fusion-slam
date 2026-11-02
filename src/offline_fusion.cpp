@@ -803,6 +803,25 @@ LiDARLoopProposals detect_lidar_loops(const Prepared& p,const Matched& matched,
                                   reg.mean_error_m});
         continue;
       }
+      // Re-register in the opposite direction. A true overlap should
+      // recover the inverse transform, not merely fit one wall/shelf
+      // under a single nearest-neighbor assignment.
+      const auto reverse=slam::matching::register_consecutive_scans(
+          current,previous,slam::inverse(reg.previous_from_current),false,
+          {.max_translation_m=3.0,.max_rotation_rad=.6});
+      const auto cycle=slam::compose(reg.previous_from_current,
+                                     reverse.previous_from_current);
+      const double reverse_overlap=std::min(reverse.forward_overlap,
+                                            reverse.reverse_overlap);
+      if(!reverse.accepted||!reverse.correspondence_rank||
+         reverse.forward_inliers<80||reverse.reverse_inliers<80||
+         reverse_overlap<.82||cycle.translation.norm()>.14||
+         std::abs(slam::wrap_yaw(cycle.yaw_rad))>.07) {
+        found.rejected.push_back({j,i,"insufficient_geometry",
+                                  "lidar_scan_registration",overlap,
+                                  reg.mean_error_m});
+        continue;
+      }
       ++found.geometry_verified;
       const Pose2 base_relative=slam::compose(kBaseFromLaser,
           slam::compose(reg.previous_from_current,
