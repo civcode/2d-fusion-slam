@@ -109,7 +109,9 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
         candidate.supported_hits>=80 &&
         candidate.overlap>=.82;
     if (!(scan_verified||verified(e.provenance)) ||
-        odometry_sources.contains(e.provenance.source_id)) {
+        ((scan_loop ||
+          e.provenance.source==EvidenceClass::independently_measured) &&
+         odometry_sources.contains(e.provenance.source_id))) {
       out.loop_decisions.push_back(LoopDecision::unverified_or_correlated_evidence);continue;
     }
     if(candidate.supported_hits < options.minimum_supported_hits ||
