@@ -486,6 +486,13 @@ endif()
 # Uses the exact same simulator for all baselines, without feeding reference
 # poses to the estimator or rebuilding an oracle-pose map.
 option(SLAM_PROFILE_FUSION "Collect steady-clock native fusion profiling samples" ON)
+# LiDAR-to-LiDAR registration is independent of Ceres, odometry and truth.
+add_library(slam_scan_to_scan STATIC src/scan_to_scan.cpp)
+add_library(slam::scan_to_scan ALIAS slam_scan_to_scan)
+target_compile_features(slam_scan_to_scan PUBLIC cxx_std_20)
+target_include_directories(slam_scan_to_scan PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_scan_to_scan PUBLIC slam::distance_field)
 add_executable(slam_offline_fusion src/offline_fusion.cpp)
 if(SLAM_PROFILE_FUSION)
   target_compile_definitions(slam_offline_fusion PRIVATE SLAM_PROFILE_FUSION=1)
@@ -493,7 +500,7 @@ endif()
 target_compile_features(slam_offline_fusion PRIVATE cxx_std_20)
 target_link_libraries(slam_offline_fusion PRIVATE
   slam::fusion_frontend slam::mapping slam::map_bundle
-  slam::match_geometry slam::map_accuracy slam_fixtures)
+  slam::match_geometry slam::scan_to_scan slam::map_accuracy slam_fixtures)
 if(TARGET slam_match_ceres)
   target_link_libraries(slam_offline_fusion PRIVATE slam::match_ceres)
   target_compile_definitions(slam_offline_fusion PRIVATE SLAM_FUSION_WITH_CERES=1)
@@ -503,6 +510,9 @@ if(TARGET slam_offline_graph)
   target_compile_definitions(slam_offline_fusion PRIVATE SLAM_FUSION_WITH_GTSAM=1)
 endif()
 if(BUILD_TESTING)
+  add_executable(slam_scan_to_scan_test tests/scan_to_scan_test.cpp)
+  target_link_libraries(slam_scan_to_scan_test PRIVATE slam::scan_to_scan)
+  add_test(NAME scan_to_scan_bootstrap COMMAND slam_scan_to_scan_test)
   add_executable(slam_fusion_profiler_test tests/fusion_profiler_test.cpp)
   target_compile_features(slam_fusion_profiler_test PRIVATE cxx_std_20)
   target_include_directories(slam_fusion_profiler_test PRIVATE
