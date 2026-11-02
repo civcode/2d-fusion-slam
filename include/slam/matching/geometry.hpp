@@ -52,6 +52,13 @@ struct MatchResult {
   std::size_t ceres_continuous_other_evaluations{};
   std::size_t ceres_invalid_unknown_cells{}, ceres_invalid_truncated{}, ceres_invalid_outside_grid{}, ceres_invalid_other{};
   std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
+  // Diagnostic-only: a rejected Ceres candidate is never applied to SLAM.
+  std::size_t solver_residual_blocks{};
+  bool candidate_evaluated{};
+  std::size_t seed_supported_hits{}, candidate_supported_hits{};
+  double seed_strict_cost{}, candidate_strict_cost{};
+  double seed_finite_cost{}, candidate_finite_cost{};
+  double candidate_translation_m{}, candidate_rotation_rad{};
   std::string ceres_termination{"not_run"};
   std::size_t support_aware_selected_hits{}, support_aware_skipped_hits{};
   std::size_t support_aware_stages{}, support_aware_accepted_stages{};
@@ -92,6 +99,16 @@ struct MatchResult {
     std::shared_ptr<const mapping::DistanceField> field,
     const std::vector<Eigen::Vector2d>& laser_points,
     Pose2 initial_map_from_laser, const MatchSettings& settings = {});
+
+// Experimental factorial ablation. Never used by the default matcher:
+// seed_only selects precisely the legacy seed-supported residual cohort;
+// legacy_gate selects the legacy strict, variable-support improvement gate.
+// The production finite matcher is equivalent to (false, false).
+[[nodiscard]] MatchResult match_ceres_continuous_ablation(
+    std::shared_ptr<const mapping::DistanceField> field,
+    const std::vector<Eigen::Vector2d>& laser_points,
+    Pose2 initial_map_from_laser, const MatchSettings& settings,
+    bool seed_only, bool legacy_gate);
 
 [[nodiscard]] MatchResult match_ceres_support_aware(
     std::shared_ptr<const mapping::DistanceField> field,
