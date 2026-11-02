@@ -1,3 +1,4 @@
+#include "slam/cli/parse.hpp"
 #include "slam/fixtures/synthetic.hpp"
 #include "slam/mapping/map_bundle.hpp"
 #include "slam/mapping/occupancy.hpp"
@@ -29,12 +30,17 @@ std::vector<slam::Pose2> reference_poses(const std::string& name) {
 // A deterministic map-building smoke fixture using *exact synthetic poses*.
 // It is not a SLAM trajectory benchmark or a real sensor calibration.
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::cerr << "Usage: slam_synthetic_eval_fixture <apartment|warehouse> <output.slammap>\n";
-    return 2;
-  }
+  slam::cli::Positionals parsed;
   try {
-    const std::string name(argv[1]);
+    parsed=slam::cli::parse_positionals(argc,argv,"slam_synthetic_eval_fixture",
+        "<apartment|warehouse> <output.slammap>",2,2);
+  }catch(const std::exception& e) {
+    std::cerr<<e.what()<<'\n';return 2;
+  }
+  if(parsed.help){std::cout<<parsed.usage;return 0;}
+  const auto& cli_args=parsed.values;
+  try {
+    const std::string name(cli_args[0]);
     slam::fixtures::Scene scene;
     if (name == "apartment") scene = slam::fixtures::apartment();
     else if (name == "warehouse") scene = slam::fixtures::warehouse();
@@ -64,7 +70,7 @@ int main(int argc, char** argv) {
     slam::mapping::MapBundle bundle{
         slam::mapping::MapSnapshot::capture(grid),
         {"map", scene.id, "synthetic_exact", true}};
-    std::ofstream out(argv[2], std::ios::binary | std::ios::trunc);
+    std::ofstream out(cli_args[1], std::ios::binary | std::ios::trunc);
     if (!out) throw std::runtime_error("cannot open fixture map output");
     slam::mapping::write_map_bundle(out, bundle);
     std::cerr << "Exported oracle-pose synthetic fixture " << scene.id
