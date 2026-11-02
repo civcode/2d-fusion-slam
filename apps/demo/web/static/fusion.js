@@ -381,6 +381,7 @@
     }
   }
   async function refresh() {
+    const previouslySelected=$run.value;
     stop();loadRun("");$run.replaceChildren(new Option("Scanning run directory…",""));
     try{
       const found=await getJson("/api/fusion/runs");
