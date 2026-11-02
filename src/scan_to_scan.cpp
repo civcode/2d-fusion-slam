@@ -13,8 +13,6 @@ namespace {
 using Points=std::vector<Eigen::Vector2d>;
 constexpr double kMaxPairM=0.55;
 constexpr double kCheckM=0.30;
-constexpr double kMaxTranslationM=0.90;
-constexpr double kMaxRotationRad=0.32;
 constexpr std::size_t kMinMatches=24;
 
 struct Pair {
@@ -105,7 +103,8 @@ Pose2 solve_pairs(const std::vector<Pair>& matched) {
   return {b-rotated,yaw};
 }
 ScanToScanResult score(const Points& previous,const Points& current,
-                       Pose2 estimated,std::size_t iterations) {
+                       Pose2 estimated,std::size_t iterations,
+                       const ScanRegistrationLimits& limits) {
   ScanToScanResult r;
   r.previous_from_current=estimated;
   r.iterations=iterations;
@@ -113,7 +112,8 @@ ScanToScanResult score(const Points& previous,const Points& current,
       pairs(previous,current,estimated));
   r.translation_m=estimated.translation.norm();
   r.rotation_rad=std::abs(wrap_yaw(estimated.yaw_rad));
-  if(r.translation_m>kMaxTranslationM||r.rotation_rad>kMaxRotationRad)
+  if(r.translation_m>limits.max_translation_m||
+     r.rotation_rad>limits.max_rotation_rad)
     return r;
   constexpr double max_d2=kCheckM*kCheckM;
   double loss=0;
@@ -142,11 +142,16 @@ ScanToScanResult score(const Points& previous,const Points& current,
 
 ScanToScanResult register_consecutive_scans(
     const Points& previous,const Points& current,
-    Pose2 initial_previous_from_current,bool wide_initial_search) {
+    Pose2 initial_previous_from_current,bool wide_initial_search,
+    ScanRegistrationLimits limits) {
   ScanToScanResult best;
   if(!valid_cloud(previous)||!valid_cloud(current)||
      !initial_previous_from_current.translation.allFinite()||
-     !std::isfinite(initial_previous_from_current.yaw_rad))
+     !std::isfinite(initial_previous_from_current.yaw_rad) ||
+     !std::isfinite(limits.max_translation_m) ||
+     !std::isfinite(limits.max_rotation_rad) ||
+     limits.max_translation_m<=0 || limits.max_translation_m>3.0 ||
+     limits.max_rotation_rad<=0 || limits.max_rotation_rad>.8)
     return best;
   // Candidate seeds differ only in yaw, not oracle motion. A smooth
   // constant-relative-pose estimate may be supplied from prior accepted
@@ -174,12 +179,12 @@ ScanToScanResult register_consecutive_scans(
       const auto next=solve_pairs(matched);
       const double moved=(next.translation-pose.translation).norm();
       const double rotated=std::abs(wrap_yaw(next.yaw_rad-pose.yaw_rad));
-      if(next.translation.norm()>kMaxTranslationM||
-         std::abs(wrap_yaw(next.yaw_rad))>kMaxRotationRad)break;
+      if(next.translation.norm()>limits.max_translation_m||
+         std::abs(wrap_yaw(next.yaw_rad))>limits.max_rotation_rad)break;
       pose=next;
       if(moved<1e-5&&rotated<1e-5)break;
     }
-    const auto r=score(previous,current,pose,iterations);
+    const auto r=score(previous,current,pose,iterations,limits);
     // Prefer the most reciprocal inliers, then minimum inlier error.
     if(!chosen||(r.accepted&&!best.accepted)||
        (r.accepted==best.accepted&&
