@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible apartment/warehouse fusion matching-beam sweep.
+"""Reproducible multi-geometry synthetic fusion matching-beam sweep.
 
 Runs the real slam_offline_fusion executable; no simulation reference is used
 by the estimator. Map metrics use independently generated synthetic scene
@@ -14,7 +14,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-SCENES = ("apartment", "warehouse")
+SCENES = ("apartment", "warehouse", "office", "loft",
+          "atrium", "industrial", "warehouse_asymmetric")
 MATCHERS = ("legacy", "continuous")
 
 
@@ -29,6 +30,8 @@ def parser():
     p.add_argument("--scenes", choices=SCENES, nargs="+", default=list(SCENES))
     p.add_argument("--matchers", choices=MATCHERS, nargs="+", default=list(MATCHERS))
     p.add_argument("--match-strides", type=int, nargs="+", default=[1, 2, 3, 4, 6, 8])
+    p.add_argument("--match-offsets", type=int, nargs="+", default=[0],
+                   help="starting positions among valid LiDAR hits; duplicate effective offsets are skipped")
     p.add_argument("--map-stride", type=int, default=1)
     p.add_argument("--match-every", type=int, default=1)
     p.add_argument("--field-every", type=int, default=1)
@@ -46,6 +49,12 @@ def validate(a, p):
         p.error("--lidar-only-predict-first requires --lidar-only-bootstrap")
     if len(set(a.match_strides)) != len(a.match_strides):
         p.error("duplicate match stride")
+    if len(set(a.match_offsets)) != len(a.match_offsets):
+        p.error("duplicate match offset")
+    if not all(0 <= phase <= 63 for phase in a.match_offsets):
+        p.error("match offsets must be within [0,63]")
+    if len(set(a.scenes)) != len(a.scenes) or len(set(a.matchers)) != len(a.matchers):
+        p.error("duplicate scene or matcher")
     if not all(1 <= x <= 64 for x in [a.map_stride, *a.match_strides]):
         p.error("beam strides must be within [1,64]")
     if not 1 <= a.match_every <= 200 or not 1 <= a.field_every <= 200:
@@ -60,11 +69,12 @@ def validate(a, p):
         p.error("output directory exists; use a new name")
 
 
-def command(a, scene, matcher, stride, label):
+def command(a, scene, matcher, stride, label, offset=0):
     opts = ["--match-every", str(a.match_every),
             "--field-every", str(a.field_every),
             "--map-stride", str(a.map_stride),
             "--match-stride", str(stride),
+            "--match-offset", str(offset),
             "--distance-truncation", f"{a.distance_truncation:.3f}"]
     if matcher == "continuous":
         opts.append("--continuous-cost")
@@ -82,7 +92,7 @@ def command(a, scene, matcher, stride, label):
     return [str(a.binary), scene, str(a.out_dir / label), *opts]
 
 
-def score_rows(directory, scene, matcher, stride, label, opts):
+def score_rows(directory, scene, matcher, stride, label, opts, offset=0):
     report = json.loads((directory / "fusion_report.json").read_text())
     prof = json.loads((directory / "fusion_profile.json").read_text())
     replay = json.loads((directory / "fusion_replay.json").read_text())
@@ -94,6 +104,7 @@ def score_rows(directory, scene, matcher, stride, label, opts):
         ("field_every", opts.field_every),
         ("map_stride", opts.map_stride),
         ("match_stride", stride),
+        ("match_offset", offset),
     ):
         if report[k] != expected_value or replay[k] != expected_value:
             raise ValueError(f"{label}: unexpected {k}")
@@ -115,7 +126,8 @@ def score_rows(directory, scene, matcher, stride, label, opts):
         row = {
             "run": label, "scene": scene, "matcher": matcher,
             "match_stride": stride,
-            "nominal_beams": (240 + stride - 1) // stride,
+            "match_offset": offset,
+            "nominal_beams": (240 + stride - 1 - offset) // stride,
             "map_stride": opts.map_stride,
             "lidar_only_bootstrap": opts.lidar_only_bootstrap,
             "lidar_only_predict_first": opts.lidar_only_predict_first,
@@ -153,34 +165,50 @@ def main():
     p = parser()
     a = p.parse_args()
     validate(a, p)
-    specs = [(scene, matcher, stride, f"{scene}-{matcher}-s{stride:02d}")
-             for scene in a.scenes for matcher in a.matchers
-             for stride in a.match_strides]
+    # Only distinct effective phases are scheduled per stride (e.g. stride 1
+    # has one phase, stride 2 has two). Phase zero preserves the old sweep.
+    specs = []
+    for scene in a.scenes:
+        for matcher in a.matchers:
+            for stride in a.match_strides:
+                offsets = list(dict.fromkeys(value % stride
+                                             for value in a.match_offsets))
+                for offset in offsets:
+                    suffix = f"-p{offset:02d}" if (
+                        len(a.match_offsets) > 1 or offset != 0) else ""
+                    specs.append((scene, matcher, stride, offset,
+                                  f"{scene}-{matcher}-s{stride:02d}{suffix}"))
     if a.dry_run:
-        for scene, matcher, stride, label in specs:
-            print("+", " ".join(command(a, scene, matcher, stride, label)))
+        for scene, matcher, stride, offset, label in specs:
+            print("+", " ".join(command(a, scene, matcher, stride, label, offset)))
         return
     a.out_dir.mkdir(parents=True)
     manifest = {
         "format": "FUSFUSIONBEAMSWEEP1",
-        "source": "synthetic apartment and warehouse with independently withheld simulator truth",
+        "source": "seven distinct analytic synthetic maps/routes with independently withheld simulator truth",
         "commit_or_binary": str(a.binary) if a.binary else "Docker test image supplied by user",
         "scenes": a.scenes, "matchers": a.matchers,
         "match_strides": a.match_strides,
+        "match_offsets_requested": a.match_offsets,
         "map_stride": a.map_stride, "match_every": a.match_every,
         "field_every": a.field_every,
         "distance_truncation_m": a.distance_truncation,
         "lidar_only_bootstrap": a.lidar_only_bootstrap,
         "lidar_only_predict_first": a.lidar_only_predict_first,
         "commands": [],
+        "run_count": len(specs),
+        "runs": [],
     }
     rows = []
     # These map variants do not use scan-matching corrections. They are a
     # negative control: their fingerprints must not depend on match stride.
     controls = {}
-    for scene, matcher, stride, label in specs:
-        cmd = command(a, scene, matcher, stride, label)
+    for scene, matcher, stride, offset, label in specs:
+        cmd = command(a, scene, matcher, stride, label, offset)
         manifest["commands"].append(cmd)
+        manifest["runs"].append({"scene":scene,"matcher":matcher,
+                                 "match_stride":stride,"match_offset":offset,
+                                 "label":label})
         print("+", " ".join(cmd), flush=True)
         logfile = a.out_dir / (label + ".run.log")
         with logfile.open("w") as f:
@@ -189,15 +217,16 @@ def main():
         if result.returncode:
             tail = "\n".join(logfile.read_text(errors="replace").splitlines()[-25:])
             raise RuntimeError(f"{label} failed ({result.returncode}):\n{tail}")
-        run_rows = score_rows(a.out_dir/label, scene, matcher, stride, label, a)
+        run_rows = score_rows(a.out_dir/label, scene, matcher, stride, label, a, offset)
         for item in run_rows:
-            if item["map_method"] not in ("wheel_only", "gyro_wheel"):
+            if item["map_method"] not in (
+                "wheel_only", "gyro_wheel", "fused_scan_matched"):
                 continue
             key = (scene, item["map_method"])
             old = controls.setdefault(key, item["map_fingerprint"])
             if old != item["map_fingerprint"]:
                 raise ValueError(
-                    f"{label}: non-matching control map changed with match stride")
+                    f"{label}: non-matching control map changed with match stride/phase")
         rows.extend(run_rows)
         print("Completed", label, flush=True)
     with (a.out_dir/"scorecard.csv").open("w", newline="") as f:
