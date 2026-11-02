@@ -105,6 +105,22 @@ offline CMake build by installing Ubuntu's `libcxxopts-dev`; all CLIs
 support `--help` and reject unknown flags. See
 [CLI migration, options and local tests](docs/native-cli-cxxopts.md).
 
+## Experimental finite-cost Ceres matching
+
+The FR079 offline CLI now supports `--continuous-cost`, a third, opt-in
+matching mode that assigns a **maximum finite distance cost** to
+unobserved, truncated and off-map distance-field cells. Bilinear
+interpolation keeps Ceres residuals evaluable across these boundaries,
+while strict occupancy observation masks, geometry quality gates and
+map insertion remain unchanged. The original Ceres matcher is still
+the default; `--continuous-cost` is incompatible with
+`--support-aware` and `--reference`.
+
+Reports distinguish **finite, unsupported cost evaluations** from
+invalid solver evaluations. Compare geometric map quality rather than
+using zero warnings as proof of better SLAM accuracy. See
+[FR079 continuous-cost A/B benchmark](docs/fr079-truncation-benchmark.md).
+
 ## Experimental support-aware Ceres matching
 
 Use --support-aware with slam_fr079_offline to select a conservative
