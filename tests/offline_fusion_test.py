@@ -193,6 +193,84 @@ class OfflineFusionExperiment(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.scene("warehouse", root)
 
+    def test_matching_options_apply_to_all_synthetic_maps(self):
+        # These are both available scenes; mapping stride affects all maps,
+        # matching cadence/stride affects both held-out and LiDAR-only paths.
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                folder = pathlib.Path(root) / "tuned"
+                result = run(
+                    EXE, scene, str(folder),
+                    "--match-every", "3", "--field-every", "7",
+                    "--map-stride", "2", "--match-stride", "2",
+                    "--distance-truncation", "0.5")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads((folder / "fusion_report.json").read_text())
+                trace = json.loads((folder / "fusion_replay.json").read_text())
+                self.assertEqual(report["match_every"], 3)
+                self.assertEqual(report["field_every"], 7)
+                self.assertEqual(report["map_stride"], 2)
+                self.assertEqual(report["match_stride"], 2)
+                self.assertEqual(report["distance_truncation_m"], 0.5)
+                self.assertEqual(trace["match_every"], 3)
+                self.assertEqual(trace["field_every"], 7)
+                self.assertEqual(trace["map_stride"], 2)
+                self.assertEqual(trace["match_stride"], 2)
+                self.assertEqual(report["heldout_attempted"] +
+                                 report["heldout_skipped"], report["frames"] // 2)
+                self.assertEqual(report["lidar_only_accepted"] +
+                                 report["lidar_only_rejected"] +
+                                 report["lidar_only_skipped"], report["frames"] - 1)
+                self.assertGreater(report["lidar_only_field_rebuilds"], 1)
+                self.assertLess(report["lidar_only_field_rebuilds"],
+                                report["frames"] - 1)
+                for i, frame in enumerate(trace["frames"]):
+                    attempted = i % 2 == 1 and ((i-1)//2) % 3 == 0
+                    self.assertEqual(frame["matching"]["attempted"], attempted)
+                    if i % 2 and not attempted:
+                        self.assertEqual(frame["matching"]["status"], "skipped")
+                profile = json.loads((folder / "fusion_profile.json").read_text())
+                if profile["profiled"]:
+                    self.assertEqual(
+                        profile["stages"]["heldout_scan_match"]["calls"],
+                        report["heldout_attempted"])
+                for name in report["results"]:
+                    self.assertTrue((folder / f"{name}.slammap").is_file())
+
+    def test_continuous_cost_for_both_scenes_or_fail_closed(self):
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                folder = pathlib.Path(root) / "continuous"
+                result = run(EXE, scene, str(folder),
+                             "--continuous-cost", "--match-every", "2",
+                             "--match-stride", "2")
+                if result.returncode != 0:
+                    self.assertIn("Ceres-enabled", result.stderr)
+                    self.assertFalse(folder.exists())
+                    continue
+                report = json.loads((folder / "fusion_report.json").read_text())
+                trace = json.loads((folder / "fusion_replay.json").read_text())
+                self.assertEqual(report["matcher"], "ceres_continuous_cost")
+                self.assertEqual(trace["matcher"], report["matcher"])
+                self.assertEqual(report["match_every"], 2)
+                self.assertEqual(report["match_stride"], 2)
+                self.assertEqual(report["heldout_attempted"] +
+                                 report["heldout_skipped"], report["frames"] // 2)
+
+    def test_tuning_rejects_invalid_options_before_writing(self):
+        bad = (("--match-every", "0"), ("--match-every", "201"),
+               ("--match-stride", "0"), ("--match-stride", "65"),
+               ("--map-stride", "-1"), ("--field-every", "0"),
+               ("--distance-truncation", "nan"),
+               ("--distance-truncation", "3.1"))
+        with tempfile.TemporaryDirectory() as root:
+            for i, flags in enumerate(bad):
+                with self.subTest(flags=flags):
+                    dest = pathlib.Path(root) / f"invalid-{i}"
+                    result = run(EXE, "apartment", str(dest), *flags)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(dest.exists())
+
     def test_explicit_independent_synthetic_loop_source(self):
         # No fake loop closures should be silently generated by default.
         with tempfile.TemporaryDirectory() as root:
