@@ -1,4 +1,5 @@
 #include "slam/datasets/fr079_offline.hpp"
+#include "slam/datasets/fr079_capture_benchmark.hpp"
 #include "slam/datasets/carmen.hpp"
 #include "slam/mapping/map_bundle.hpp"
 
@@ -15,6 +16,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -287,9 +289,15 @@ int run(int argc,char** argv){
     return 2;
   }
   slam::datasets::Fr079SlamOptions options;
+  bool capture=false;
+  std::size_t capture_every=120,capture_max_frames=12;
   for(int i=3;i<argc;++i){
     const std::string arg=argv[i];
     if(arg=="--reference")options.use_ceres=false;
+    else if(arg=="--capture")capture=true;
+    else if(arg=="--capture-every"&&i+1<argc)capture_every=positive_integer(argv[++i]);
+    else if(arg=="--capture-max-frames"&&i+1<argc)
+      capture_max_frames=positive_integer(argv[++i]);
     else if(arg=="--match-every"&&i+1<argc)options.match_every=positive_integer(argv[++i]);
     else if(arg=="--field-every"&&i+1<argc)options.rebuild_field_every=positive_integer(argv[++i]);
     else if(arg=="--map-stride"&&i+1<argc)options.map_beam_stride=positive_integer(argv[++i]);
@@ -308,15 +316,31 @@ int run(int argc,char** argv){
   const auto pgm=prefix.string()+".pgm";
   const auto yaml=prefix.string()+".yaml";
   const auto report=prefix.string()+".report.json";
+  const auto capture_csv=prefix.string()+".capture.csv";
   for(const auto& f:{binary,replay,trajectory,match,pgm,yaml,report})
     ensure(!std::filesystem::exists(std::filesystem::symlink_status(f)),
            "output already exists; refusing overwrite");
+  if(capture)
+    ensure(!std::filesystem::exists(std::filesystem::symlink_status(capture_csv)),
+           "capture output already exists; refusing overwrite");
   const auto begin=Clock::now();
   const auto content=read_log(argv[1]);
   const auto digest=sha256(content); // hash uncompressed CARMEN bytes, not filename
   const auto scans=parse(content);
+  std::unique_ptr<slam::datasets::Fr079CaptureBenchmark> capture_benchmark;
+  if(capture) {
+    capture_benchmark=std::make_unique<slam::datasets::Fr079CaptureBenchmark>(
+        capture_csv,digest,options.use_ceres,capture_every,capture_max_frames);
+    options.capture_probe=[&](std::size_t index,const slam::Pose2& anchor,
+        std::shared_ptr<const slam::mapping::MapSnapshot> prior,
+        const std::vector<Eigen::Vector2d>& points) {
+      capture_benchmark->probe(index,anchor,std::move(prior),points);
+    };
+  }
   const auto loaded=Clock::now();
   const auto result=slam::datasets::run_fr079_offline_slam(scans,options);
+  const std::size_t capture_trials=capture_benchmark?capture_benchmark->tested_trials():0;
+  capture_benchmark.reset();
   const auto computed=Clock::now();
   {
     std::ofstream out(binary,std::ios::binary);
@@ -351,7 +375,8 @@ int run(int argc,char** argv){
            <<" inserted="<<result.inserted_scans
            <<" map="<<binary
            <<" replay="<<replay
-           <<" report="<<report<<"\n";
+           <<" report="<<report
+           <<(capture?" capture_trials="+std::to_string(capture_trials):"")<<"\n";
   return 0;
 }
 } // namespace
