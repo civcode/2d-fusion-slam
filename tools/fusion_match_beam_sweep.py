@@ -33,6 +33,8 @@ def parser():
     p.add_argument("--match-every", type=int, default=1)
     p.add_argument("--field-every", type=int, default=1)
     p.add_argument("--distance-truncation", type=float, default=0.7)
+    p.add_argument("--lidar-only-bootstrap", action="store_true",
+                   help="opt-in gated scan-to-scan bootstrapping of LiDAR-only map")
     p.add_argument("--dry-run", action="store_true")
     return p
 
@@ -62,6 +64,8 @@ def command(a, scene, matcher, stride, label):
             "--distance-truncation", f"{a.distance_truncation:.3f}"]
     if matcher == "continuous":
         opts.append("--continuous-cost")
+    if a.lidar_only_bootstrap:
+        opts.append("--lidar-only-bootstrap")
     if a.docker:
         return [
             "docker", "compose", "run", "--rm",
@@ -87,6 +91,8 @@ def score_rows(directory, scene, matcher, stride, label, opts):
     ):
         if report[k] != expected_value or replay[k] != expected_value:
             raise ValueError(f"{label}: unexpected {k}")
+    if report["lidar_only_bootstrap"] != opts.lidar_only_bootstrap:
+        raise ValueError(f"{label}: LiDAR-only bootstrap mode differs")
     if abs(report["distance_truncation_m"] - opts.distance_truncation) > 1e-9:
         raise ValueError(f"{label}: unexpected EDT truncation")
     if not report["frames"] == replay["frame_count"] == prof["frames"]:
@@ -103,6 +109,11 @@ def score_rows(directory, scene, matcher, stride, label, opts):
             "match_stride": stride,
             "nominal_beams": (240 + stride - 1) // stride,
             "map_stride": opts.map_stride,
+            "lidar_only_bootstrap": opts.lidar_only_bootstrap,
+            "lidar_only_bootstrap_attempted": report["lidar_only_bootstrap_attempted"],
+            "lidar_only_bootstrap_accepted": report["lidar_only_bootstrap_accepted"],
+            "lidar_only_edt_accepted": report["lidar_only_edt_accepted"],
+            "lidar_only_edt_refined_accepted": report["lidar_only_edt_refined_accepted"],
             "match_every": opts.match_every,
             "field_every": opts.field_every,
             "distance_truncation_m": opts.distance_truncation,
@@ -148,6 +159,7 @@ def main():
         "map_stride": a.map_stride, "match_every": a.match_every,
         "field_every": a.field_every,
         "distance_truncation_m": a.distance_truncation,
+        "lidar_only_bootstrap": a.lidar_only_bootstrap,
         "commands": [],
     }
     rows = []
