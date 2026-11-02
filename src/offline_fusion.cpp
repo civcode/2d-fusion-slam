@@ -791,7 +791,8 @@ LiDARLoopProposals detect_lidar_loops(const Prepared& p,const Matched& matched,
           "synthetic_gyro_deskewed_lidar_scan_pair_v1",true,false};
       slam::graph::LoopCandidate candidate{
           {j,i,base_relative,.20,.20,.14,provenance},
-          std::min(reg.forward_inliers,reg.reverse_inliers),overlap,true};
+          std::min(reg.forward_inliers,reg.reverse_inliers),overlap,true,
+          reg.mean_error_m};
       if(!best || overlap>best_overlap+1e-8 ||
          (std::abs(overlap-best_overlap)<1e-8 &&
           reg.mean_error_m<best_error)) {
@@ -883,7 +884,7 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
         input.loops[k].edge.provenance.source==
             slam::graph::EvidenceClass::lidar_scan_registration?
             "lidar_scan_registration":"independently_simulated_relative_pose",
-        input.loops[k].overlap,0.});
+        input.loops[k].overlap,input.loops[k].registration_error_m});
   }
   if(!graph.fixed_first_pose)throw std::runtime_error("graph lost gauge anchor");
   output.poses=std::move(graph.optimized_map_from_base);
