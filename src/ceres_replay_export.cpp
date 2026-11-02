@@ -138,7 +138,7 @@ int main(int argc,char** argv) {
   cxxopts::ParseResult args;
   try{args=cli.parse(argc,argv);}
   catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
-  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(args.count("help")&&args["help"].as<bool>()){std::cout<<cli.help();return 0;}
   if(!args.count("map")||!args.count("log")||!args.count("scan-stride")) {
     std::cerr<<cli.help();return 2;
   }
@@ -148,7 +148,8 @@ int main(int argc,char** argv) {
         posint(args["beam-stride"].as<std::string>(),64):4;
     const std::size_t max_scans=args.count("max-scans")?
         posint(args["max-scans"].as<std::string>(),6000):6000;
-    const bool heldout_only=args.count("verified-fr079-holdout")!=0;
+    const bool heldout_only=args.count("verified-fr079-holdout")&&
+        args["verified-fr079-holdout"].as<bool>();
     std::ifstream binary(args["map"].as<std::string>(),std::ios::binary);
     if(!binary)throw std::runtime_error("cannot open frozen map bundle");
     const auto map=slam::mapping::read_map_bundle(binary);
