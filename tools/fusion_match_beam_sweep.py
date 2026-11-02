@@ -35,11 +35,15 @@ def parser():
     p.add_argument("--distance-truncation", type=float, default=0.7)
     p.add_argument("--lidar-only-bootstrap", action="store_true",
                    help="opt-in gated scan-to-scan bootstrapping of LiDAR-only map")
+    p.add_argument("--lidar-only-predict-first", action="store_true",
+                   help="predict scan motion from LiDAR before EDT (requires bootstrap)")
     p.add_argument("--dry-run", action="store_true")
     return p
 
 
 def validate(a, p):
+    if a.lidar_only_predict_first and not a.lidar_only_bootstrap:
+        p.error("--lidar-only-predict-first requires --lidar-only-bootstrap")
     if len(set(a.match_strides)) != len(a.match_strides):
         p.error("duplicate match stride")
     if not all(1 <= x <= 64 for x in [a.map_stride, *a.match_strides]):
@@ -66,6 +70,8 @@ def command(a, scene, matcher, stride, label):
         opts.append("--continuous-cost")
     if a.lidar_only_bootstrap:
         opts.append("--lidar-only-bootstrap")
+    if a.lidar_only_predict_first:
+        opts.append("--lidar-only-predict-first")
     if a.docker:
         return [
             "docker", "compose", "run", "--rm",
@@ -93,6 +99,8 @@ def score_rows(directory, scene, matcher, stride, label, opts):
             raise ValueError(f"{label}: unexpected {k}")
     if report["lidar_only_bootstrap"] != opts.lidar_only_bootstrap:
         raise ValueError(f"{label}: LiDAR-only bootstrap mode differs")
+    if report["lidar_only_predict_first"] != opts.lidar_only_predict_first:
+        raise ValueError(f"{label}: LiDAR-only motion prediction mode differs")
     if abs(report["distance_truncation_m"] - opts.distance_truncation) > 1e-9:
         raise ValueError(f"{label}: unexpected EDT truncation")
     if not report["frames"] == replay["frame_count"] == prof["frames"]:
@@ -110,6 +118,9 @@ def score_rows(directory, scene, matcher, stride, label, opts):
             "nominal_beams": (240 + stride - 1) // stride,
             "map_stride": opts.map_stride,
             "lidar_only_bootstrap": opts.lidar_only_bootstrap,
+            "lidar_only_predict_first": opts.lidar_only_predict_first,
+            "lidar_only_predicted_edt_accepted": report["lidar_only_predicted_edt_accepted"],
+            "lidar_only_edt_prediction_disagreements": report["lidar_only_edt_prediction_disagreements"],
             "lidar_only_bootstrap_attempted": report["lidar_only_bootstrap_attempted"],
             "lidar_only_bootstrap_accepted": report["lidar_only_bootstrap_accepted"],
             "lidar_only_edt_accepted": report["lidar_only_edt_accepted"],
@@ -160,6 +171,7 @@ def main():
         "field_every": a.field_every,
         "distance_truncation_m": a.distance_truncation,
         "lidar_only_bootstrap": a.lidar_only_bootstrap,
+        "lidar_only_predict_first": a.lidar_only_predict_first,
         "commands": [],
     }
     rows = []
