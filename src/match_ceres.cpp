@@ -305,4 +305,169 @@ MatchResult match_ceres_support_aware(
   return result;
 }
 
+
+// This cost is defined at every finite endpoint. Unsupported/unknown map
+// geometry is a maximum penalty with smooth bilinear transitions, not a
+// newly observed wall. Each Ceres evaluation reports when the strict
+// interpolation would have been unavailable for A/B diagnosis.
+namespace {
+class ContinuousHitCost final : public ceres::SizedCostFunction<1,3> {
+ public:
+  ContinuousHitCost(const mapping::DistanceField& field,Eigen::Vector2d point,
+                    double sigma,std::array<std::atomic<std::size_t>,4>& counts)
+      : field_(field),point_(std::move(point)),sigma_(sigma),counts_(counts) {}
+  bool Evaluate(double const* const* params,double* residuals,
+                double** jacobians) const override {
+    const double* p=params[0];
+    const double c=std::cos(p[2]),s=std::sin(p[2]);
+    const Eigen::Vector2d world{
+      p[0]+c*point_.x()-s*point_.y(),
+      p[1]+s*point_.x()+c*point_.y()};
+    // Ceres parameter boxes are finite; fail closed for unexpected NaNs.
+    if(!world.allFinite())return false;
+    const auto value=field_.sample_matching_cost(world);
+    switch(field_.support_map(world)){
+      case mapping::DistanceSupport::supported:break;
+      case mapping::DistanceSupport::unknown_cells:
+        counts_[0].fetch_add(1,std::memory_order_relaxed);break;
+      case mapping::DistanceSupport::truncated:
+        counts_[1].fetch_add(1,std::memory_order_relaxed);break;
+      case mapping::DistanceSupport::outside_grid:
+        counts_[2].fetch_add(1,std::memory_order_relaxed);break;
+      default:
+        counts_[3].fetch_add(1,std::memory_order_relaxed);break;
+    }
+    residuals[0]=value.metres/sigma_;
+    if(jacobians&&jacobians[0]){
+      double* jac=jacobians[0];
+      jac[0]=value.gradient_map.x()/sigma_;
+      jac[1]=value.gradient_map.y()/sigma_;
+      jac[2]=(value.gradient_map.x()*(-s*point_.x()-c*point_.y())+
+              value.gradient_map.y()*( c*point_.x()-s*point_.y()))/sigma_;
+    }
+    return true;
+  }
+ private:
+  const mapping::DistanceField& field_;
+  Eigen::Vector2d point_;
+  double sigma_;
+  std::array<std::atomic<std::size_t>,4>& counts_;
+};
+
+// Match the same input beam cohort and the same Huber loss at both poses.
+// Strictly-supported geometry is still evaluated independently for rank,
+// overlap, and observability; a reduction by dropping beams is impossible.
+double fixed_continuous_cost(const mapping::DistanceField& field,
+                             const std::vector<Eigen::Vector2d>& points,
+                             Pose2 pose,const MatchSettings& settings) {
+  double cost=0.;
+  for(const auto& point:points){
+    if(!point.allFinite())continue;
+    const double a=field.sample_matching_cost(transform(pose,point)).metres/
+                   settings.sigma_metres;
+    const double magnitude=std::abs(a);
+    const double delta=settings.huber_delta;
+    cost+=magnitude<=delta?0.5*a*a:delta*(magnitude-0.5*delta);
+  }
+  return cost;
+}
+} // namespace
+
+MatchResult match_ceres_continuous(
+    std::shared_ptr<const mapping::DistanceField> field,
+    const std::vector<Eigen::Vector2d>& points,
+    Pose2 seed,const MatchSettings& settings) {
+  MatchResult result;
+  result.map_from_laser=seed;
+  if(!field||points.empty()||!seed.translation.allFinite()||
+     !std::isfinite(seed.yaw_rad))return result;
+  // Do not bootstrap SLAM from synthetic unknown-space costs. Require
+  // genuine observed geometry before optimizing.
+  const auto initial=evaluate_geometry(*field,points,seed,settings);
+  result.diagnostics=initial;
+  if(initial.supported_hits<settings.min_supported_hits||
+     initial.overlap<settings.minimum_overlap) {
+    result.status=MatchStatus::insufficient_support;
+    return result;
+  }
+  if(!initial.full_rank) {
+    result.status=MatchStatus::degenerate;
+    return result;
+  }
+
+  double pose[3]{seed.translation.x(),seed.translation.y(),seed.yaw_rad};
+  std::array<std::atomic<std::size_t>,4> finite_unsupported{};
+  ceres::Problem problem;
+  std::size_t inserted=0;
+  for(const auto& point:points){
+    if(!point.allFinite())continue;
+    problem.AddResidualBlock(
+        new ContinuousHitCost(*field,point,settings.sigma_metres,
+                              finite_unsupported),
+        new ceres::HuberLoss(settings.huber_delta),pose);
+    ++inserted;
+  }
+  if(inserted<settings.min_supported_hits) {
+    result.status=MatchStatus::insufficient_support;
+    return result;
+  }
+  for(int i=0;i<2;++i) {
+    problem.SetParameterLowerBound(pose,i,pose[i]-settings.maximum_step_translation_m);
+    problem.SetParameterUpperBound(pose,i,pose[i]+settings.maximum_step_translation_m);
+  }
+  problem.SetParameterLowerBound(pose,2,pose[2]-settings.maximum_step_yaw_rad);
+  problem.SetParameterUpperBound(pose,2,pose[2]+settings.maximum_step_yaw_rad);
+  ceres::Solver::Options options;
+  options.max_num_iterations=static_cast<int>(settings.maximum_iterations);
+  options.linear_solver_type=ceres::DENSE_QR;
+  options.num_threads=1;
+  options.minimizer_progress_to_stdout=false;
+  ceres::Solver::Summary summary;
+  ceres::Solve(options,&problem,&summary);
+  result.iterations=static_cast<unsigned>(summary.iterations.size());
+  result.ceres_continuous_unknown_evaluations=finite_unsupported[0].load(std::memory_order_relaxed);
+  result.ceres_continuous_truncated_evaluations=finite_unsupported[1].load(std::memory_order_relaxed);
+  result.ceres_continuous_outside_evaluations=finite_unsupported[2].load(std::memory_order_relaxed);
+  result.ceres_continuous_other_evaluations=finite_unsupported[3].load(std::memory_order_relaxed);
+  result.ceres_unsuccessful_steps=static_cast<std::size_t>(summary.num_unsuccessful_steps);
+  result.ceres_successful_steps=static_cast<std::size_t>(summary.num_successful_steps);
+  switch(summary.termination_type) {
+    case ceres::CONVERGENCE:result.ceres_termination="convergence";break;
+    case ceres::NO_CONVERGENCE:result.ceres_termination="no_convergence";break;
+    case ceres::FAILURE:result.ceres_termination="failure";break;
+    case ceres::USER_SUCCESS:result.ceres_termination="user_success";break;
+    case ceres::USER_FAILURE:result.ceres_termination="user_failure";break;
+    default:result.ceres_termination="unknown";break;
+  }
+  if(summary.termination_type==ceres::FAILURE||
+     summary.termination_type==ceres::USER_FAILURE) {
+    result.status=MatchStatus::no_improvement;
+    return result;
+  }
+  const Pose2 candidate{{pose[0],pose[1]},wrap_yaw(pose[2])};
+  // Independently reject poses that lack real geometric support, even
+  // though the solver cost is evaluable throughout unknown space.
+  const auto diagnostics=evaluate_geometry(*field,points,candidate,settings);
+  if(diagnostics.supported_hits<initial.supported_hits||
+     diagnostics.overlap<settings.minimum_overlap) {
+    result.status=MatchStatus::insufficient_support;
+    return result;
+  }
+  if(!diagnostics.full_rank) {
+    result.status=MatchStatus::degenerate;
+    return result;
+  }
+  // Fixed cohort avoids an apparent improvement from dropping known hits,
+  // and avoids an apparent regression when new real hits enter support.
+  if(fixed_continuous_cost(*field,points,candidate,settings)>=
+     fixed_continuous_cost(*field,points,seed,settings)-1e-10) {
+    result.status=MatchStatus::no_improvement;
+    return result;
+  }
+  result.map_from_laser=candidate;
+  result.diagnostics=diagnostics;
+  result.status=MatchStatus::accepted;
+  return result;
+}
+
 } // namespace slam::matching
