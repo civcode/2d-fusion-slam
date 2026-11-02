@@ -105,7 +105,7 @@
       const graph=poses.paths.graph_optimized[frameIndex];
       const fused=poses.paths.fused_scan_matched[frameIndex];
       const delta=Math.hypot(graph[0]-fused[0],graph[1]-fused[1]);
-      shown("fusion-pose-shift",fmt(delta,3)+" m graph correction");
+      shown("fusion-pose-shift",fmt(delta,3)+" m graph vs scan-matched");
     } else shown("fusion-pose-shift","No graph output");
     shown("fusion-loop-status",f.loop_events.length ?
       f.loop_events.map(x=>x.from+" → "+x.to+" "+
