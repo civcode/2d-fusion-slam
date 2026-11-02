@@ -1,3 +1,4 @@
+#include "slam/cli/parse.hpp"
 #include "slam/datasets/carmen_map.hpp"
 #include <zlib.h>
 #include <cstdint>
@@ -6,10 +7,17 @@
 #include <string>
 #include <vector>
 int main(int argc,char** argv) {
- if(argc!=2 && argc!=4){std::cerr<<"Usage: slam_carmen_map_inspect <.carmen.map> [width height]\n";return 2;}
- gzFile gz=gzopen(argv[1],"rb");
- if(!gz){std::cerr<<"cannot open CARMEN map\n";return 1;}
- try {
+  slam::cli::Positionals parsed;
+  try {
+    parsed=slam::cli::parse_positionals(argc,argv,"slam_carmen_map_inspect",
+        "<.carmen.map> [width height]",1,3);
+  }catch(const std::exception& e) {
+    std::cerr<<e.what()<<'\n';return 2;
+  }
+  if(parsed.help){std::cout<<parsed.usage;return 0;}
+  const auto& cli_args=parsed.values;
+  if(cli_args.size()==2){std::cerr<<"width and height must be provided together\n";return 2;}
+  try {
    std::vector<std::uint8_t> bytes;
    unsigned char chunk[8192];int n=0;
    while((n=gzread(gz,chunk,sizeof(chunk)))>0) {
@@ -20,7 +28,7 @@ int main(int argc,char** argv) {
    gz=nullptr;
    if(n<0 || close_status!=Z_OK)throw std::runtime_error("gzip map failure");
    const auto map=slam::datasets::parse_carmen_map(bytes);
-   if(argc==4 && (map.width!=std::stoul(argv[2]) || map.height!=std::stoul(argv[3])))
+   if(cli_args.size()==3 && (map.width!=std::stoul(cli_args[1]) || map.height!=std::stoul(cli_args[2])))
      throw std::runtime_error("unexpected map dimensions");
    std::cout<<"{\"width\":"<<map.width<<",\"height\":"<<map.height
             <<",\"resolution_m\":"<<map.resolution_m
