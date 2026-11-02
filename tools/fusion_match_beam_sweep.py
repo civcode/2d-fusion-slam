@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Reproducible apartment/warehouse fusion matching-beam sweep.
+
+Runs the real slam_offline_fusion executable; no simulation reference is used
+by the estimator. Map metrics use independently generated synthetic scene
+truth and are read only after each run.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+SCENES = ("apartment", "warehouse")
+MATCHERS = ("legacy", "continuous")
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--repo", type=Path, default=Path.cwd())
+    p.add_argument("--out-dir", type=Path, required=True,
+                   help="must not exist yet; no results are overwritten")
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument("--docker", action="store_true")
+    source.add_argument("--binary", type=Path)
+    p.add_argument("--scenes", choices=SCENES, nargs="+", default=list(SCENES))
+    p.add_argument("--matchers", choices=MATCHERS, nargs="+", default=list(MATCHERS))
+    p.add_argument("--match-strides", type=int, nargs="+", default=[1, 2, 3, 4, 6, 8])
+    p.add_argument("--map-stride", type=int, default=1)
+    p.add_argument("--match-every", type=int, default=1)
+    p.add_argument("--field-every", type=int, default=1)
+    p.add_argument("--distance-truncation", type=float, default=0.7)
+    p.add_argument("--dry-run", action="store_true")
+    return p
+
+
+def validate(a, p):
+    if len(set(a.match_strides)) != len(a.match_strides):
+        p.error("duplicate match stride")
+    if not all(1 <= x <= 64 for x in [a.map_stride, *a.match_strides]):
+        p.error("beam strides must be within [1,64]")
+    if not 1 <= a.match_every <= 200 or not 1 <= a.field_every <= 200:
+        p.error("cadences must be in [1,200]")
+    if not 0.2 <= a.distance_truncation <= 3.0:
+        p.error("EDT cutoff must be within [0.2,3.0]")
+    a.repo = a.repo.resolve(strict=True)
+    a.out_dir = a.out_dir.resolve()
+    if a.binary:
+        a.binary = a.binary.resolve(strict=True)
+    if a.out_dir.exists():
+        p.error("output directory exists; use a new name")
+
+
+def command(a, scene, matcher, stride, label):
+    opts = ["--match-every", str(a.match_every),
+            "--field-every", str(a.field_every),
+            "--map-stride", str(a.map_stride),
+            "--match-stride", str(stride),
+            "--distance-truncation", f"{a.distance_truncation:.3f}"]
+    if matcher == "continuous":
+        opts.append("--continuous-cost")
+    if a.docker:
+        return [
+            "docker", "compose", "run", "--rm",
+            "-v", f"{a.out_dir}:/fusion",
+            "--entrypoint", "./build-docker/slam_offline_fusion",
+            "test", scene, f"/fusion/{label}", *opts,
+        ]
+    return [str(a.binary), scene, str(a.out_dir / label), *opts]
+
+
+def score_rows(directory, scene, matcher, stride, label, opts):
+    report = json.loads((directory / "fusion_report.json").read_text())
+    prof = json.loads((directory / "fusion_profile.json").read_text())
+    replay = json.loads((directory / "fusion_replay.json").read_text())
+    expected = "ceres_continuous_cost" if matcher == "continuous" else "ceres"
+    if report["matcher"] != expected:
+        raise ValueError(f"{label}: expected Ceres matcher {expected}, got {report['matcher']}")
+    for k, expected_value in (
+        ("match_every", opts.match_every),
+        ("field_every", opts.field_every),
+        ("map_stride", opts.map_stride),
+        ("match_stride", stride),
+    ):
+        if report[k] != expected_value or replay[k] != expected_value:
+            raise ValueError(f"{label}: unexpected {k}")
+    if abs(report["distance_truncation_m"] - opts.distance_truncation) > 1e-9:
+        raise ValueError(f"{label}: unexpected EDT truncation")
+    if not report["frames"] == replay["frame_count"] == prof["frames"]:
+        raise ValueError(f"{label}: frame counts differ")
+    if report["heldout_attempted"] + report["heldout_skipped"] != report["frames"] // 2:
+        raise ValueError(f"{label}: held-out matching accounting invalid")
+    if report["lidar_only_accepted"] + report["lidar_only_rejected"] + report["lidar_only_skipped"] != report["frames"] - 1:
+        raise ValueError(f"{label}: LiDAR-only matching accounting invalid")
+    rows = []
+    for map_name, entry in report["results"].items():
+        m = entry["map"]["metrics"]
+        row = {
+            "run": label, "scene": scene, "matcher": matcher,
+            "match_stride": stride,
+            "nominal_beams": (240 + stride - 1) // stride,
+            "map_stride": opts.map_stride,
+            "match_every": opts.match_every,
+            "field_every": opts.field_every,
+            "distance_truncation_m": opts.distance_truncation,
+            "map_method": map_name, "frames": report["frames"],
+            "heldout_attempted": report["heldout_attempted"],
+            "heldout_accepted": report["heldout_accepted"],
+            "heldout_skipped": report["heldout_skipped"],
+            "lidar_only_accepted": report["lidar_only_accepted"],
+            "lidar_only_rejected": report["lidar_only_rejected"],
+            "lidar_only_skipped": report["lidar_only_skipped"],
+            "lidar_only_field_rebuilds": report["lidar_only_field_rebuilds"],
+            "translation_rmse_m": entry["translation_rmse_m"],
+            "translation_p95_m": entry["translation_p95_m"],
+            "yaw_rmse_rad": entry["yaw_rmse_rad"],
+            "occupied_iou": m["occupied_iou"],
+            "offline_processing_fps": prof.get("effective_processing_fps"),
+            "map_fingerprint": entry["map"]["map_fingerprint"],
+        }
+        rows.append(row)
+    return rows
+
+
+def main():
+    p = parser()
+    a = p.parse_args()
+    validate(a, p)
+    specs = [(scene, matcher, stride, f"{scene}-{matcher}-s{stride:02d}")
+             for scene in a.scenes for matcher in a.matchers
+             for stride in a.match_strides]
+    if a.dry_run:
+        for scene, matcher, stride, label in specs:
+            print("+", " ".join(command(a, scene, matcher, stride, label)))
+        return
+    a.out_dir.mkdir(parents=True)
+    manifest = {
+        "format": "FUSFUSIONBEAMSWEEP1",
+        "source": "synthetic apartment and warehouse with independently withheld simulator truth",
+        "commit_or_binary": str(a.binary) if a.binary else "Docker test image supplied by user",
+        "scenes": a.scenes, "matchers": a.matchers,
+        "match_strides": a.match_strides,
+        "map_stride": a.map_stride, "match_every": a.match_every,
+        "field_every": a.field_every,
+        "distance_truncation_m": a.distance_truncation,
+        "commands": [],
+    }
+    rows = []
+    for scene, matcher, stride, label in specs:
+        cmd = command(a, scene, matcher, stride, label)
+        manifest["commands"].append(cmd)
+        print("+", " ".join(cmd), flush=True)
+        logfile = a.out_dir / (label + ".run.log")
+        with logfile.open("w") as f:
+            result = subprocess.run(cmd, cwd=a.repo, stdout=f,
+                                    stderr=subprocess.STDOUT, check=False)
+        if result.returncode:
+            tail = "\n".join(logfile.read_text(errors="replace").splitlines()[-25:])
+            raise RuntimeError(f"{label} failed ({result.returncode}):\n{tail}")
+        rows.extend(score_rows(a.out_dir/label, scene, matcher, stride, label, a))
+        print("Completed", label, flush=True)
+    with (a.out_dir/"scorecard.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    (a.out_dir/"manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
+    print("Scorecard:", a.out_dir/"scorecard.csv")
+
+
+if __name__ == "__main__":
+    main()
