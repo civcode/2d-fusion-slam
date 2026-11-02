@@ -147,9 +147,14 @@ async function main() {
   assert.equal(raw.element("fusion-scan-kind").textContent,"Gyro/wheel deskewed");
 
   const legacy=await launch(false,"?run=office-continuous-s01&view=lidar");
-  assert.equal(legacy.element("fusion-view").value,"slam");
-  assert.equal(legacy.element("fusion-view").rawOption.disabled,true);
-  assert.match(legacy.element("fusion-alert").textContent,/predates raw LiDAR/);
+  assert.equal(legacy.element("fusion-view").value,"lidar");
+  assert.equal(legacy.element("fusion-scan-kind").textContent,
+    "Legacy deskewed samples");
+  assert.equal(legacy.scanPoints(legacy.trace.frames[0])[0][0],2);
+  assert.equal(legacy.scanPose()[1][0],2.5,
+    "legacy deskewed points must not be drawn at a LiDAR-only pose");
+  assert.match(legacy.element("fusion-view-note").textContent,
+    /raw hits were not exported/);
   console.log("Synthetic LiDAR/SLAM replay modes, deep links and legacy fallback passed");
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
