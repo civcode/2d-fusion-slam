@@ -47,6 +47,12 @@ def main():
                    "--binary", sys.executable, "--truncations", "0.7", "1.0",
                    "--capture", "--capture-max-frames", "3", "--dry-run")
         assert b.stdout.count("--capture ") == 1
+        guarded = invoke(sweep, "--repo", root, "--log", log,
+                         "--out-dir", out, "--binary", sys.executable,
+                         "--truncations", "0.7", "1.0", "--map-stride", "1",
+                         "--support-aware", "--dry-run")
+        assert guarded.stdout.count("--support-aware") == 2
+        assert guarded.stdout.count("--map-stride 1") == 2
 
         capture = folder / "capture.csv"
         records = []
