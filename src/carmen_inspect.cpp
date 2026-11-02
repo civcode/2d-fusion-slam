@@ -43,7 +43,7 @@ int main(int argc,char** argv) {
     const std::string filename=cli_args[0];
     std::string content;
     if (filename.size() >= 3 && filename.substr(filename.size()-3)==".gz") {
-      content=read_gzip(cli_args[0]);
+      content=read_gzip(cli_args[0].c_str());
     } else {
       std::ifstream f(filename);
       if (!f) throw std::runtime_error("cannot open input file");
