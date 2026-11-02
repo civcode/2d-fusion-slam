@@ -159,6 +159,7 @@ void save_matches(const std::filesystem::path& file,
        <<",\"support_aware_skipped_hits\":"<<f.support_aware_skipped_hits
        <<",\"support_aware_stages\":"<<f.support_aware_stages
        <<",\"support_aware_accepted_stages\":"<<f.support_aware_accepted_stages
+       <<",\"support_aware_no_safe_stage\":"<<(f.support_aware_no_safe_stage?"true":"false")
        <<",\"map_inserted\":"<<(f.map_inserted?"true":"false")
        <<",\"field_ms\":"<<f.field_ms
        <<",\"match_ms\":"<<f.match_ms
@@ -255,6 +256,7 @@ void save_report(const std::filesystem::path& file,
      <<",\"support_aware_skipped_hits\":"<<result.total_support_aware_skipped_hits
      <<",\"support_aware_stages\":"<<result.total_support_aware_stages
      <<",\"support_aware_accepted_stages\":"<<result.total_support_aware_accepted_stages
+     <<",\"support_aware_no_safe_stages\":"<<result.total_support_aware_no_safe_stages
      <<",\"match_every\":"<<options.match_every
      <<",\"field_rebuild_every\":"<<options.rebuild_field_every
      <<",\"map_beam_stride\":"<<options.map_beam_stride
