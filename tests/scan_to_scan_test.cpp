@@ -30,6 +30,7 @@ int main() {
   }
   const auto first=register_consecutive_scans(previous,current);
   check(first.accepted);
+  check(first.correspondence_rank);
   check(first.forward_overlap>=.65&&first.reverse_overlap>=.65);
   check((first.previous_from_current.translation-expected.translation).norm()<.09);
   check(std::abs(slam::wrap_yaw(
