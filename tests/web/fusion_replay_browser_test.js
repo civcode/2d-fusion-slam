@@ -124,6 +124,8 @@ async function launch(withRaw,query) {
         {width:1,height:1,resolution_m:.1,origin:{x:0,y:0,yaw_rad:0}}:
       url.endsWith("/maps/gyro_wheel")?
         {width:1,height:1,resolution_m:.1,origin:{x:0,y:0,yaw_rad:0}}:
+      url.endsWith("/maps/lidar_only")?
+        {width:1,height:1,resolution_m:.1,origin:{x:0,y:0,yaw_rad:0}}:
       url.endsWith("/image.png")?{image:true}:report;
     return {ok:value!==null,status:value===null?404:200,
       json:async()=>value,blob:async()=>({size:128})};
@@ -176,6 +178,13 @@ async function main() {
   await raw.selectMap("gyro_wheel");
   assert.equal(raw.scanPose()[1][0],2.4,
     "gyro/wheel map must use gyro/wheel pose for replayed scan samples");
+  await raw.selectMap("lidar_only");
+  assert.equal(raw.element("fusion-view").value,"lidar");
+  assert.equal(raw.scanPose()[1][0],2.3);
+  await raw.selectMap("graph_optimized");
+  assert.equal(raw.element("fusion-view").value,"slam",
+    "graph map must not display raw LiDAR samples over a deskewed reconstruction");
+  assert.equal(raw.scanPose()[1][0],2.7);
   raw.setView("lidar");
   assert.equal(raw.scanPose()[1][0],2.3,
     "raw LiDAR always uses LiDAR-only poses, independent of SLAM projection");
