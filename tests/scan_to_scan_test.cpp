@@ -39,6 +39,30 @@ int main() {
   check(again.accepted);
   check((again.previous_from_current.translation-first.previous_from_current.translation).norm()<1e-12);
   check(again.previous_from_current.yaw_rad==first.previous_from_current.yaw_rad);
+  // Loop candidates sometimes see the same geometry from farther apart
+  // than consecutive frames. Only explicit loop calls may widen the
+  // displacement envelope; ordinary odometry ICP must remain bounded.
+  const Pose2 farther{{1.55,.42},.16};
+  std::vector<Eigen::Vector2d> revisited;
+  for(std::size_t i=0;i<previous.size();++i) {
+    if(i%17==0)continue;
+    revisited.push_back(slam::transform(slam::inverse(farther),previous[i]));
+  }
+  const auto narrow=register_consecutive_scans(
+      previous,revisited,farther,false);
+  check(!narrow.accepted);
+  const auto wide=register_consecutive_scans(
+      previous,revisited,farther,false,
+      {.max_translation_m=3.0,.max_rotation_rad=.6});
+  check(wide.accepted&&wide.correspondence_rank);
+  check(wide.forward_overlap>.82&&wide.reverse_overlap>.82);
+  check((wide.previous_from_current.translation-farther.translation).norm()<.07);
+  check(std::abs(slam::wrap_yaw(
+      wide.previous_from_current.yaw_rad-farther.yaw_rad))<.04);
+  const auto invalid_limits=register_consecutive_scans(
+      previous,revisited,farther,false,
+      {.max_translation_m=10.,.max_rotation_rad=.6});
+  check(!invalid_limits.accepted);
   // A single wall is geometrically insufficient for reliable 2D tracking.
   std::vector<Eigen::Vector2d> line;
   for(int i=0;i<100;++i)line.emplace_back(double(i)*.04,0.);
