@@ -47,6 +47,7 @@ struct Fr079SlamFrame {
   std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
   std::size_t support_aware_selected_hits{},support_aware_skipped_hits{};
   std::size_t support_aware_stages{},support_aware_accepted_stages{};
+  bool support_aware_no_safe_stage{};
   std::string ceres_termination{"not_run"};
   double overlap{}, robust_cost{};
   double field_ms{}, match_ms{}, insertion_ms{}, frame_ms{};
@@ -62,6 +63,7 @@ struct Fr079SlamResult {
   std::size_t total_unsuccessful_steps{};
   std::size_t total_support_aware_selected_hits{},total_support_aware_skipped_hits{};
   std::size_t total_support_aware_stages{},total_support_aware_accepted_stages{};
+  std::size_t total_support_aware_no_safe_stages{};
   bool used_ceres{};
   bool used_support_aware_ceres{};
   // No graph constraints from correlated scan-to-map results or logged poses.
