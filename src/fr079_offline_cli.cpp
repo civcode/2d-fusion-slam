@@ -148,6 +148,10 @@ void save_matches(const std::filesystem::path& file,
        <<",\"overlap\":"<<f.overlap
        <<",\"robust_cost\":"<<f.robust_cost
        <<",\"ceres_invalid_residual_evaluations\":"<<f.ceres_invalid_residual_evaluations
+       <<",\"ceres_invalid_unknown_cells\":"<<f.ceres_invalid_unknown_cells
+       <<",\"ceres_invalid_truncated\":"<<f.ceres_invalid_truncated
+       <<",\"ceres_invalid_outside_grid\":"<<f.ceres_invalid_outside_grid
+       <<",\"ceres_invalid_other\":"<<f.ceres_invalid_other
        <<",\"ceres_unsuccessful_steps\":"<<f.ceres_unsuccessful_steps
        <<",\"ceres_successful_steps\":"<<f.ceres_successful_steps
        <<",\"ceres_termination\":\""<<f.ceres_termination<<"\""
@@ -238,6 +242,10 @@ void save_report(const std::filesystem::path& file,
      <<",\"matcher\":\""<<(result.used_ceres?"ceres":"geometry_reference_fallback")<<"\""
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
      <<",\"ceres_invalid_residual_evaluations\":"<<result.total_invalid_residual_evaluations
+     <<",\"ceres_invalid_unknown_cells\":"<<result.total_invalid_unknown_cells
+     <<",\"ceres_invalid_truncated\":"<<result.total_invalid_truncated
+     <<",\"ceres_invalid_outside_grid\":"<<result.total_invalid_outside_grid
+     <<",\"ceres_invalid_other\":"<<result.total_invalid_other
      <<",\"ceres_unsuccessful_steps\":"<<result.total_unsuccessful_steps
      <<",\"match_every\":"<<options.match_every
      <<",\"field_rebuild_every\":"<<options.rebuild_field_every
