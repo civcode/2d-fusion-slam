@@ -27,6 +27,7 @@ struct ScanToScanResult {
 [[nodiscard]] ScanToScanResult register_consecutive_scans(
     const std::vector<Eigen::Vector2d>& previous,
     const std::vector<Eigen::Vector2d>& current,
-    Pose2 initial_previous_from_current = {});
+    Pose2 initial_previous_from_current = {},
+    bool wide_initial_search = true);
 
 } // namespace slam::matching
