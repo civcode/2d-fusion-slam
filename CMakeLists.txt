@@ -274,6 +274,13 @@ if(ZLIB_FOUND AND OpenSSL_FOUND)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_capture_test.py"
         "$<TARGET_FILE:slam_fr079_offline>")
     set_tests_properties(fr079_capture_benchmark PROPERTIES TIMEOUT 240)
+    if(TARGET slam_match_ceres)
+      add_test(NAME fr079_support_aware
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_support_aware_test.py"
+          "$<TARGET_FILE:slam_fr079_offline>")
+      set_tests_properties(fr079_support_aware PROPERTIES TIMEOUT 240)
+    endif()
     add_test(NAME fr079_benchmark_tools
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_benchmark_tools_test.py")
