@@ -203,6 +203,9 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
   need(size_array(stamps,n,"timestamp series too long")==n&&
        size_array(frames,n,"replay series too long")==n,
        "fusion timestamp and replay frame count mismatch");
+  // Raw samples are an all-or-none export version, never a partial
+  // mixture that would make the UI change sensor provenance mid-replay.
+  const bool has_raw_points=frames.at(std::size_t{0}).has("raw_points_laser");
   const auto& truth=p.at("synthetic_truth_for_scoring");
   need(size_array(truth,n,"invalid scoring-only synthetic truth")==n,
        "reference/trajectory count mismatch");
@@ -235,10 +238,13 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
     }
     // Optional raw LiDAR points (new exporter). Older traces carry only
     // deskewed points and remain readable as SLAM replays.
-    if(frame.has("raw_points_laser")) {
+    need(frame.has("raw_points_laser")==has_raw_points,
+         "inconsistent raw LiDAR field availability across frames");
+    if(has_raw_points) {
       const auto& raw=frame.at("raw_points_laser");
-      need(size_array(raw,720,"excessive raw LiDAR replay points")<=hits,
-           "raw replay hit count exceeds physical hits");
+      need(size_array(raw,720,"excessive raw LiDAR replay points")<=hits &&
+           raw.array.size()==points.array.size(),
+           "raw replay sample count does not match deskewed hit cohort");
       for(const auto& pt:raw.array) {
         need(size_array(pt,2,"invalid raw LiDAR hit point")==2,
              "raw hit must be XY");
