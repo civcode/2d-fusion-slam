@@ -96,9 +96,19 @@ def command(a, tag, mode, stride, phase):
     return [str(a.binary), str(a.log), str(a.out_dir / tag), *options]
 
 
-def execute(cmd, cwd):
+def execute(cmd, cwd, logfile=None):
     print("+", " ".join(cmd), flush=True)
-    subprocess.run(cmd, cwd=cwd, check=True)
+    if logfile is None:
+        subprocess.run(cmd, cwd=cwd, check=True)
+        return
+    # Legacy Ceres can emit hundreds of thousands of repeated warnings.
+    # Keep the complete evidence without flooding the terminal.
+    with logfile.open("w", encoding="utf-8") as out:
+        process = subprocess.run(cmd, cwd=cwd, stdout=out,
+                                 stderr=subprocess.STDOUT, check=False)
+    if process.returncode:
+        tail = "\n".join(logfile.read_text(errors="replace").splitlines()[-30:])
+        raise RuntimeError(f"run failed ({process.returncode}), see {logfile}:\n{tail}")
 
 
 def write_csv(path, rows, fields):
@@ -122,7 +132,7 @@ def audit_frames(tag, mode, stride, phase, frames, poses):
             raise ValueError(f"{tag}: invalid residual cohort or beam count at {i}")
         if frame["accepted"] and not frame["candidate_evaluated"]:
             raise ValueError(f"{tag}: accepted correction with no candidate at {i}")
-        if attempted and mode == "continuous" and frame["ceres_invalid_residual_evaluations"]:
+        if attempted and mode != "legacy" and frame["ceres_invalid_residual_evaluations"]:
             raise ValueError(f"{tag}: continuous solver emitted invalid residuals")
         candidate = frame["candidate_evaluated"]
         row = dict(tag=tag, mode=mode, stride=stride, phase=phase,
@@ -264,7 +274,7 @@ def main():
     for tag, mode, stride, phase in specs:
         cmd = command(a, tag, mode, stride, phase)
         manifest["commands"].append(cmd)
-        execute(cmd, a.repo)
+        execute(cmd, a.repo, a.out_dir / (tag + ".run.log"))
         row, frames = summary(a, tag, mode, stride, phase, a.out_dir / tag)
         summaries.append(row)
         audits[(mode, stride, phase)] = frames
