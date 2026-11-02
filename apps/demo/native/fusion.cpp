@@ -336,6 +336,19 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
          r.at("graph_lidar_loop_registration_attempted").uint()>=
              r.at("graph_lidar_loop_registration_verified").uint(),
          "LiDAR loop source/diagnostics inconsistent");
+    if(r.has("graph_lidar_loop_nearby_pairs")&&
+       r.has("graph_lidar_loop_geometry_verified")&&
+       r.has("graph_lidar_loop_redundant_suppressed")) {
+      const auto nearby=r.at("graph_lidar_loop_nearby_pairs").uint();
+      const auto attempts=r.at("graph_lidar_loop_registration_attempted").uint();
+      const auto geometries=r.at("graph_lidar_loop_geometry_verified").uint();
+      const auto redundant=r.at("graph_lidar_loop_redundant_suppressed").uint();
+      const auto factors=r.at("graph_lidar_loop_registration_verified").uint();
+      need(nearby>=attempts&&attempts>=geometries&&
+           geometries==factors+redundant&&
+           factors<=8&&attempts<=8*n,
+           "LiDAR candidate coverage and redundancy counts inconsistent");
+    }
   }
   need(accepted==r.at("heldout_accepted").uint() &&
        rejected==r.at("heldout_rejected").uint() &&
