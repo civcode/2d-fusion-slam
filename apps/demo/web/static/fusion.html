@@ -19,6 +19,11 @@
 <label>Replay view<select id="fusion-view" aria-label="LiDAR or SLAM replay"><option value="slam" selected>SLAM replay · deskewed</option><option value="lidar">LiDAR replay · scan hits</option></select></label>
 <label>Offline fusion run<select id="fusion-runs"><option value="">Scanning run directory…</option></select></label>
 <label>Final occupancy overlay<select id="fusion-map"><option value="">None — observation trail only</option></select></label>
+<label>Scan-point trajectory<select id="fusion-projection" aria-label="Estimated pose source for scan points">
+<option value="fused_scan_matched" selected>Scan-matched fusion</option>
+<option value="graph_optimized">Graph optimized</option>
+<option value="gyro_wheel">Gyro + wheel</option>
+</select></label>
 <a id="fusion-open-map" class="back-map" href="/" title="Open selected final fusion map in the Map Explorer">▦ Explore fusion map</a>
 <button type="button" id="fusion-fit">Fit scene</button><button type="button" id="fusion-refresh">↻ Refresh</button>
 </div>
@@ -46,7 +51,7 @@
 <label><input type="checkbox" id="fusion-history" checked> Accumulated hit samples</label>
 <label><input type="checkbox" id="fusion-edges" checked> Loop edges</label>
 </div>
-<div class="fusion-map-note" id="fusion-view-note" role="status">SLAM replay: gyro/wheel deskewed LiDAR endpoints follow the scan-matched estimated trajectory.</div>
+<div class="fusion-map-note" id="fusion-view-note" role="status">SLAM replay: gyro/wheel deskewed hits projected onto the selected estimated trajectory. Choosing a graph-optimized overlay uses its corrected poses.</div>
 <div class="fusion-map-note" id="fusion-map-note">Accumulated points are measured returns, not a reconstructed occupancy snapshot. Final map overlays are post-run results.</div>
 <div class="transport">
 <button type="button" id="fusion-play" disabled>▶ Play</button>
