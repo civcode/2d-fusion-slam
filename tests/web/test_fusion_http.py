@@ -188,6 +188,17 @@ class FusionHTTP(unittest.TestCase):
             path.write_bytes(before)
         self.assertEqual(self.get_json(base + "/replay")["format"],
                          "FUSFUSREPLAY1")
+        # Existing benchmark artifacts predate raw_points_laser. The
+        # validated native endpoint must still serve their deskewed replay.
+        try:
+            old = json.loads(before)
+            for frame in old["frames"]:
+                frame.pop("raw_points_laser", None)
+            path.write_text(json.dumps(old))
+            self.assertEqual(len(self.get_json(base + "/replay")["frames"]),
+                             old["frame_count"])
+        finally:
+            path.write_bytes(before)
 
     def test_tuned_matching_cadence_replay_is_readable(self):
         # The viewer must distinguish skipped odd-index matching queries
