@@ -356,6 +356,75 @@ class OfflineFusionExperiment(unittest.TestCase):
                                     (row["status"] == "accepted")
                                     for row in audit["frames"]))
 
+    def test_lidar_prediction_precedes_edt_and_is_isolated(self):
+        # These controlled scenes can be evaluated after localization; their
+        # synthetic truth is never given to a registration or motion predictor.
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                prior=pathlib.Path(root)/"prior"
+                predicted=pathlib.Path(root)/"predict"
+                common=("--lidar-only-bootstrap", "--match-stride", "1")
+                for folder, flags in (
+                    (prior,common),
+                    (predicted,common+("--lidar-only-predict-first",)),
+                ):
+                    process=run(EXE,scene,str(folder),*flags)
+                    self.assertEqual(process.returncode,0,process.stderr)
+                old=json.loads((prior/"fusion_report.json").read_text())
+                new=json.loads((predicted/"fusion_report.json").read_text())
+                self.assertFalse(old["lidar_only_predict_first"])
+                self.assertTrue(new["lidar_only_predict_first"])
+                self.assertTrue(new["lidar_only_bootstrap"])
+                self.assertGreater(new["lidar_only_accepted"],0)
+                self.assertEqual(
+                    new["lidar_only_accepted"],
+                    new["lidar_only_edt_accepted"]+
+                    new["lidar_only_bootstrap_accepted"])
+                self.assertEqual(
+                    new["lidar_only_bootstrap_attempted"],
+                    new["lidar_only_bootstrap_accepted"]+
+                    new["lidar_only_bootstrap_rejected"])
+                self.assertLessEqual(
+                    new["lidar_only_predicted_edt_accepted"],
+                    new["lidar_only_edt_accepted"])
+                for name in ("wheel_only","gyro_wheel","fused_scan_matched"):
+                    self.assertEqual(
+                        old["results"][name]["map"]["map_fingerprint"],
+                        new["results"][name]["map"]["map_fingerprint"])
+                paths_before=json.loads((prior/"trajectories.json").read_text())
+                paths_after=json.loads((predicted/"trajectories.json").read_text())
+                for name in paths_before["paths"]:
+                    if name!="lidar_only":
+                        self.assertEqual(
+                            paths_before["paths"][name],paths_after["paths"][name])
+                audit=json.loads(
+                    (predicted/"lidar_only_match_audit.json").read_text())
+                self.assertTrue(audit["lidar_only_predict_first"])
+                self.assertEqual(audit["attempts"],new["frames"]-1)
+                self.assertTrue(all(
+                    row["used_scan_prediction"] for row in audit["frames"]))
+                self.assertEqual(
+                    sum(row["registration_method"]=="edt_predicted"
+                        for row in audit["frames"]),
+                    new["lidar_only_predicted_edt_accepted"])
+                self.assertEqual(
+                    sum(row["edt_prediction_disagreed"] for row in audit["frames"]),
+                    new["lidar_only_edt_prediction_disagreements"])
+                self.assertTrue(all(
+                    row["predicted_edt_translation_delta_m"]<=.12+1e-9 and
+                    row["predicted_edt_yaw_delta_rad"]<=.075+1e-9
+                    for row in audit["frames"]
+                    if row["registration_method"]=="edt_predicted"))
+                # The first warehouse scan's independent synthetic motion
+                # is ~0.303 m. It is checked AFTER the run, never seeded.
+                if scene=="warehouse":
+                    t=paths_after["synthetic_truth_for_scoring"]
+                    e=paths_after["paths"]["lidar_only"]
+                    actual=math.hypot(t[1][0]-t[0][0],t[1][1]-t[0][1])
+                    recovered=math.hypot(e[1][0]-e[0][0],e[1][1]-e[0][1])
+                    self.assertAlmostEqual(actual,.303,delta=.02)
+                    self.assertAlmostEqual(recovered,actual,delta=.10)
+
     def test_continuous_cost_for_both_scenes_or_fail_closed(self):
         for scene in ("apartment", "warehouse"):
             with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
@@ -377,7 +446,7 @@ class OfflineFusionExperiment(unittest.TestCase):
                                  report["heldout_skipped"], report["frames"] // 2)
 
     def test_tuning_rejects_invalid_options_before_writing(self):
-        bad = (("--match-every", "0"), ("--match-every", "201"),
+        bad = (("--lidar-only-predict-first",), ("--match-every", "0"), ("--match-every", "201"),
                ("--match-stride", "0"), ("--match-stride", "65"),
                ("--map-stride", "-1"), ("--field-every", "0"),
                ("--distance-truncation", "nan"),
