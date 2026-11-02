@@ -47,13 +47,15 @@ def window_statistics(before, after, truth, begin, end):
             max(displacements), sum(displacements)/len(displacements))
 
 
-def compare(baseline: Path, with_loops: Path):
+def compare(baseline: Path, with_loops: Path, *, allow_loop_baseline=False):
     old, old_paths, _ = load(baseline)
     new, new_paths, new_replay = load(with_loops)
     if old["scene"] != new["scene"] or old["frames"] != new["frames"]:
         raise ValueError("different scene or trajectory length")
-    if old.get("lidar_loop_closure") or not new.get("lidar_loop_closure"):
-        raise ValueError("expected baseline without and experiment with LiDAR loops")
+    if not new.get("lidar_loop_closure") or (
+            old.get("lidar_loop_closure") and not allow_loop_baseline):
+        raise ValueError("expected baseline without and experiment with LiDAR loops; "
+                         "pass --allow-loop-baseline to compare two closure versions")
     for method in ("wheel_only", "lidar_only", "gyro_wheel",
                    "fused_scan_matched"):
         if (old["results"][method]["map"]["map_fingerprint"] !=
@@ -69,13 +71,19 @@ def compare(baseline: Path, with_loops: Path):
         raise ValueError("graph loop replay/report count mismatch")
     print(f"Scene: {new['scene']} · frames: {new['frames']}")
     print("Non-graph paths and map fingerprints: unchanged")
+    if old.get("lidar_loop_closure"):
+        print(f"Previous loop-enabled run: {old['graph_accepted_loops']} "
+              "accepted constraints (algorithm-version comparison)")
+    else:
+        print("Baseline loop detector: disabled (controlled no-loop comparison)")
     print(f"Pose-nearby revisit pairs: {new.get('graph_lidar_loop_nearby_pairs', 'not recorded')}")
     print(f"LiDAR ICP pair checks: {new['graph_lidar_loop_registration_attempted']}")
     print(f"Strict geometry passes: {new.get('graph_lidar_loop_geometry_verified', 'not recorded')}")
     print(f"Redundant proposals suppressed: {new.get('graph_lidar_loop_redundant_suppressed', 'not recorded')}")
     print(f"Nonredundant graph proposals: {new['graph_lidar_loop_registration_verified']}")
     print(f"Graph accepted loops: {new['graph_accepted_loops']} / {new['graph_loop_candidates']}")
-    print(f"{'Metric':38} {'No LiDAR loops':>16} {'LiDAR loops':>16}")
+    old_label = "Earlier loop mode" if old.get("lidar_loop_closure") else "No LiDAR loops"
+    print(f"{'Metric':38} {old_label:>16} {'New LiDAR loops':>16}")
     for label, method in (("Graph translation RMSE (m)", "translation_rmse_m"),
                           ("Graph map occupied IoU", "occupied_iou")):
         old_value = (old["results"]["graph_optimized"].get(method)
@@ -147,8 +155,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--loops", type=Path, required=True)
+    parser.add_argument("--allow-loop-baseline", action="store_true",
+                        help="Explicitly compare an older loop-enabled run "
+                             "with a newer loop-enabled run; not a no-loop A/B")
     args = parser.parse_args()
-    compare(args.baseline, args.loops)
+    compare(args.baseline, args.loops,
+            allow_loop_baseline=args.allow_loop_baseline)
 
 
 if __name__ == "__main__":
