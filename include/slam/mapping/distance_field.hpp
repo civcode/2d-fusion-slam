@@ -32,6 +32,7 @@ class MapSnapshot final {
   std::vector<Cell> cells_;
 };
 
+enum class DistanceSupport { supported, no_obstacles, invalid_input, outside_grid, unknown_cells, truncated };
 struct DistanceSample {
   double metres{};
   Eigen::Vector2d gradient_map{Eigen::Vector2d::Zero()}; // metres per map metre
@@ -51,6 +52,7 @@ class DistanceField final {
   // Bilinear interpolation only with all four observed cells and an
   // informative (nontruncated) distance. Unknown or outside never becomes 0.
   [[nodiscard]] std::optional<DistanceSample> sample_map(const Eigen::Vector2d& point) const noexcept;
+  [[nodiscard]] DistanceSupport support_map(const Eigen::Vector2d& point) const noexcept;
 
  private:
   DistanceField(std::shared_ptr<const MapSnapshot> source, double truncation,
