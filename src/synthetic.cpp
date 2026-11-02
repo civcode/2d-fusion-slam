@@ -114,7 +114,7 @@ Scene atrium() {
 Scene industrial() {
   Scene scene{"synthetic-industrial-v1", {}};
   rectangle(scene,0,0,30,20);
-  rectangle(scene,4.0,4.0,7.0,7.0);
+  rectangle(scene,7.0,5.0,10.0,8.0);
   rectangle(scene,8.5,11.0,10.0,15.8);
   rectangle(scene,13.0,5.2,18.0,7.0);
   rectangle(scene,19.5,10.3,24.5,13.2);
