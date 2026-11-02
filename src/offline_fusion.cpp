@@ -601,7 +601,11 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
         gate.minimum_overlap=.45;
         const auto support=slam::matching::evaluate_geometry(
             *cached_field,matching_hits,proposed_laser,gate);
-        if(support.supported_hits>=gate.min_supported_hits&&
+        // Predict-first already evaluated EDT at this registered pose.
+        // Do not re-run it here: that would bypass the explicit disagreement
+        // gate and silently apply a correction we just rejected.
+        if(!options.lidar_only_predict_first&&
+           support.supported_hits>=gate.min_supported_hits&&
            support.overlap>=gate.minimum_overlap&&support.full_rank) {
           const auto refined=match(cached_field,matching_hits,proposed_laser,options);
           if(qualified(refined,*cached_snapshot,proposed_laser,.32)&&
@@ -647,7 +651,7 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     } else {
       out.poses.push_back(out.poses.back());
       ++out.rejected;
-      ++out.rejections[rejection_reason(candidate.status)];
+      ++out.rejections[evidence.reason];
       // An unlocalized moving scan is never inserted into the occupancy map.
     }
   }
