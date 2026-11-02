@@ -29,6 +29,7 @@ struct LoopCandidate {
   std::size_t supported_hits{};
   double overlap{};
   bool full_rank{};
+  double registration_error_m{}; // diagnostic, not a covariance estimate
   // These are quality tests, NOT an independent covariance measurement.
   // LiDAR scan registration is reused sensor evidence (not an independent
   // source of calibrated relative motion); its factor is conservatively
