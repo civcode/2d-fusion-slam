@@ -321,6 +321,10 @@ selection separate from map-beam insertion. The opt-in
 `--lidar-only-bootstrap` flag adds gated LiDAR-to-LiDAR scan registration
 when the incremental map cannot yet supply sufficient strict EDT support,
 with strict Ceres refinement when observed geometry becomes usable.
+For the LiDAR-predicted Ceres experiment, add
+`--lidar-only-predict-first` together with `--lidar-only-bootstrap`;
+this mode seeds EDT/Ceres with a LiDAR-derived relative pose and rejects
+inconsistent Ceres corrections rather than optimizing from a stale pose.
 The default remains unchanged; any bootstrap gain must be validated
 against independent synthetic trajectory and map scores.
 
