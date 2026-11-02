@@ -71,6 +71,8 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
   const auto initial = evaluate_geometry(*field, points, seed, settings);
   result.diagnostics = initial;
   result.seed_supported_hits=initial.supported_hits;
+  result.seed_overlap=initial.overlap;
+  result.seed_full_rank=initial.full_rank;
   result.seed_strict_cost=initial.robust_cost;
   result.seed_finite_cost=fixed_continuous_cost(*field,points,seed,settings);
   if (initial.supported_hits < settings.min_supported_hits ||
@@ -410,6 +412,8 @@ MatchResult match_ceres_continuous_ablation(
   const auto initial=evaluate_geometry(*field,points,seed,settings);
   result.diagnostics=initial;
   result.seed_supported_hits=initial.supported_hits;
+  result.seed_overlap=initial.overlap;
+  result.seed_full_rank=initial.full_rank;
   result.seed_strict_cost=initial.robust_cost;
   result.seed_finite_cost=fixed_continuous_cost(*field,points,seed,settings);
   if(initial.supported_hits<settings.min_supported_hits||
