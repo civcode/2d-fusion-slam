@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.25)
 project(fusion_slam VERSION 0.1.0 LANGUAGES CXX)
 
+# Pin the command-line parser. FetchContent is intentionally unconditional:
+# all native CLI binaries (including small inspectors) use this target.
+include(FetchContent)
+set(CXXOPTS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CXXOPTS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CXXOPTS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(cxxopts
+  GIT_REPOSITORY https://github.com/jarro2783/cxxopts.git
+  GIT_TAG v3.3.1
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(cxxopts)
+
+
 # Ubuntu 24.04's stable APT packages contain GTSAM 4.2 and Catch2 3.4.
 # Keep the existing GTSAM 4.3 / Catch2 3.16 development baseline unless
 # the distro-profile is explicitly selected (for example, by Docker).
@@ -699,3 +712,24 @@ if(BUILD_TESTING)
     add_test(NAME core_catch2 COMMAND slam_core_catch2)
   endif()
 endif()
+
+
+# CLI-only dependency: no core SLAM library or non-CLI unit test links cxxopts.
+foreach(_slam_cli IN ITEMS
+  slam_carmen_inspect
+  slam_carmen_map_inspect
+  slam_fr079_alignment_inspect
+  slam_fr079_train_only_benchmark
+  slam_fr079_offline
+  slam_ceres_replay_export
+  slam_map_inspect
+  fusion_slam_demo
+  slam_map_accuracy_cli
+  slam_synthetic_eval_fixture
+  slam_synthetic_mapping_benchmark
+  slam_fr079_map_export
+  slam_offline_fusion)
+  if(TARGET ${_slam_cli})
+    target_link_libraries(${_slam_cli} PRIVATE cxxopts::cxxopts)
+  endif()
+endforeach()
