@@ -19,6 +19,7 @@ struct Fr079SlamOptions {
   double map_margin_m{21.0};
   std::size_t map_beam_stride{3};
   std::size_t match_beam_stride{4};
+  std::size_t match_beam_phase{0}; // original-ray index offset; < match_beam_stride
   std::size_t match_every{5};
   std::size_t rebuild_field_every{15};
   double distance_truncation_m{0.70};
