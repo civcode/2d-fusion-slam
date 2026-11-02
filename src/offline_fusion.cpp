@@ -270,6 +270,7 @@ struct Matched {
   std::vector<slam::matching::MatchResult> outcomes;
   Mask accepted_mask; // passed *all* source/rank/innovation gates
   std::size_t attempted{},accepted{},rejected{},skipped{};
+  std::size_t matching_input_hits_total{};
   std::string backend;
   std::map<std::string,std::size_t> rejections;
 };
@@ -359,8 +360,10 @@ Matched match_heldout(const Simulation& sim,const Prepared& p,
     if(((i-1)/2)%options.match_every!=0){++result.skipped;continue;}
     slam::fusion::PipelineProfiler::Scope timing(profiler,"heldout_scan_match",i,true);
     const Pose2 seed=slam::compose(p.gyro_wheel[i],kBaseFromLaser);
-    auto candidate=match(field,
-      sample_matching_hits(p.gyro_deskewed[i],options.match_stride),seed,options);
+    const auto matching_hits=sample_matching_hits(
+        p.gyro_deskewed[i],options.match_stride);
+    result.matching_input_hits_total+=matching_hits.size();
+    auto candidate=match(field,matching_hits,seed,options);
     ++result.attempted;
     if(qualified(candidate,*frozen.snapshot,seed)){
       // Convert matched laser pose back into map-from-base exactly.
@@ -380,6 +383,7 @@ struct LidarOnly {
   std::vector<Pose2> poses;
   Mask mapped;
   std::size_t accepted{},rejected{},skipped{},field_rebuilds{};
+  std::size_t matching_input_hits_total{};
   std::map<std::string,std::size_t> rejections;
 };
 LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
@@ -414,8 +418,10 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     }
     // No wheel, gyro or ground-truth seed; only previous accepted laser pose.
     const auto seed=slam::compose(out.poses.back(),kBaseFromLaser);
-    const auto candidate=match(cached_field,
-      sample_matching_hits(p.raw_lidar[i],options.match_stride),seed,options);
+    const auto matching_hits=sample_matching_hits(
+        p.raw_lidar[i],options.match_stride);
+    out.matching_input_hits_total+=matching_hits.size();
+    const auto candidate=match(cached_field,matching_hits,seed,options);
     if(qualified(candidate,*cached_snapshot,seed,.65)) {
       const auto base=slam::compose(candidate.map_from_laser,
                                    slam::inverse(kBaseFromLaser));
@@ -656,6 +662,7 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
       const auto& d=result.diagnostics;
       out<<",\"supported_hits\":"<<d.supported_hits
          <<",\"input_hits\":"<<d.input_hits
+         <<",\"solver_residual_blocks\":"<<result.solver_residual_blocks
          <<",\"overlap\":"<<(std::isfinite(d.overlap)?d.overlap:0)
          <<",\"full_rank\":"<<(d.full_rank?"true":"false")
          <<",\"training_map_fingerprint\":\""<<d.source_fingerprint<<"\"";
@@ -750,6 +757,8 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"match_stride\":"<<options.match_stride<<","
      <<"\n\"distance_truncation_m\":"<<options.distance_truncation_m<<","
      <<"\n\"heldout_skipped\":"<<matched.skipped<<","
+     <<"\n\"heldout_matching_input_hits_total\":"<<matched.matching_input_hits_total<<","
+     <<"\n\"lidar_only_matching_input_hits_total\":"<<lidar.matching_input_hits_total<<","
      <<"\n\"heldout_attempted\":"<<matched.attempted<<","
      <<"\n\"heldout_accepted\":"<<matched.accepted<<","
      <<"\n\"heldout_rejected\":"<<matched.rejected<<","
