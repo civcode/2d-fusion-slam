@@ -17,6 +17,8 @@ int main(int argc,char** argv) {
   if(parsed.help){std::cout<<parsed.usage;return 0;}
   const auto& cli_args=parsed.values;
   if(cli_args.size()==2){std::cerr<<"width and height must be provided together\n";return 2;}
+  gzFile gz=gzopen(cli_args[0].c_str(),"rb");
+  if(!gz){std::cerr<<"cannot open CARMEN map\n";return 1;}
   try {
    std::vector<std::uint8_t> bytes;
    unsigned char chunk[8192];int n=0;
