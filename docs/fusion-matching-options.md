@@ -14,6 +14,7 @@ change the independent simulator reference used only for scoring.
 | `--match-stride N` | 1 | Match every Nth **valid** deskewed or raw hit; does not change mapping beams. A 240-bin synthetic scan has at most 240/N matching hits. |
 | `--distance-truncation METRES` | 0.7 | EDT truncation in both frozen and incremental matchers (0.2–3.0 m). |
 | `--continuous-cost` | off | Use `match_ceres_continuous` for **both** matchers; requires Ceres, and fails instead of silently selecting the reference implementation if unavailable. |
+| `--lidar-only-bootstrap` | off | Enable conservative scan-to-scan registration for the LiDAR-only baseline, with strict EDT refinement when real map support becomes available; other map variants remain unchanged. |
 
 Cadences are integers 1–200 and strides are integers 1–64. Invalid
 values fail before an output directory is created. Without flags,
@@ -136,6 +137,97 @@ candidate must still satisfy rank, support, motion-bound and finite
 fixed-cohort improvement checks, and improve **independent** synthetic
 trajectory/map scores. A large number of supported candidates can
 also indicate ambiguity, not reliable localization.
+
+## Opt-in LiDAR-only scan-to-scan bootstrap
+
+The initial strict support audit found that **all 129 apartment** and
+**all 194 warehouse** LiDAR-only matching attempts failed **before Ceres
+ran**. Their seed overlap was only 3.8–10% for the first three frames;
+none of the 1,521 nearby poses tested per frame reached 45% strict EDT
+support. Expanding the Ceres pose box or lowering the global EDT support
+gate would not solve this initial-map geometry problem responsibly.
+
+`--lidar-only-bootstrap` provides a separate, experimental LiDAR-only
+bootstrap that uses neither wheel/gyro odometry nor simulator truth:
+
+1. Preserve the existing EDT/Ceres matcher as first choice at the
+   previously accepted pose; no changes occur without the new flag.
+2. If that match fails, register the **current raw LiDAR hit cloud**
+   against the **last accepted raw LiDAR scan**, using deterministic
+   trimmed nearest-neighbor rigid SE(2) registration. Three yaw seeds
+   (`0, ±0.12 rad` relative to the previous accepted LiDAR-derived
+   scan-to-scan displacement) are evaluated.
+3. Reject registrations that have fewer than 24 valid hits,
+   degenerate 2D point-cloud covariance, insufficient reciprocal
+   within-30-cm inliers (minimum **65% in both directions**),
+   excessive inlier RMS error (**0.20 m**), or excessive displacement
+   (translation **0.90 m**, yaw **0.32 rad** per accepted registration).
+4. When a registered pose has genuine strict EDT support (minimum 18
+   observed hits, **45% overlap**, full rank), try the existing
+   Ceres matcher for further refinement, preserving its normal
+   qualification gates and limiting disagreement from the scan-to-scan
+   candidate. Otherwise, continue with the validated scan-pair pose.
+5. Insert a scan into the incremental map **only after accepting** its
+   LiDAR-derived pose. Keep the last accepted scan and relative
+   transformation as the next bootstrap reference. Unlocalized scans
+   are still excluded from occupancy.
+
+This is not a globally verified solution to scan matching. Repetitive
+warehouse geometry, partial visibility and nearest-neighbor ambiguity
+can still cause drift. **Independent synthetic map/trajectory scores
+must improve before considering any default change.** The existing
+`wheel_only`, `gyro_wheel`, `fused_scan_matched`, and optional
+graph maps must remain invariant to toggling LiDAR-only bootstrap.
+
+### Run one controlled experiment
+
+~~~bash
+docker compose build test
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R 'scan_to_scan_bootstrap|offline_fusion|fusion_match_beam_tools|fusion_replay_http'
+
+for scene in apartment warehouse; do
+  docker compose run --rm \
+    -v "$PWD/apps/demo/fusion:/fusion" \
+    --entrypoint ./build-docker/slam_offline_fusion test \
+    "$scene" "/fusion/${scene}-bootstrap-$(date +%Y%m%d-%H%M%S)" \
+    --match-every 1 --field-every 1 --map-stride 1 \
+    --match-stride 1 --distance-truncation 0.7 \
+    --lidar-only-bootstrap
+done
+~~~
+
+The `fusion_report.json` records
+`lidar_only_bootstrap_attempted`, `lidar_only_bootstrap_accepted`,
+`lidar_only_bootstrap_rejected`, `lidar_only_edt_accepted`,
+and `lidar_only_edt_refined_accepted`. Each frame in
+`lidar_only_match_audit.json` records
+`registration_method` (`none`, `edt`, `scan_to_scan`, or
+`edt_refined`), reciprocal overlaps, inlier RMS, and relative motion.
+The original seed-only EDT support diagnostics remain available.
+
+### Repeat the complete matching-beam sweep
+
+Use a **new** output directory; do not overwrite the original
+`benchmarks/fusion-beams-001`.
+
+~~~bash
+python tools/fusion_match_beam_sweep.py \
+  --repo "$PWD" --out-dir benchmarks/fusion-beams-bootstrap-001 \
+  --docker --scenes apartment warehouse \
+  --matchers legacy continuous \
+  --map-stride 1 --match-every 1 --field-every 1 \
+  --distance-truncation 0.7 --match-strides 1 2 3 4 6 8 \
+  --lidar-only-bootstrap
+~~~
+
+The new scorecard reports actual mean matching-beam counts, separate
+scan-to-scan bootstrap acceptance, EDT-only acceptance and EDT-refined
+acceptance, trajectory RMSE, occupied IoU and performance. Compare rows
+with the matching scene/matcher/stride from the original sweep. A high
+acceptance count is **not sufficient** if independent map agreement,
+translation RMSE, or timing worsens.
 
 ## Multi-scene matching-beam benchmark
 
