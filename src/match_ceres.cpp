@@ -314,8 +314,10 @@ namespace {
 class ContinuousHitCost final : public ceres::SizedCostFunction<1,3> {
  public:
   ContinuousHitCost(const mapping::DistanceField& field,Eigen::Vector2d point,
-                    double sigma,std::array<std::atomic<std::size_t>,4>& counts)
-      : field_(field),point_(std::move(point)),sigma_(sigma),counts_(counts) {}
+                    double sigma,std::array<std::atomic<std::size_t>,4>& counts,
+                    std::atomic<std::size_t>& invalid)
+      : field_(field),point_(std::move(point)),sigma_(sigma),
+        counts_(counts),invalid_(invalid) {}
   bool Evaluate(double const* const* params,double* residuals,
                 double** jacobians) const override {
     const double* p=params[0];
@@ -324,8 +326,15 @@ class ContinuousHitCost final : public ceres::SizedCostFunction<1,3> {
       p[0]+c*point_.x()-s*point_.y(),
       p[1]+s*point_.x()+c*point_.y()};
     // Ceres parameter boxes are finite; fail closed for unexpected NaNs.
-    if(!world.allFinite())return false;
+    if(!world.allFinite()){
+      invalid_.fetch_add(1,std::memory_order_relaxed);
+      return false;
+    }
     const auto value=field_.sample_matching_cost(world);
+    if(!std::isfinite(value.metres)||!value.gradient_map.allFinite()){
+      invalid_.fetch_add(1,std::memory_order_relaxed);
+      return false;
+    }
     switch(field_.support_map(world)){
       case mapping::DistanceSupport::supported:break;
       case mapping::DistanceSupport::unknown_cells:
@@ -352,6 +361,7 @@ class ContinuousHitCost final : public ceres::SizedCostFunction<1,3> {
   Eigen::Vector2d point_;
   double sigma_;
   std::array<std::atomic<std::size_t>,4>& counts_;
+  std::atomic<std::size_t>& invalid_;
 };
 
 // Match the same input beam cohort and the same Huber loss at both poses.
@@ -397,13 +407,14 @@ MatchResult match_ceres_continuous(
 
   double pose[3]{seed.translation.x(),seed.translation.y(),seed.yaw_rad};
   std::array<std::atomic<std::size_t>,4> finite_unsupported{};
+  std::atomic<std::size_t> unexpected_invalid{0};
   ceres::Problem problem;
   std::size_t inserted=0;
   for(const auto& point:points){
     if(!point.allFinite())continue;
     problem.AddResidualBlock(
         new ContinuousHitCost(*field,point,settings.sigma_metres,
-                              finite_unsupported),
+                              finite_unsupported,unexpected_invalid),
         new ceres::HuberLoss(settings.huber_delta),pose);
     ++inserted;
   }
@@ -425,6 +436,7 @@ MatchResult match_ceres_continuous(
   ceres::Solver::Summary summary;
   ceres::Solve(options,&problem,&summary);
   result.iterations=static_cast<unsigned>(summary.iterations.size());
+  result.ceres_invalid_residual_evaluations=unexpected_invalid.load(std::memory_order_relaxed);
   result.ceres_continuous_unknown_evaluations=finite_unsupported[0].load(std::memory_order_relaxed);
   result.ceres_continuous_truncated_evaluations=finite_unsupported[1].load(std::memory_order_relaxed);
   result.ceres_continuous_outside_evaluations=finite_unsupported[2].load(std::memory_order_relaxed);
