@@ -72,6 +72,24 @@ int main() {
   require((ceres_found.map_from_laser.translation-correct.translation).norm()<0.025 &&
           std::abs(ceres_found.map_from_laser.yaw_rad)<0.008,
           "Ceres converges near synthetic truth");
+  const auto guarded=match_ceres_support_aware(field,points,seed);
+  require(guarded.status==MatchStatus::accepted,
+          "support-aware Ceres improves supported synthetic geometry");
+  require(guarded.ceres_invalid_residual_evaluations==0,
+          "support-certified Ceres never evaluates unsupported synthetic EDT");
+  require(guarded.support_aware_stages>0 &&
+          guarded.support_aware_accepted_stages>0 &&
+          guarded.support_aware_selected_hits>0,
+          "support-aware matcher reports selected beams and accepted stages");
+  require(guarded.diagnostics.source_fingerprint==snap->fingerprint() &&
+          guarded.diagnostics.full_rank &&
+          guarded.diagnostics.overlap>=0.65,
+          "support-aware full-scan quality and provenance preserved");
+  require(guarded.diagnostics.robust_cost<seed_quality.robust_cost,
+          "support-aware full-scan robust objective must improve");
+  require((guarded.map_from_laser.translation-correct.translation).norm()<0.04 &&
+          std::abs(guarded.map_from_laser.yaw_rad)<0.012,
+          "support-aware Ceres refines pose on dense observed synthetic map");
 #endif
 
   std::vector<Eigen::Vector2d> impossible(20,{50.0,60.0});
