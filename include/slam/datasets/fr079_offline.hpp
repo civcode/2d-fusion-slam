@@ -42,6 +42,7 @@ struct Fr079SlamFrame {
   std::string match_status{"not_attempted"};
   std::size_t supported_hits{};
   std::size_t ceres_invalid_residual_evaluations{};
+  std::size_t ceres_invalid_unknown_cells{},ceres_invalid_truncated{},ceres_invalid_outside_grid{},ceres_invalid_other{};
   std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
   std::string ceres_termination{"not_run"};
   double overlap{}, robust_cost{};
@@ -53,6 +54,7 @@ struct Fr079SlamResult {
   std::size_t attempts{}, accepted{}, rejected{}, inserted_scans{};
   double total_field_ms{}, total_match_ms{}, total_insertion_ms{};
   std::size_t total_invalid_residual_evaluations{};
+  std::size_t total_invalid_unknown_cells{},total_invalid_truncated{},total_invalid_outside_grid{},total_invalid_other{};
   std::size_t total_unsuccessful_steps{};
   bool used_ceres{};
   // No graph constraints from correlated scan-to-map results or logged poses.
