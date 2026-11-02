@@ -12,7 +12,7 @@ namespace slam::datasets {
 class Fr079CaptureBenchmark {
  public:
   Fr079CaptureBenchmark(const std::string& csv_path, const std::string& source_sha256,
-                        bool use_ceres, bool support_aware, std::size_t every, std::size_t max_frames);
+                        bool use_ceres, bool support_aware, bool continuous_cost, std::size_t every, std::size_t max_frames);
   void probe(std::size_t frame, const Pose2& estimated,
              std::shared_ptr<const mapping::MapSnapshot> prior_map,
              const std::vector<Eigen::Vector2d>& laser_points);
@@ -21,7 +21,7 @@ class Fr079CaptureBenchmark {
  private:
   std::ofstream output_;
   std::string source_sha256_;
-  bool use_ceres_, support_aware_;
+  bool use_ceres_, support_aware_, continuous_cost_;
   std::size_t every_,max_frames_,sampled_frames_{},tested_trials_{};
 };
 }  // namespace slam::datasets
