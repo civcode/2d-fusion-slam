@@ -1,3 +1,4 @@
+#include <cxxopts.hpp>
 #include "apps/demo/native/data.hpp"
 #include "apps/demo/native/fusion.hpp"
 
@@ -306,38 +307,36 @@ int main(int argc,char** argv) {
     const std::filesystem::path static_root=FUSION_VIEWER_STATIC_ROOT;
     unsigned port=8765;bool allow_network=false,broad=false,example=false;
     bool has_replays=false,has_fusion=false;
-    for(int i=1;i<argc;++i){
-      const std::string arg=argv[i];
-      auto value=[&]()->std::string{
-        if(++i>=argc)throw std::invalid_argument("missing value for "+arg);
-        return argv[i];
-      };
-      if(arg=="--data-dir")maps=value();
-      else if(arg=="--replay-dir"){replays=value();has_replays=true;}
-      else if(arg=="--fusion-dir"){fusion_directory=value();has_fusion=true;}
-      else if(arg=="--port"){
-        const auto val=value();
-        std::size_t v=0;
-        if(!decimal(val,v)||v>65535)
-          throw std::invalid_argument("viewer port must be 0..65535 (0 chooses a free local port)");
-        port=static_cast<unsigned>(v);
-      }
-      else if(arg=="--host"){
-        const auto val=value();
-        if(val=="127.0.0.1")broad=false;
-        else if(val=="0.0.0.0")broad=true;
-        else throw std::invalid_argument("host must be loopback or 0.0.0.0");
-      }
-      else if(arg=="--allow-network")allow_network=true;
-      else if(arg=="--example-if-empty")example=true;
-      else if(arg=="--help"){
-        std::cout<<"Usage: fusion_slam_demo --data-dir MAP_DIR [--replay-dir REPLAY_DIR] "
-          "[--fusion-dir RUNS_DIR] [--port PORT] [--host 127.0.0.1|0.0.0.0] "
-          "[--allow-network] [--example-if-empty]\n";
-        return 0;
-      }
-      else throw std::invalid_argument("unsupported viewer argument "+arg);
+    cxxopts::Options cli("fusion_slam_demo","Native map and fusion replay HTTP viewer");
+    cli.add_options()
+      ("data-dir","Directory with map bundles",cxxopts::value<std::string>())
+      ("replay-dir","Directory with SLAM replay artifacts",cxxopts::value<std::string>())
+      ("fusion-dir","Directory containing fusion runs",cxxopts::value<std::string>())
+      ("port","TCP port; 0 chooses ephemeral port",cxxopts::value<std::string>())
+      ("host","Bind address (127.0.0.1 or 0.0.0.0)",cxxopts::value<std::string>())
+      ("allow-network","Allow explicit non-loopback binding")
+      ("example-if-empty","Supply synthetic example when replay is empty")
+      ("h,help","Print help");
+    const auto args=cli.parse(argc,argv);
+    if(args.count("help")){std::cout<<cli.help();return 0;}
+    if(args.count("data-dir"))maps=args["data-dir"].as<std::string>();
+    if(args.count("replay-dir")){replays=args["replay-dir"].as<std::string>();has_replays=true;}
+    if(args.count("fusion-dir")){fusion_directory=args["fusion-dir"].as<std::string>();has_fusion=true;}
+    if(args.count("port")){
+      const auto val=args["port"].as<std::string>();
+      std::size_t n=0;
+      if(!decimal(val,n)||n>65535)
+        throw std::invalid_argument("viewer port must be 0..65535 (0 chooses a free local port)");
+      port=static_cast<unsigned>(n);
     }
+    if(args.count("host")){
+      const auto val=args["host"].as<std::string>();
+      if(val=="127.0.0.1")broad=false;
+      else if(val=="0.0.0.0")broad=true;
+      else throw std::invalid_argument("host must be loopback or 0.0.0.0");
+    }
+    allow_network=args.count("allow-network")!=0;
+    example=args.count("example-if-empty")!=0;
     if(maps.empty())throw std::invalid_argument("--data-dir is required");
     if(broad&&!allow_network)throw std::invalid_argument(
        "binding to non-loopback requires explicit --allow-network");
