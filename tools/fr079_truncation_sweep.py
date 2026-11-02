@@ -47,6 +47,10 @@ def parse_args():
     p.add_argument("--docker", action="store_true",
                    help="use 'docker compose run test' instead of a local binary")
     p.add_argument("--binary", type=Path, help="native slam_fr079_offline path")
+    p.add_argument("--support-aware", action="store_true",
+                   help="opt-in certified Ceres local matcher, rather than legacy")
+    p.add_argument("--map-stride", type=int, choices=(1, 3), default=3,
+                   help="beam stride for occupancy insertion (1 or 3)")
     p.add_argument("--capture", action="store_true",
                    help="also run bounded perturbation capture trials per configuration")
     p.add_argument("--capture-every", type=int, default=120)
@@ -77,8 +81,10 @@ def parse_args():
 
 def command(args, tag, truncation, prefix):
     options = ["--match-every", "1", "--field-every", "15",
-               "--map-stride", "3", "--match-stride", "4",
+               "--map-stride", str(args.map_stride), "--match-stride", "4",
                "--distance-truncation", format(truncation, ".3f")]
+    if args.support_aware:
+        options.append("--support-aware")
     if args.capture and abs(truncation - 0.7) < 1e-9:
         options += ["--capture", "--capture-every", str(args.capture_every),
                     "--capture-max-frames", str(args.capture_max_frames)]
@@ -114,7 +120,7 @@ def main():
     rows = []
     source_sha = None
     columns = [
-        "truncation_m", "source_sha256", "map_fingerprint",
+        "truncation_m", "matcher", "map_beam_stride", "source_sha256", "map_fingerprint",
         "frames", "attempts", "accepted", "rejected",
         "ceres_invalid_residual_evaluations", "ceres_unsuccessful_steps",
         "offline_fps", "frame_p95_ms", "match_p95_ms",
@@ -132,7 +138,7 @@ def main():
             raise ValueError("truncation was not applied")
         if report["match_every"] != 1 or report["field_rebuild_every"] != 15:
             raise ValueError("benchmark matching parameters unexpectedly changed")
-        if report["map_beam_stride"] != 3 or report["match_beam_stride"] != 4:
+        if report["map_beam_stride"] != args.map_stride or report["match_beam_stride"] != 4:
             raise ValueError("benchmark beam parameters unexpectedly changed")
         if source_sha is None:
             source_sha = report["source_sha256"]
@@ -142,6 +148,9 @@ def main():
                                 ("unknown_cells", "truncated", "outside_grid", "other"))
         if invalid_breakdown != report["ceres_invalid_residual_evaluations"]:
             raise ValueError("Ceres invalid-evaluation breakdown does not reconcile")
+        expected_matcher = "ceres_support_aware" if args.support_aware else "ceres"
+        if report["matcher"] != expected_matcher:
+            raise ValueError("unexpected frontend matcher: " + str(report["matcher"]))
         comparison = {}
         comparison_file = ""
         if args.reference_archive:
@@ -165,6 +174,8 @@ def main():
                     raise ValueError("no accepted snapshot anchors for capture benchmark")
         row = {
             "truncation_m": value,
+            "matcher": report["matcher"],
+            "map_beam_stride": args.map_stride,
             "source_sha256": source_sha,
             "map_fingerprint": report["map"]["fingerprint"],
             "frames": report["frames"],
@@ -208,7 +219,7 @@ def main():
             "reference_is_independent_ground_truth": False,
             "parameters_held_fixed": {
                 "match_every": 1, "field_rebuild_every": 15,
-                "map_beam_stride": 3, "match_beam_stride": 4
+                "map_beam_stride": args.map_stride, "match_beam_stride": 4
             },
             "capture_anchor": "0.7m_run_same_run_accepted_pose_proxy_not_ground_truth"
                               if args.capture else None,
