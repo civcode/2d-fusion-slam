@@ -250,3 +250,41 @@ archived reference map, fabricate gyro or per-beam timestamps, or
 claim registered ground truth. Laser-to-odom extrinsics remain an
 identity assumption. No independent loop closures are applied.
 See [full FR079 SLAM protocol](../../docs/fr079-offline-slam.md).
+
+
+## Map Explorer: grouped scenes and method radios
+
+The standard Map Explorer at / now displays one **scene group per
+completed synthetic fusion run**, for example **Apartment** with
+apartment-001 shown as the run identifier, or **Warehouse** with
+warehouse-001 shown underneath. Open a scene to choose its saved map
+variant using native radio controls. Available methods are ordered:
+
+1. Graph optimized — final map rebuilt using GTSAM-optimized poses.
+   This method is listed only when its artifact exists, and does not
+   imply that independent loop closure was performed.
+2. Scan-matched fusion — gyro/wheel estimate plus accepted LiDAR
+   scan corrections.
+3. Gyro + wheel — fused motion estimate without scan corrections.
+4. LiDAR only — independent LiDAR-only SLAM baseline.
+5. Wheel odometry — wheel-only baseline.
+
+Each scene selects **Graph optimized by default if available**, else
+the highest-ranked exported variant. Returning to a scene remembers
+the last selected method. Switching scenes collapses other scene
+groups; users can also collapse the selected group. A scene can have
+multiple runs with the same friendly name, so the exact run identifier
+is shown to distinguish them. This design does not mix map variants
+from different runs.
+
+Standalone FUSMAP2D exports such as fr079-slam.slammap or
+sample-synthetic-workshop.slammap remain available under **Other maps**.
+They are not silently classified as synthetic apartment/warehouse
+fusion outputs. A verified published active-generation pointer is
+still respected on initial load; explicit ?map=... deep links take
+priority. All existing native API IDs and individual map URLs remain
+unchanged. No SLAM processing or map files need to be regenerated.
+
+The native /api/maps listing adds optional run_id, scene and method
+fields to fusion entries only, enabling stable grouping without
+parsing human-readable names. Old clients can ignore these fields.
