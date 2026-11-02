@@ -53,6 +53,12 @@ class DistanceField final {
   // informative (nontruncated) distance. Unknown or outside never becomes 0.
   [[nodiscard]] std::optional<DistanceSample> sample_map(const Eigen::Vector2d& point) const noexcept;
   [[nodiscard]] DistanceSupport support_map(const Eigen::Vector2d& point) const noexcept;
+  // Conservative support certificate for every point inside a world-metric
+  // disk. Checks that *all* bilinear stencil cells remain observed and below
+  // the EDT truncation throughout the disk. Never infers occupancy from
+  // unknown space. Useful for bounding Ceres trial steps.
+  [[nodiscard]] bool supports_disk_map(const Eigen::Vector2d& point,
+                                       double radius_m) const noexcept;
 
  private:
   DistanceField(std::shared_ptr<const MapSnapshot> source, double truncation,
