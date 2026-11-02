@@ -96,6 +96,15 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## Unified native C++ CLI parsing
+
+All native C++ command-line programs now use `cxxopts` for options and
+positional arguments. CMake uses a compatible installed CMake package
+when available, or FetchContent pinned to `v3.3.1`. Docker keeps its
+offline CMake build by installing Ubuntu's `libcxxopts-dev`; all CLIs
+support `--help` and reject unknown flags. See
+[CLI migration, options and local tests](docs/native-cli-cxxopts.md).
+
 ## Experimental support-aware Ceres matching
 
 Use --support-aware with slam_fr079_offline to select a conservative
