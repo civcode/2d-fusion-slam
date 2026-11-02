@@ -47,6 +47,8 @@ def parse_args():
     p.add_argument("--docker", action="store_true",
                    help="use 'docker compose run test' instead of a local binary")
     p.add_argument("--binary", type=Path, help="native slam_fr079_offline path")
+    p.add_argument("--continuous-cost", action="store_true",
+                   help="finite Ceres residuals through unknown/truncated EDT cells")
     p.add_argument("--support-aware", action="store_true",
                    help="opt-in certified Ceres local matcher, rather than legacy")
     p.add_argument("--map-stride", type=int, choices=(1, 3), default=3,
@@ -58,6 +60,8 @@ def parse_args():
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
     args.truncations = truncations(args.truncations)
+    if args.continuous_cost and args.support_aware:
+        p.error("--continuous-cost and --support-aware cannot be combined")
     if args.docker and args.binary:
         p.error("choose --docker or --binary, not both")
     if not args.docker and not args.binary:
@@ -85,6 +89,8 @@ def command(args, tag, truncation, prefix):
                "--distance-truncation", format(truncation, ".3f")]
     if args.support_aware:
         options.append("--support-aware")
+    if args.continuous_cost:
+        options.append("--continuous-cost")
     if args.capture and abs(truncation - 0.7) < 1e-9:
         options += ["--capture", "--capture-every", str(args.capture_every),
                     "--capture-max-frames", str(args.capture_max_frames)]
@@ -148,7 +154,9 @@ def main():
                                 ("unknown_cells", "truncated", "outside_grid", "other"))
         if invalid_breakdown != report["ceres_invalid_residual_evaluations"]:
             raise ValueError("Ceres invalid-evaluation breakdown does not reconcile")
-        expected_matcher = "ceres_support_aware" if args.support_aware else "ceres"
+        expected_matcher = ("ceres_continuous_cost" if args.continuous_cost
+                            else "ceres_support_aware" if args.support_aware
+                            else "ceres")
         if report["matcher"] != expected_matcher:
             raise ValueError("unexpected frontend matcher: " + str(report["matcher"]))
         comparison = {}
