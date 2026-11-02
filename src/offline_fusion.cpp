@@ -1,3 +1,4 @@
+#include <cxxopts.hpp>
 #include "slam/evaluation/map_accuracy.hpp"
 #include "slam/fixtures/synthetic.hpp"
 #include "slam/fusion/gyro_wheel.hpp"
@@ -721,15 +722,24 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
 } // namespace
 
 int main(int argc,char** argv) {
-  if(argc!=3&&argc!=4){
-    std::cerr<<"Usage: slam_offline_fusion <apartment|warehouse> "
-                "<new-output-directory> [--synthetic-independent-loops]\n";
-    return 2;
-  }
+  cxxopts::Options cli("slam_offline_fusion",
+      "Offline synthetic LiDAR/odometry fusion and optional independent loops");
+  cli.add_options()
+      ("scene","Synthetic scene",cxxopts::value<std::string>())
+      ("output","New output directory",cxxopts::value<std::string>())
+      ("synthetic-independent-loops","Enable synthetic independent loop constraints")
+      ("h,help","Show help");
+  cli.parse_positional({"scene","output"});
+  cli.positional_help("<apartment|warehouse> <new-output-directory>");
+  cxxopts::ParseResult args;
+  try { args=cli.parse(argc,argv); }
+  catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
+  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(!args.count("scene")||!args.count("output")){std::cerr<<cli.help();return 2;}
+
   try{
-    const bool loops=argc==4;
-    if(loops&&std::string(argv[3])!="--synthetic-independent-loops")
-      throw std::invalid_argument("unrecognized option");
+    const bool loops=args.count("synthetic-independent-loops")!=0;
+
 #ifndef SLAM_FUSION_WITH_GTSAM
     if(loops)throw std::invalid_argument(
       "independent synthetic loop demonstration requires a GTSAM-enabled build");
@@ -737,9 +747,9 @@ int main(int argc,char** argv) {
     slam::fusion::PipelineProfiler profiler;
     const auto simulation=[&]{
       slam::fusion::PipelineProfiler::Scope timing(profiler,"synthetic_generation");
-      return generate(argv[1]);
+      return generate(args["scene"].as<std::string>());
     }();
-    execute(simulation,argv[2],loops,profiler);
+    execute(simulation,args["output"].as<std::string>(),loops,profiler);
     return 0;
   }catch(const std::exception& e){
     std::cerr<<"offline fusion failed: "<<e.what()<<'\n';
