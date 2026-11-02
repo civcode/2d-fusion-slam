@@ -18,7 +18,8 @@ def main():
             out_dir=Path(tmp)/"unused", docker=True, binary=None,
             scenes=["apartment","warehouse"], matchers=["legacy","continuous"],
             match_strides=[1,2,4,8], map_stride=1,
-            match_every=1, field_every=1, distance_truncation=.7)
+            match_every=1, field_every=1, distance_truncation=.7,
+            lidar_only_bootstrap=False)
         validate(options, parser())
         for scene in options.scenes:
             for mode in options.matchers:
@@ -30,6 +31,11 @@ def main():
                 assert cmd[cmd.index("--match-every")+1]=="1"
                 assert cmd[-1]=="--continuous-cost" if mode=="continuous" else (
                     "--continuous-cost" not in cmd)
+                assert "--lidar-only-bootstrap" not in cmd
+                options.lidar_only_bootstrap=True
+                boot=command(options,scene,mode,4,scene+"-"+mode)
+                assert "--lidar-only-bootstrap" in boot
+                options.lidar_only_bootstrap=False
                 assert scene in cmd
         options.map_stride=0
         try:
