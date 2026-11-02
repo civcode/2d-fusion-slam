@@ -52,6 +52,12 @@ class DistanceField final {
   // Bilinear interpolation only with all four observed cells and an
   // informative (nontruncated) distance. Unknown or outside never becomes 0.
   [[nodiscard]] std::optional<DistanceSample> sample_map(const Eigen::Vector2d& point) const noexcept;
+  // Finite optimization-only extension of the EDT: observed cells retain
+  // their exact truncated distance, unknown/outside cells cost truncation.
+  // Bilinear interpolation across the boundary supplies a finite gradient.
+  // This is NOT occupancy evidence and never changes strict sample_map().
+  [[nodiscard]] DistanceSample sample_matching_cost(
+      const Eigen::Vector2d& point) const noexcept;
   [[nodiscard]] DistanceSupport support_map(const Eigen::Vector2d& point) const noexcept;
   // Conservative support certificate for every point inside a world-metric
   // disk. Checks that *all* bilinear stencil cells remain observed and below
