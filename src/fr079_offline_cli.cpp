@@ -293,7 +293,9 @@ int run(int argc,char** argv){
   if(argc<3){
     std::cerr<<"Usage: slam_fr079_offline <fr079.log[.gz]> <new-output-prefix>"
                 " [--reference] [--match-every N] [--field-every N]"
-                " [--map-stride N] [--match-stride N]\n";
+                " [--map-stride N] [--match-stride N]"
+                " [--distance-truncation METRES]"
+                " [--capture] [--capture-every N] [--capture-max-frames N]\n";
     return 2;
   }
   slam::datasets::Fr079SlamOptions options;
@@ -314,6 +316,7 @@ int run(int argc,char** argv){
       options.distance_truncation_m=positive_distance(argv[++i]);
     else throw std::invalid_argument("unrecognized or incomplete FR079 option");
   }
+  ensure(capture_max_frames<=100,"capture-max-frames must be at most 100");
   const std::filesystem::path prefix(argv[2]);
   ensure(!prefix.filename().empty()&&std::filesystem::is_directory(prefix.parent_path()),
          "output parent must already be a directory");
