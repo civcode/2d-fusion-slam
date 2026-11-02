@@ -810,7 +810,7 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
                            const FusionMatchOptions& options) {
   GraphOutput output;
 #ifndef SLAM_FUSION_WITH_GTSAM
-  (void)sim;(void)p;(void)matcher;(void)synthetic_loops;
+  (void)sim;(void)p;(void)matcher;(void)synthetic_loops;(void)options;
   output.status="gtsam_not_built";return output;
 #else
   slam::graph::BatchGraphInput input;
@@ -851,8 +851,21 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
         result.diagnostics.supported_hits,result.diagnostics.overlap,true});
     }
   }
+  if(options.lidar_loop_closure) {
+    const auto proposals=detect_lidar_loops(p,matcher,options);
+    output.lidar_registration_attempted=proposals.attempted;
+    output.lidar_registration_verified=proposals.candidates.size();
+    output.events=proposals.rejected;
+    for(const auto& candidate:proposals.candidates)
+      input.loops.push_back(candidate);
+  }
   output.loop_candidates=input.loops.size();
-  auto graph=slam::graph::optimize_pose_graph(input);
+  slam::graph::BatchGraphOptions graph_options;
+  if(options.lidar_loop_closure) {
+    graph_options.maximum_loop_residual_translation_m=.8;
+    graph_options.maximum_loop_residual_yaw_rad=.3;
+  }
+  auto graph=slam::graph::optimize_pose_graph(input,graph_options);
   if(graph.loop_decisions.size()!=input.loops.size())
     throw std::runtime_error("GTSAM loop decision cardinality mismatch");
   for(std::size_t k=0;k<input.loops.size();++k) {
@@ -865,13 +878,19 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
       case slam::graph::LoopDecision::inconsistent_with_initial_path:label="inconsistent";break;
       case slam::graph::LoopDecision::duplicate_or_nearby_nodes:label="duplicate_or_nearby";break;
     }
-    output.events.push_back({input.loops[k].edge.from,input.loops[k].edge.to,label});
+    output.events.push_back({
+        input.loops[k].edge.from,input.loops[k].edge.to,label,
+        input.loops[k].edge.provenance.source==
+            slam::graph::EvidenceClass::lidar_scan_registration?
+            "lidar_scan_registration":"independently_simulated_relative_pose",
+        input.loops[k].overlap,0.});
   }
   if(!graph.fixed_first_pose)throw std::runtime_error("graph lost gauge anchor");
   output.poses=std::move(graph.optimized_map_from_base);
   output.accepted_loops=graph.accepted_loops;
   output.status=synthetic_loops?"gtsam_with_simulated_independent_loops":
-                                "gtsam_odometry_only_no_verified_loops";
+      options.lidar_loop_closure?"gtsam_with_lidar_scan_loop_closure":
+                                 "gtsam_odometry_only_no_verified_loops";
   return output;
 #endif
 }
@@ -1130,7 +1149,7 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   const auto lidar=lidar_only(sim,p,p.gyro_wheel.front(),profiler,options);
   const auto graph=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"graph_optimize");
-    return optimize_graph(sim,p,matched,synthetic_loops);
+    return optimize_graph(sim,p,matched,synthetic_loops,options);
   }();
   const auto wheel_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"wheel_map_build");
