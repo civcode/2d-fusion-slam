@@ -670,6 +670,52 @@ void export_trajectories(const std::filesystem::path& output,
   out<<"]\n}\n";
   if(!out)throw std::runtime_error("failed writing trajectory JSON");
 }
+// A stand-alone diagnostic for the incremental LiDAR-only baseline.
+// Crucially, it includes rejected frames. Neither reference trajectory nor
+// simulation truth is fed into this diagnostic or its optional support probe.
+void export_lidar_match_audit(const std::filesystem::path& output,
+                              const LidarOnly& lidar,
+                              const FusionMatchOptions& options) {
+  std::ofstream out(output);
+  if(!out)throw std::runtime_error("failed opening LiDAR-only matcher audit");
+  out<<std::setprecision(15)
+     <<"{\"format\":\"FUSLIDARAUDIT1\","
+     <<"\"ground_truth_used\":false,"
+     <<"\"support_probe_read_only\":"
+     <<(options.lidar_only_support_probe?"true":"false")
+     <<",\"match_stride\":"<<options.match_stride
+     <<",\"distance_truncation_m\":"<<options.distance_truncation_m
+     <<",\"attempts\":"<<(lidar.accepted+lidar.rejected)
+     <<",\"frames\":[";
+  for(std::size_t j=0;j<lidar.audit.size();++j) {
+    if(j)out<<',';
+    const auto& a=lidar.audit[j];
+    out<<"{\"index\":"<<a.frame
+       <<",\"status\":\""<<a.reason<<"\""
+       <<",\"accepted\":"<<(a.accepted?"true":"false")
+       <<",\"input_beams\":"<<a.input_beams
+       <<",\"seed_supported_hits\":"<<a.seed_supported_hits
+       <<",\"seed_overlap\":"<<a.seed_overlap
+       <<",\"seed_full_rank\":"<<(a.seed_full_rank?"true":"false")
+       <<",\"map_has_obstacles\":"<<(a.has_obstacles?"true":"false")
+       <<",\"map_revision\":"<<a.map_revision
+       <<",\"solver_residual_blocks\":"<<a.residual_blocks
+       <<",\"candidate_evaluated\":"<<(a.candidate_evaluated?"true":"false")
+       <<",\"candidate_supported_hits\":"<<a.candidate_supported_hits
+       <<",\"candidate_translation_m\":"<<a.candidate_translation_m
+       <<",\"solver_invalid_residual_evaluations\":"<<a.solver_invalid_residuals
+       <<",\"probe_poses\":"<<a.probe_poses
+       <<",\"probe_supported_poses\":"<<a.probe_supported_poses
+       <<",\"probe_ranked_poses\":"<<a.probe_ranked_poses
+       <<",\"probe_best_supported_hits\":"<<a.probe_best_supported_hits
+       <<",\"probe_best_overlap\":"<<a.probe_best_overlap
+       <<",\"probe_best_offset\":["
+       <<a.probe_best_dx_m<<','<<a.probe_best_dy_m<<','
+       <<a.probe_best_dyaw_rad<<"]}";
+  }
+  out<<"]}\n";
+  if(!out)throw std::runtime_error("failed writing LiDAR-only matcher audit");
+}
 // FUSFUSREPLAY1 contains *actual* events from this run, not browser-side
 // synthesized matcher/graph outcomes. No raw oracle trajectory is included.
 void export_replay(const std::filesystem::path& output,const Simulation& sim,
@@ -792,6 +838,7 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   export_bundle(directory/"fused_scan_matched.slammap",matched_map);
   export_trajectories(directory/"trajectories.json",sim,p,lidar,matched,graph);
   export_replay(directory/"fusion_replay.json",sim,p,lidar,matched,graph,options);
+  export_lidar_match_audit(directory/"lidar_only_match_audit.json",lidar,options);
   std::optional<slam::mapping::MapBundle> graph_map;
   if(!graph.poses.empty()) {
     {
@@ -833,7 +880,19 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"lidar_only_accepted\":"<<lidar.accepted<<","
      <<"\n\"lidar_only_rejected\":"<<lidar.rejected<<","
      <<"\n\"lidar_only_skipped\":"<<lidar.skipped<<","
-     <<"\n\"lidar_only_field_rebuilds\":"<<lidar.field_rebuilds<<",";
+     <<"\n\"lidar_only_field_rebuilds\":"<<lidar.field_rebuilds<<","
+     <<"\n\"lidar_only_support_probe\":"<<(options.lidar_only_support_probe?"true":"false")<<","
+     <<"\n\"lidar_only_before_solver_insufficient_support\":"
+     <<std::count_if(lidar.audit.begin(),lidar.audit.end(),
+         [](const LidarMatchAudit& a){
+           return a.reason=="insufficient_support"&&!a.candidate_evaluated&&
+                  a.residual_blocks==0;
+         })<<","
+     <<"\n\"lidar_only_after_solver_insufficient_support\":"
+     <<std::count_if(lidar.audit.begin(),lidar.audit.end(),
+         [](const LidarMatchAudit& a){
+           return a.reason=="insufficient_support"&&a.candidate_evaluated;
+         })<<",";
   write_rejections(out,"heldout_rejection_reasons",matched.rejections);
   write_rejections(out,"lidar_only_rejection_reasons",lidar.rejections);
   out<<"\n\"graph_status\":\""<<graph.status<<"\","
