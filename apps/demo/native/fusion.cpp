@@ -307,10 +307,35 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
       need(decision=="accepted"||decision=="insufficient_geometry"||
            decision=="unverified_evidence"||decision=="inconsistent"||
            decision=="duplicate_or_nearby","invalid loop status");
+      if(event.has("source")) {
+        const auto source=event.at("source").str();
+        need(source=="lidar_scan_registration"||
+             source=="independently_simulated_relative_pose",
+             "invalid loop observation source");
+        if(r.has("lidar_loop_closure")&&r.at("lidar_loop_closure").flag())
+          need(source=="lidar_scan_registration",
+               "LiDAR loop replay source mismatch");
+        if(event.has("overlap")) {
+          const auto overlap=finite(event.at("overlap"),1.);
+          need(overlap>=0.&&overlap<=1.,"invalid loop scan overlap");
+        }
+        if(event.has("registration_error_m"))
+          need(finite(event.at("registration_error_m"),100.)>=0,
+               "invalid loop scan registration error");
+      }
       if(decision=="accepted")++accepted_loops;
     }
     need(frame.at("cumulative_accepted_loops").uint()==accepted_loops,
          "invalid cumulative accepted loop count");
+  }
+  if(r.has("lidar_loop_closure")&&r.at("lidar_loop_closure").flag()) {
+    need(r.at("loop_measurements").str()=="lidar_scan_registration_correlated"&&
+         r.at("graph_status").str()=="gtsam_with_lidar_scan_loop_closure"&&
+         r.at("graph_lidar_loop_registration_verified").uint()==
+             r.at("graph_loop_candidates").uint()&&
+         r.at("graph_lidar_loop_registration_attempted").uint()>=
+             r.at("graph_lidar_loop_registration_verified").uint(),
+         "LiDAR loop source/diagnostics inconsistent");
   }
   need(accepted==r.at("heldout_accepted").uint() &&
        rejected==r.at("heldout_rejected").uint() &&
