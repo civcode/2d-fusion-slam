@@ -734,11 +734,12 @@ int main(int argc,char** argv) {
   cxxopts::ParseResult args;
   try { args=cli.parse(argc,argv); }
   catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
-  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(args.count("help")&&args["help"].as<bool>()){std::cout<<cli.help();return 0;}
   if(!args.count("scene")||!args.count("output")){std::cerr<<cli.help();return 2;}
 
   try{
-    const bool loops=args.count("synthetic-independent-loops")!=0;
+    const bool loops=args.count("synthetic-independent-loops")&&
+        args["synthetic-independent-loops"].as<bool>();
 
 #ifndef SLAM_FUSION_WITH_GTSAM
     if(loops)throw std::invalid_argument(
