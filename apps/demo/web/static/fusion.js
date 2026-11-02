@@ -94,8 +94,12 @@
     shown("fusion-insertion",f.mapping.lidar_only_inserted?
       "LiDAR-only: inserted" : "LiDAR-only: rejected (not inserted)");
     shown("fusion-loop-status",f.loop_events.length ?
-      f.loop_events.map(x=>x.from+" → "+x.to+" "+x.decision).join("; "):
-      "No independent loop proposal");
+      f.loop_events.map(x=>x.from+" → "+x.to+" "+
+        (x.source==="lidar_scan_registration"?"LiDAR scan pair": 
+          "independent synthetic sensor")+" · "+
+        x.decision.replaceAll("_"," ")+
+        (Number(x.overlap)>0?" · "+fmt(100*x.overlap,1)+"% overlap":"")
+      ).join("; ") : "No loop proposal for this scan");
     draw();
   }
   function setMetrics() {
@@ -103,6 +107,12 @@
     shown("fusion-backend",report.matcher);
     shown("fusion-accepted",report.heldout_accepted+" / "+report.heldout_attempted);
     shown("fusion-loops",report.graph_accepted_loops+" / "+report.graph_loop_candidates);
+    shown("fusion-loop-source",report.loop_measurements==="lidar_scan_registration_correlated"?
+      "LiDAR scan registration (correlated; not independent)"+
+      " · "+(report.graph_lidar_loop_registration_attempted||0)+" ICP checks":
+      report.loop_measurements==="independently_simulated_relative_pose"?
+      "Independent simulated relative-pose sensor":
+      "No enabled loop source (odometry graph only)");
     const scores=el("fusion-scores");
     scores.replaceChildren();
     for(const method of methods()) {
