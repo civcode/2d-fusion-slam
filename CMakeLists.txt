@@ -543,6 +543,10 @@ if(BUILD_TESTING)
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_loop_compare_test.py")
     set_tests_properties(fusion_loop_compare PROPERTIES TIMEOUT 30)
+    add_test(NAME fusion_mapping_ablation_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_mapping_ablation_tools_test.py")
+    set_tests_properties(fusion_mapping_ablation_tools PROPERTIES TIMEOUT 30)
     add_test(NAME fusion_scene_diversity
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_scene_diversity_test.py"
