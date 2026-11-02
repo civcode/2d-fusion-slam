@@ -86,6 +86,100 @@ The support classification prioritizes unknown interpolation cells, then truncat
 This is still an offline benchmark with assumed identity laser extrinsics and no independent global trajectory ground truth. It does not introduce loop closure, submaps, coarse-to-fine matching or real-time paced input. A future benchmark should use more perturbation directions, independently known poses if available, and held-out map regions.
 
 
+## Experimental continuous-cost Ceres matcher (v2)
+
+Use `--continuous-cost` to enable the **third, opt-in** matcher,
+`ceres_continuous_cost`. It is mutually exclusive with `--support-aware`
+and `--reference`. The existing legacy matcher remains the default.
+
+Unlike the strict `DistanceField::sample_map()` interface, the new
+`sample_matching_cost()` is finite for all finite map coordinates:
+
+- An observed cell retains its exact computed EDT value, capped at the
+  same configured truncation (0.7 m by default).
+- An unknown occupancy cell, an outside-map cell, or a truncated observed
+  cell gets the maximum distance cost (not zero wall distance).
+- A bilinear interpolation with a virtual one-cell maximum-cost border
+  makes the objective continuous across the map boundary and most
+  unknown/observed boundaries. The gradient is piecewise bilinear;
+  the plateau has zero gradient and does **not** point the optimizer
+  toward imaginary walls.
+- The strict sampler and the authoritative occupancy observations remain
+  unchanged. A finite residual is numerical optimization cost, **not
+  proof of an actual wall**.
+
+Ceres now uses **every finite beam in the configured matching stride**,
+including beams whose initial endpoint is unknown. Every residual stays
+evaluable through normal finite Ceres steps. The final correction is
+checked against the strict observed-only geometry using rank, real hit
+support, minimum overlap and no loss of total real supported hits, plus
+the existing FR079 frontend innovation bounds. Improvement is tested
+using exactly the same fixed finite-beam cohort at the seed and
+candidate pose, with the same Huber loss. This avoids comparing
+different-length sets of supported observations.
+
+The output records `ceres_invalid_residual_evaluations` (expected
+zero for ordinary finite trial steps) separately from
+`ceres_continuous_unknown_evaluations`,
+`ceres_continuous_truncated_evaluations`,
+`ceres_continuous_outside_evaluations` and
+`ceres_continuous_other_evaluations`. The latter count **finite
+evaluations** in regions that the strict sampler would have rejected:
+they are not Ceres solver failures.
+
+### Local A/B benchmark
+
+Run all of the following with the same FR079 recording and reference
+archive. The output prefixes must not exist already:
+
+~~~sh
+# Existing legacy matcher / all-beam map insertion
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-map-all-match90-v2-legacy \
+  --match-every 1 --field-every 15 --map-stride 1 \
+  --match-stride 4 --distance-truncation 0.7
+
+# Continuous-cost matcher; all other parameters identical
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-map-all-match90-continuous \
+  --match-every 1 --field-every 15 --map-stride 1 \
+  --match-stride 4 --distance-truncation 0.7 --continuous-cost
+
+# Compare both generated maps with the correlated (NOT ground-truth)
+# FR079 supplied scan-matched map:
+for name in fr079-map-all-match90-v2-legacy fr079-map-all-match90-continuous; do
+  python tools/fr079_map_compare.py \
+    --repo "$PWD" \
+    --slammap "apps/demo/maps/${name}.slammap" \
+    --reference-archive "$FR079_MAPS" \
+    --reference-cm 5 \
+    --out "benchmarks/${name}"
+done
+~~~
+
+Rebuild the image first (`docker compose build test`). To compare
+the previous best mapping-beam stride, run the same matched pair with
+`--map-stride 3` and different output names.
+
+The sweep script additionally accepts `--continuous-cost`; its
+`--capture` mode will evaluate the selected matcher on frozen prior
+map snapshots. Local CTest includes the EDT's strict-vs-continuous
+equivalence/gradient tests, a synthetic known-optimum matcher test,
+and a deterministic FR079 end-to-end test.
+
+Do not conclude that this is a better mapper merely because Ceres
+warnings disappear: compare wall F1 within 15 cm, occupied IoU,
+symmetric mean wall error, acceptance, processing time and controlled
+perturbation recovery. Finite costs for unknown geometry can still
+bias optimization near unexplored boundaries. This is an experiment,
+not a switch of the production default.
+
 ## Opt-in support-aware Ceres matcher (experimental)
 
 The current legacy matcher remains the default so previous FR079 scores remain
