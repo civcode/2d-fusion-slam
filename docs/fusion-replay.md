@@ -175,6 +175,45 @@ error, map IoU and accepted edge identities before judging the change
 as more accurate. Existing run artifacts are immutable: a new run
 is required to test the denser detector.
 
+For an asymmetric-warehouse version comparison, rebuild the GTSAM-enabled
+Docker test image and run the identical estimator flags used for the
+original single-closure result, under a new output directory:
+
+~~~sh
+docker compose build test
+docker compose run --rm \
+  -v "$PWD/apps/demo/fusion:/output" \
+  --entrypoint ./build-docker/slam_offline_fusion \
+  test warehouse_asymmetric /output/warehouse_asymmetric-loops-multi-001 \
+  --continuous-cost --match-every 1 --match-stride 1 \
+  --field-every 15 --map-stride 1 \
+  --lidar-only-bootstrap --lidar-only-predict-first --lidar-loop-closure
+~~~
+
+Then compare against the **unchanged no-loop GTSAM baseline** for
+causal loop-closure benefit:
+
+~~~sh
+python tools/fusion_loop_compare.py \
+  --baseline apps/demo/fusion/warehouse_asymmetric-no-loops-001 \
+  --loops apps/demo/fusion/warehouse_asymmetric-loops-multi-001
+~~~
+
+You can separately compare the **earlier one-loop implementation**
+against the new detector to isolate the algorithm revision (this is
+not a no-loop control):
+
+~~~sh
+python tools/fusion_loop_compare.py --allow-loop-baseline \
+  --baseline apps/demo/fusion/warehouse_asymmetric-loops-001 \
+  --loops apps/demo/fusion/warehouse_asymmetric-loops-multi-001
+~~~
+
+The comparator reports frame-window RMSE and pose displacement across
+the last 12%, graph endpoint error and map IoU, and the number,
+quality and location of accepted relative LiDAR factors. The
+web UI can browse both run folders side by side in separate tabs.
+
 The source is recorded as `lidar_scan_registration_correlated`.
 The scan pairs reuse observations that influenced the frontend and use
 the estimated trajectory only for candidate search/initialization.
