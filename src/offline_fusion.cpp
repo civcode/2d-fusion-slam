@@ -115,6 +115,30 @@ Motion at_time(const RouteConfig& route,double seconds_after_start) {
                          route.ry*route.ry*cs*cs):0.0;
   return m;
 }
+double distance_to_wall(Eigen::Vector2d p,
+                        const slam::fixtures::Segment& wall) {
+  const Eigen::Vector2d direction=wall.end-wall.start;
+  const double denom=direction.squaredNorm();
+  if(denom<=1e-12)return (p-wall.start).norm();
+  const double u=std::clamp((p-wall.start).dot(direction)/denom,0.0,1.0);
+  return (p-wall.start-u*direction).norm();
+}
+void validate_generated_route(const slam::fixtures::Scene& scene,
+                              const RouteConfig& route) {
+  // Generator-only independent safety check: reject invented trajectories
+  // crossing walls or putting the laser origin into simulated obstacles.
+  const double total_time=.6+.3*double(route.scans-1);
+  const std::size_t steps=std::size_t(std::ceil(total_time/.02));
+  for(std::size_t i=0;i<=steps;++i) {
+    const auto pose=at_time(route,total_time*double(i)/double(steps)).pose;
+    const auto laser=slam::compose(pose,kBaseFromLaser);
+    for(const auto& wall:scene.walls)
+      if(distance_to_wall(pose.translation,wall)<.20||
+         distance_to_wall(laser.translation,wall)<.08)
+        throw std::invalid_argument(
+            "synthetic route intersects a scene wall: "+scene.id);
+  }
+}
 Simulation generate(const std::string& label) {
   const auto route=route_config(label);
   Simulation d;
@@ -125,6 +149,7 @@ Simulation generate(const std::string& label) {
   d.grid.resolution_m=.05;
   d.grid.map_from_grid={{-.5,-.5},0};
   d.initial_anchor=at_time(route,0).pose;
+  validate_generated_route(d.scene,route);
   const std::size_t scans=route.scans;
   const std::size_t ticks=12*(scans+4)+32;
   d.sensors.ticks.reserve(ticks);
