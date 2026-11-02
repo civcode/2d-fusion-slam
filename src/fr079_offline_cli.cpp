@@ -155,6 +155,10 @@ void save_matches(const std::filesystem::path& file,
        <<",\"ceres_unsuccessful_steps\":"<<f.ceres_unsuccessful_steps
        <<",\"ceres_successful_steps\":"<<f.ceres_successful_steps
        <<",\"ceres_termination\":\""<<f.ceres_termination<<"\""
+       <<",\"support_aware_selected_hits\":"<<f.support_aware_selected_hits
+       <<",\"support_aware_skipped_hits\":"<<f.support_aware_skipped_hits
+       <<",\"support_aware_stages\":"<<f.support_aware_stages
+       <<",\"support_aware_accepted_stages\":"<<f.support_aware_accepted_stages
        <<",\"map_inserted\":"<<(f.map_inserted?"true":"false")
        <<",\"field_ms\":"<<f.field_ms
        <<",\"match_ms\":"<<f.match_ms
@@ -239,7 +243,7 @@ void save_report(const std::filesystem::path& file,
      <<",\"loop_closures\":0"
      <<",\"pose_graph_optimized\":false"
      <<",\"realtime_deadlines_verified\":false"
-     <<",\"matcher\":\""<<(result.used_ceres?"ceres":"geometry_reference_fallback")<<"\""
+     <<",\"matcher\":\""<<(result.used_support_aware_ceres?"ceres_support_aware":(result.used_ceres?"ceres":"geometry_reference_fallback"))<<"\""
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
      <<",\"ceres_invalid_residual_evaluations\":"<<result.total_invalid_residual_evaluations
      <<",\"ceres_invalid_unknown_cells\":"<<result.total_invalid_unknown_cells
@@ -247,6 +251,10 @@ void save_report(const std::filesystem::path& file,
      <<",\"ceres_invalid_outside_grid\":"<<result.total_invalid_outside_grid
      <<",\"ceres_invalid_other\":"<<result.total_invalid_other
      <<",\"ceres_unsuccessful_steps\":"<<result.total_unsuccessful_steps
+     <<",\"support_aware_selected_hits\":"<<result.total_support_aware_selected_hits
+     <<",\"support_aware_skipped_hits\":"<<result.total_support_aware_skipped_hits
+     <<",\"support_aware_stages\":"<<result.total_support_aware_stages
+     <<",\"support_aware_accepted_stages\":"<<result.total_support_aware_accepted_stages
      <<",\"match_every\":"<<options.match_every
      <<",\"field_rebuild_every\":"<<options.rebuild_field_every
      <<",\"map_beam_stride\":"<<options.map_beam_stride
@@ -307,6 +315,7 @@ int run(int argc,char** argv){
     const std::string arg=argv[i];
     if(arg=="--reference")options.use_ceres=false;
     else if(arg=="--capture")capture=true;
+    else if(arg=="--support-aware")options.support_aware_ceres=true;
     else if(arg=="--capture-every"&&i+1<argc)capture_every=positive_integer(argv[++i]);
     else if(arg=="--capture-max-frames"&&i+1<argc)
       capture_max_frames=positive_integer(argv[++i]);
