@@ -427,10 +427,14 @@ MatchResult match_ceres_continuous_ablation(
   std::atomic<std::size_t> unexpected_invalid{0};
   ceres::Problem problem;
   std::size_t inserted=0;
+  const double seed_c=std::cos(seed.yaw_rad), seed_s=std::sin(seed.yaw_rad);
   for(const auto& point:points){
     if(!point.allFinite())continue;
-    // Seed-only mode uses exactly the legacy residual beam cohort.
-    if(seed_only&&!field->sample_map(transform(seed,point)))continue;
+    // Keep the original legacy seed-cohort arithmetic/order bit-for-bit.
+    const Eigen::Vector2d at_seed{
+      pose[0]+seed_c*point.x()-seed_s*point.y(),
+      pose[1]+seed_s*point.x()+seed_c*point.y()};
+    if(seed_only&&!field->sample_map(at_seed))continue;
     problem.AddResidualBlock(
         new ContinuousHitCost(*field,point,settings.sigma_metres,
                               finite_unsupported,unexpected_invalid),
