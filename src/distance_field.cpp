@@ -222,6 +222,43 @@ bool DistanceField::supports_disk_map(const Eigen::Vector2d& point,
   return true;
 }
 
+DistanceSample DistanceField::sample_matching_cost(const Eigen::Vector2d& p) const noexcept {
+  // A constant maximum cost is neutral in completely unknown/off-map
+  // regions; no source cells are marked observed or promoted to walls.
+  const DistanceSample plateau{truncation_metres_, Eigen::Vector2d::Zero()};
+  if(!p.allFinite()||!has_obstacles_)return plateau;
+  const auto& c=source_->config();
+  const auto local=transform(grid_from_map_,p);
+  const double gx=local.x()/c.resolution_m-0.5;
+  const double gy=local.y()/c.resolution_m-0.5;
+  // Limit float-to-integer conversion to safely bounded grid coordinates.
+  // One virtual cell of padding makes the cost continuous at the border.
+  if(!std::isfinite(gx)||!std::isfinite(gy)||
+     gx<=-1.0||gy<=-1.0||
+     gx>=static_cast<double>(c.width)||
+     gy>=static_cast<double>(c.height))return plateau;
+  const auto x=static_cast<long long>(std::floor(gx));
+  const auto y=static_cast<long long>(std::floor(gy));
+  const double u=gx-static_cast<double>(x);
+  const double v=gy-static_cast<double>(y);
+  const auto cost=[&](long long cx,long long cy) noexcept {
+    if(cx<0||cy<0||cx>=static_cast<long long>(c.width)||
+       cy>=static_cast<long long>(c.height))
+      return truncation_metres_;
+    const auto idx=static_cast<std::size_t>(cy)*c.width+
+                   static_cast<std::size_t>(cx);
+    return source_->cells()[idx].observed?values_[idx]:truncation_metres_;
+  };
+  const double a=cost(x,y),b=cost(x+1,y),d=cost(x,y+1),e=cost(x+1,y+1);
+  const double metres=(1.0-u)*((1.0-v)*a+v*d)+u*((1.0-v)*b+v*e);
+  const double grad_x=((1.0-v)*(b-a)+v*(e-d))/c.resolution_m;
+  const double grad_y=((1.0-u)*(d-a)+u*(e-b))/c.resolution_m;
+  const double cosine=std::cos(c.map_from_grid.yaw_rad);
+  const double sine=std::sin(c.map_from_grid.yaw_rad);
+  return {metres,{cosine*grad_x-sine*grad_y,
+                  sine*grad_x+cosine*grad_y}};
+}
+
 std::optional<DistanceSample> DistanceField::sample_map(const Eigen::Vector2d& p) const noexcept {
   if (!has_obstacles_ || !p.allFinite()) return std::nullopt;
   const auto& c = source_->config();
