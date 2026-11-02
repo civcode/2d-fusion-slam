@@ -151,6 +151,9 @@ def main():
         "commands": [],
     }
     rows = []
+    # These map variants do not use scan-matching corrections. They are a
+    # negative control: their fingerprints must not depend on match stride.
+    controls = {}
     for scene, matcher, stride, label in specs:
         cmd = command(a, scene, matcher, stride, label)
         manifest["commands"].append(cmd)
@@ -162,7 +165,16 @@ def main():
         if result.returncode:
             tail = "\n".join(logfile.read_text(errors="replace").splitlines()[-25:])
             raise RuntimeError(f"{label} failed ({result.returncode}):\n{tail}")
-        rows.extend(score_rows(a.out_dir/label, scene, matcher, stride, label, a))
+        run_rows = score_rows(a.out_dir/label, scene, matcher, stride, label, a)
+        for item in run_rows:
+            if item["map_method"] not in ("wheel_only", "gyro_wheel"):
+                continue
+            key = (scene, item["map_method"])
+            old = controls.setdefault(key, item["map_fingerprint"])
+            if old != item["map_fingerprint"]:
+                raise ValueError(
+                    f"{label}: non-matching control map changed with match stride")
+        rows.extend(run_rows)
         print("Completed", label, flush=True)
     with (a.out_dir/"scorecard.csv").open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
