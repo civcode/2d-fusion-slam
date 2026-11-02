@@ -59,6 +59,12 @@ int main() {
           "out of bounds classified");
   require(field->support_map({2.10,2.05})==DistanceSupport::supported,
           "valid interpolation classified");
+  require(field->supports_disk_map({2.10,2.05},0.02),
+          "small disk around observed geometry is certified");
+  require(!field->supports_disk_map({2.10,2.05},3.0),
+          "support region extending beyond map is not certified");
+  require(!field->supports_disk_map({2.10,2.05},-1.0),
+          "negative support radius is rejected");
   const auto original = snapshot->fingerprint();
   (void)grid.integrate_rays({{{0.05,3.05},{1.05,3.05},ReturnKind::hit}});
   require(snapshot->revision() == 2 && snapshot->fingerprint() == original,
@@ -76,6 +82,8 @@ int main() {
   require(!partial->sample_map({3.15,3.15}), "unknown stencil cannot match");
   require(partial->support_map({3.15,3.15})==DistanceSupport::unknown_cells,
           "unknown stencil classified");
+  require(!partial->supports_disk_map({3.15,3.15},0.01),
+          "unknown wedges cannot satisfy support certificate");
   require(!partial->sample_map({2.05,2.05}), "even hit needs fully known bilinear support");
 
   // Test rotated map gradient in the world frame and capped support.
@@ -100,6 +108,8 @@ int main() {
   require(!truncated->sample_map({0.5,0.5}), "truncated plateau excluded");
   require(truncated->support_map({0.5,0.5})==DistanceSupport::truncated,
           "truncation boundary classified");
+  require(!truncated->supports_disk_map({0.5,0.5},0.0),
+          "truncated area cannot satisfy support certificate");
   require(truncated->support_map({2.10,2.05})==DistanceSupport::supported,
           "near-wall interpolation remains supported");
   std::cout << "immutable snapshot and exact Euclidean EDT checks passed\n";
