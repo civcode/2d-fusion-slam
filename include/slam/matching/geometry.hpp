@@ -44,6 +44,7 @@ struct MatchResult {
   MatchDiagnostics diagnostics{};
   unsigned iterations{};
   std::size_t ceres_invalid_residual_evaluations{}; // failed EDT samples across solver trials
+  std::size_t ceres_invalid_unknown_cells{}, ceres_invalid_truncated{}, ceres_invalid_outside_grid{}, ceres_invalid_other{};
   std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
   std::string ceres_termination{"not_run"};
   // No posterior covariance is asserted. This is a conditioned tracking pose,
