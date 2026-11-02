@@ -21,3 +21,38 @@ button{font:inherit;cursor:pointer}button:focus-visible,.map-stage:focus-visible
 @media(max-width:1250px){.app-shell{grid-template-columns:215px minmax(0,1fr)}.sidebar{padding:24px 12px}.workspace{padding:30px 22px}.content-grid{grid-template-columns:minmax(0,1fr) 265px}.topbar{padding:0 22px}}
 @media(max-width:1040px){.content-grid{grid-template-columns:minmax(0,1fr)}.inspector{display:grid;grid-template-columns:1fr 1fr}.notice-card{grid-column:span 2}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.app-shell{display:block}.sidebar{min-height:unset;border-right:0;border-bottom:1px solid var(--border);padding:14px 16px}.brand{padding:2px 4px 12px;border:0}.sidebar-section:first-of-type,.side-footer{display:none}.maps-section{padding-top:13px;min-height:unset}.map-list{display:flex;overflow-x:auto;gap:8px;margin-top:8px}.map-item{min-width:170px;max-width:230px;margin:0}.topbar{height:54px;padding:0 16px}.top-status{display:none}.workspace{padding:24px 15px}.heading-block h1{font-size:28px}.mode-label{display:none}.summary-grid{gap:9px;margin-top:20px}.stat{padding:14px}.stat-value{font-size:23px}.stat-sub{font-size:10px}.panel-header{padding:16px;flex-wrap:wrap}.map-stage{height:390px}.map-foot{padding:14px;display:block}.map-hint{text-align:left;margin-top:12px}.inspector{grid-template-columns:1fr}.notice-card{grid-column:span 1}}
+
+
+/* Scene-first navigation: one accordion per completed fusion run, with
+   accessible native radio controls for the available reconstruction methods. */
+.map-list{overflow-y:auto;max-height:calc(100vh - 295px);min-height:0;padding-right:3px;scrollbar-color:#365268 transparent;scrollbar-width:thin}
+.scene-group{border:1px solid #273b51;border-radius:9px;background:#101f32;margin:0 0 10px;overflow:hidden}
+.scene-group[open]{border-color:#315967}
+.scene-summary{display:flex;align-items:center;gap:8px;padding:13px 10px;cursor:pointer;list-style:none;color:#deeaf4}
+.scene-summary::-webkit-details-marker{display:none}
+.scene-summary::before{content:"▸";font-size:13px;color:#8bb1bf;transition:transform .12s}
+.scene-group[open]>.scene-summary::before{transform:rotate(90deg);color:var(--teal)}
+.scene-summary:hover{background:#172c40}
+.scene-summary:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
+.scene-summary-copy{display:grid;gap:3px;min-width:0;flex:1}
+.scene-title{font-size:13px;font-weight:740;letter-spacing:.01em}
+.scene-run{font-size:10px;color:#7794ab;overflow-wrap:anywhere}
+.scene-method-count{font-size:9px;color:#91b2c4;white-space:nowrap}
+.scene-variants{border-top:1px solid #284052;display:grid;gap:2px;padding:7px 5px 10px}
+.map-variant{display:flex;align-items:flex-start;gap:8px;cursor:pointer;border:1px solid transparent;border-radius:7px;padding:9px 7px;color:#aec7d9;min-width:0}
+.map-variant:hover{background:#182e42}
+.map-variant.selected{background:#173a41;border-color:#30645f;color:#eefcf8}
+.map-variant:focus-within{outline:2px solid var(--teal);outline-offset:0}
+.map-variant>input[type=radio]{accent-color:var(--teal);width:15px;height:15px;flex:none;margin:2px 0 0;cursor:pointer}
+.map-variant-copy{display:grid;gap:4px;min-width:0}
+.variant-name{font-size:11px;font-weight:670;overflow-wrap:anywhere;line-height:1.3}
+.variant-description{font-size:10px;line-height:1.45;color:#88a2b6;overflow-wrap:anywhere}
+.map-variant.selected .variant-description{color:#a6c9c7}
+.standalone-maps{padding:6px 0 0}
+.standalone-maps>h3{margin:10px 9px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8ba5b9}
+.standalone-maps>.map-variant{margin-bottom:3px}
+@media(max-width:700px){
+  .map-list{display:block;overflow-y:auto;max-height:360px;padding-right:3px;margin-top:10px}
+  .scene-group{margin-bottom:7px}
+  .map-variant{max-width:none;min-width:0}
+}
