@@ -288,6 +288,67 @@ class OfflineFusionExperiment(unittest.TestCase):
                                 f["probe_supported_poses"] <= f["probe_poses"]
                                 for f in audit["frames"]))
 
+    def test_lidar_only_scan_to_scan_bootstrap(self):
+        # Compare each bootstrapped experiment to the old estimator, keeping
+        # both scenes' gyro/wheel, held-out and graph paths unchanged.
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                before = pathlib.Path(root) / "without"
+                after = pathlib.Path(root) / "with"
+                for folder, flags in (
+                    (before, ()),
+                    (after, ("--lidar-only-bootstrap",)),
+                ):
+                    process = run(EXE, scene, str(folder), *flags)
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                old = json.loads((before / "fusion_report.json").read_text())
+                new = json.loads((after / "fusion_report.json").read_text())
+                self.assertFalse(old["lidar_only_bootstrap"])
+                self.assertTrue(new["lidar_only_bootstrap"])
+                self.assertEqual(old["lidar_only_accepted"], 0)
+                self.assertEqual(old["lidar_only_bootstrap_accepted"], 0)
+                self.assertGreater(new["lidar_only_bootstrap_attempted"], 0)
+                self.assertGreater(new["lidar_only_bootstrap_accepted"], 0)
+                self.assertEqual(new["lidar_only_bootstrap_attempted"],
+                                 new["lidar_only_bootstrap_accepted"] +
+                                 new["lidar_only_bootstrap_rejected"])
+                self.assertEqual(new["lidar_only_accepted"],
+                                 new["lidar_only_edt_accepted"] +
+                                 new["lidar_only_bootstrap_accepted"])
+                self.assertEqual(new["lidar_only_accepted"] +
+                                 new["lidar_only_rejected"] +
+                                 new["lidar_only_skipped"], new["frames"]-1)
+                self.assertGreater(
+                    new["results"]["lidar_only"]["map"]["counts"]["known"],
+                    old["results"]["lidar_only"]["map"]["counts"]["known"])
+                for name in ("wheel_only", "gyro_wheel", "fused_scan_matched"):
+                    self.assertEqual(
+                        old["results"][name]["map"]["map_fingerprint"],
+                        new["results"][name]["map"]["map_fingerprint"])
+                old_paths = json.loads((before / "trajectories.json").read_text())
+                new_paths = json.loads((after / "trajectories.json").read_text())
+                for name, path in old_paths["paths"].items():
+                    if name != "lidar_only":
+                        self.assertEqual(path,new_paths["paths"][name])
+                audit = json.loads(
+                    (after / "lidar_only_match_audit.json").read_text())
+                self.assertTrue(audit["lidar_only_bootstrap"])
+                self.assertEqual(
+                    sum(row["registration_method"] in
+                        ("scan_to_scan","edt_refined") for row in audit["frames"]),
+                    new["lidar_only_bootstrap_accepted"])
+                self.assertTrue(all(
+                    row["registration_forward_overlap"]>=.65 and
+                    row["registration_reverse_overlap"]>=.65 and
+                    row["registration_error_m"]<=.20 and
+                    row["registration_translation_m"]<=.90 and
+                    row["registration_yaw_rad"]<=.32
+                    for row in audit["frames"]
+                    if row["registration_method"] in ("scan_to_scan","edt_refined")))
+                self.assertTrue(all(row["accepted"] ==
+                                    (row["status"] == "accepted")
+                                    for row in audit["frames"]))
+
     def test_continuous_cost_for_both_scenes_or_fail_closed(self):
         for scene in ("apartment", "warehouse"):
             with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
