@@ -138,6 +138,10 @@ def main():
             source_sha = report["source_sha256"]
         if report["source_sha256"] != source_sha:
             raise ValueError("CARMEN source mismatch between runs")
+        invalid_breakdown = sum(report["ceres_invalid_" + reason] for reason in
+                                ("unknown_cells", "truncated", "outside_grid", "other"))
+        if invalid_breakdown != report["ceres_invalid_residual_evaluations"]:
+            raise ValueError("Ceres invalid-evaluation breakdown does not reconcile")
         comparison = {}
         comparison_file = ""
         if args.reference_archive:
