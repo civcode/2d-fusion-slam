@@ -447,8 +447,10 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     evidence.residual_blocks=candidate.solver_residual_blocks;
     evidence.map_revision=cached_snapshot->revision();
     evidence.solver_invalid_residuals=candidate.ceres_invalid_residual_evaluations;
-    evidence.seed_overlap=candidate.diagnostics.overlap;
-    evidence.seed_full_rank=candidate.diagnostics.full_rank;
+    // Diagnostic fields describe the original seed, even after an
+    // accepted match replaces the result's final geometry diagnostics.
+    evidence.seed_overlap=candidate.seed_overlap;
+    evidence.seed_full_rank=candidate.seed_full_rank;
     evidence.candidate_evaluated=candidate.candidate_evaluated;
     evidence.candidate_translation_m=candidate.candidate_translation_m;
     evidence.has_obstacles=cached_field->has_obstacles();
