@@ -110,8 +110,8 @@ ScanToScanResult score(const Points& previous,const Points& current,
       ++r.reverse_inliers;
   r.forward_overlap=double(r.forward_inliers)/double(current.size());
   r.reverse_overlap=double(r.reverse_inliers)/double(previous.size());
-  r.mean_error_m=r.forward_inliers?std::sqrt(loss/double(r.forward_inliers)):
-                    std::numeric_limits<double>::infinity();
+  // Keep rejected-run diagnostics valid JSON even with zero inliers.
+  r.mean_error_m=r.forward_inliers?std::sqrt(loss/double(r.forward_inliers)):0.;
   // Symmetric check: a scan cannot "match" only a tiny convenient corner.
   r.accepted=r.forward_inliers>=kMinMatches&&r.reverse_inliers>=kMinMatches&&
       r.forward_overlap>=.65&&r.reverse_overlap>=.65&&
