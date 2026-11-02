@@ -1,3 +1,4 @@
+#include <cxxopts.hpp>
 #include "slam/datasets/fr079_offline.hpp"
 #include "slam/datasets/fr079_capture_benchmark.hpp"
 #include "slam/datasets/carmen.hpp"
@@ -302,35 +303,49 @@ std::size_t positive_integer(const std::string& s){
   return n;
 }
 int run(int argc,char** argv){
-  if(argc<3){
-    std::cerr<<"Usage: slam_fr079_offline <fr079.log[.gz]> <new-output-prefix>"
-                " [--reference] [--match-every N] [--field-every N]"
-                " [--map-stride N] [--match-stride N]"
-                " [--distance-truncation METRES]"
-                " [--capture] [--capture-every N] [--capture-max-frames N]\n";
-    return 2;
+  cxxopts::Options cli("slam_fr079_offline",
+      "Offline FR079 CARMEN LiDAR and odometry SLAM");
+  cli.add_options()
+      ("log","FR079 recording",cxxopts::value<std::string>())
+      ("prefix","New output prefix",cxxopts::value<std::string>())
+      ("reference","Use geometry-reference matcher without Ceres")
+      ("support-aware","Enable opt-in certified-support Ceres matcher")
+      ("capture","Write frozen-map pose perturbation benchmark")
+      ("capture-every","Capture interval",cxxopts::value<std::string>())
+      ("capture-max-frames","Maximum captured frame count",cxxopts::value<std::string>())
+      ("match-every","Match once per N scans",cxxopts::value<std::string>())
+      ("field-every","Rebuild distance field every N scans",cxxopts::value<std::string>())
+      ("map-stride","Use every Nth valid beam for occupancy updates",cxxopts::value<std::string>())
+      ("match-stride","Use every Nth valid beam for matching",cxxopts::value<std::string>())
+      ("distance-truncation","EDT truncation in metres",cxxopts::value<std::string>())
+      ("h,help","Print help");
+  cli.parse_positional({"log","prefix"});
+  cli.positional_help("<fr079.log[.gz]> <new-output-prefix>");
+  cxxopts::ParseResult args;
+  try{args=cli.parse(argc,argv);}
+  catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
+  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(!args.count("log")||!args.count("prefix")){
+    std::cerr<<cli.help();return 2;
   }
   slam::datasets::Fr079SlamOptions options;
-  bool capture=false;
-  std::size_t capture_every=120,capture_max_frames=12;
-  for(int i=3;i<argc;++i){
-    const std::string arg=argv[i];
-    if(arg=="--reference")options.use_ceres=false;
-    else if(arg=="--capture")capture=true;
-    else if(arg=="--support-aware")options.support_aware_ceres=true;
-    else if(arg=="--capture-every"&&i+1<argc)capture_every=positive_integer(argv[++i]);
-    else if(arg=="--capture-max-frames"&&i+1<argc)
-      capture_max_frames=positive_integer(argv[++i]);
-    else if(arg=="--match-every"&&i+1<argc)options.match_every=positive_integer(argv[++i]);
-    else if(arg=="--field-every"&&i+1<argc)options.rebuild_field_every=positive_integer(argv[++i]);
-    else if(arg=="--map-stride"&&i+1<argc)options.map_beam_stride=positive_integer(argv[++i]);
-    else if(arg=="--match-stride"&&i+1<argc)options.match_beam_stride=positive_integer(argv[++i]);
-    else if(arg=="--distance-truncation"&&i+1<argc)
-      options.distance_truncation_m=positive_distance(argv[++i]);
-    else throw std::invalid_argument("unrecognized or incomplete FR079 option");
-  }
+  options.use_ceres=args.count("reference")==0;
+  options.support_aware_ceres=args.count("support-aware")!=0;
+  const bool capture=args.count("capture")!=0;
+  const auto positive=[&](const char* key,std::size_t fallback) {
+    return args.count(key)?positive_integer(args[key].as<std::string>()):fallback;
+  };
+  const std::size_t capture_every=positive("capture-every",120);
+  const std::size_t capture_max_frames=positive("capture-max-frames",12);
+  options.match_every=positive("match-every",options.match_every);
+  options.rebuild_field_every=positive("field-every",options.rebuild_field_every);
+  options.map_beam_stride=positive("map-stride",options.map_beam_stride);
+  options.match_beam_stride=positive("match-stride",options.match_beam_stride);
+  if(args.count("distance-truncation"))
+    options.distance_truncation_m=positive_distance(
+        args["distance-truncation"].as<std::string>());
   ensure(capture_max_frames<=100,"capture-max-frames must be at most 100");
-  const std::filesystem::path prefix(argv[2]);
+  const std::filesystem::path prefix(args["prefix"].as<std::string>());
   ensure(!prefix.filename().empty()&&std::filesystem::is_directory(prefix.parent_path()),
          "output parent must already be a directory");
   const auto binary=prefix.string()+".slammap";
@@ -348,7 +363,7 @@ int run(int argc,char** argv){
     ensure(!std::filesystem::exists(std::filesystem::symlink_status(capture_csv)),
            "capture output already exists; refusing overwrite");
   const auto begin=Clock::now();
-  const auto content=read_log(argv[1]);
+  const auto content=read_log(args["log"].as<std::string>());
   const auto digest=sha256(content); // hash uncompressed CARMEN bytes, not filename
   const auto scans=parse(content);
   std::unique_ptr<slam::datasets::Fr079CaptureBenchmark> capture_benchmark;
