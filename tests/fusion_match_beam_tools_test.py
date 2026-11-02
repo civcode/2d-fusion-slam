@@ -9,6 +9,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from fusion_match_beam_sweep import command, validate, parser
+from fusion_bootstrap_compare import compare
 
 
 def main():
@@ -50,6 +51,33 @@ def main():
         else:
             raise AssertionError("predict-first without bootstrap accepted")
         options.lidar_only_predict_first=False
+        # Compare tool must fail if any non-LiDAR-only fingerprint changes.
+        old={}
+        new={}
+        for method in ("wheel_only","gyro_wheel","fused_scan_matched","lidar_only"):
+            for stride in (1,2):
+                key=("apartment","continuous",stride,method)
+                row={
+                    "scene":"apartment","matcher":"continuous",
+                    "nominal_beams":str(240//stride),
+                    "match_stride":str(stride),
+                    "map_fingerprint":f"fixed-{method}",
+                    "translation_rmse_m":"0.2",
+                    "occupied_iou":"0.3",
+                    "lidar_only_accepted":"2",
+                }
+                old[key]=row.copy()
+                new[key]=row.copy()
+        compare(old,new)
+        broken={key:value.copy() for key,value in new.items()}
+        bad=("apartment","continuous",1,"wheel_only")
+        broken[bad]["map_fingerprint"]="unexpected"
+        try:
+            compare(old,broken)
+        except ValueError as exc:
+            assert "control map changed" in str(exc)
+        else:
+            raise AssertionError("modified wheel-only map was not rejected")
         options.map_stride=0
         try:
             validate(options,parser())
