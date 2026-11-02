@@ -85,6 +85,80 @@ nonmonotonic or mismatched timestamps, mismatched scene/truth/clock, invalid
 match/loop counts and nonmatching map fingerprints. There are no write
 endpoints. FUSMAP2D's checksum is corruption detection, not authentication.
 
+## Experimental LiDAR-derived loop closure (fused pose graph)
+
+The default synthetic fusion pipeline retains its **odometry-only GTSAM
+graph**, even when the independently estimated LiDAR trajectory drifts.
+The previous `--synthetic-independent-loops` option uses an extra
+**simulated relative-pose sensor**. It is not a deployed LiDAR closure.
+
+To evaluate actual *LiDAR scan-pair loop constraints* on the Office scene,
+build a GTSAM-enabled `slam_offline_fusion` executable (Docker's test
+image) and generate a **new** run folder:
+
+~~~sh
+docker compose build test
+mkdir -p apps/demo/fusion
+docker compose run --rm \
+  -v "$PWD/apps/demo/fusion:/output" \
+  --entrypoint ./build-docker/slam_offline_fusion \
+  test office /output/office-loops-001 \
+  --continuous-cost --match-stride 1 --match-every 1 \
+  --field-every 15 --map-stride 1 \
+  --lidar-only-bootstrap --lidar-only-predict-first \
+  --lidar-loop-closure
+
+FUSION_DEMO_RUNS_DIR="$PWD/apps/demo/fusion" docker compose up --build -d demo
+~~~
+
+Open `/fusion?run=office-loops-001&view=slam` and enable **Final graph**;
+select the `graph_optimized` occupancy overlay, or inspect the graph
+variant in the Map Explorer. Run the same options **without**
+`--lidar-loop-closure` into a separate folder for a controlled A/B.
+Existing paths and maps (`wheel_only`, `gyro_wheel`, `lidar_only`,
+`fused_scan_matched`) must remain unchanged by the graph-only option.
+The graph-optimized result is a fused-trajectory postprocessing output,
+**not** a correction to the independent LiDAR-only baseline.
+
+The proposed scan closures:
+
+1. Shortlist historical poses separated by at least 40 scans and within
+   0.78 m / 0.26 rad of the *estimated* trajectory. Query only bounded
+   keyframes and up to four candidates per query.
+2. Register previous/current gyro/wheel-deskewed LiDAR hit clouds directly
+   with deterministic trimmed reciprocal ICP. The chosen relative
+   transform is **measured from scan geometry**, not copied from either
+   estimated pose or the simulator truth.
+3. Require two-way inlier coverage >=82%, >=80 inliers per direction,
+   selected-correspondence rank, <=0.11 m inlier RMS, <=0.55 m and
+   <=0.17 rad innovation around the candidate seed.
+4. Accept only the best verified loop per keyframe and keep successive
+   accepted queries at least 18 scans apart.
+5. Send it to the existing gauge-fixed GTSAM batch graph with robust
+   Huber loss, conservative *configured* uncertainties of
+   0.20 m / 0.20 m / 0.14 rad, and a second graph-stage innovation gate
+   of 0.8 m / 0.3 rad. These are experiment weights, **not
+   calibrated covariance estimates**.
+6. Preserve rejected proposal events, accepted events, number of ICP
+   registrations attempted and verified, and the generated graph map.
+
+The source is recorded as `lidar_scan_registration_correlated`.
+The scan pairs reuse observations that influenced the frontend and use
+the estimated trajectory only for candidate search/initialization.
+These are **correlated constraints**, not independently sourced truth
+or a new sensor. Do not interpret the solver's objective reduction as
+absolute accuracy. For synthetic experiments, compare
+`results.graph_optimized.translation_rmse_m` and occupied IoU against
+the no-loop baseline after the run; no ground truth is used to decide
+which graph edges are accepted.
+
+`--lidar-loop-closure` and `--synthetic-independent-loops` are mutually
+exclusive, and the former requires GTSAM. The feature is opt-in because
+repetitive geometry can still create false place associations. If no
+candidate passes, the report honestly shows zero accepted closures and
+the graph remains odometry-only. Recorded FR079 LiDAR/odometry SLAM
+does **not yet** use this synthetic fused-graph loop closure frontend.
+
 ## Honest visualization
 
 The same native Fusion page offers two distinct read-only views:
