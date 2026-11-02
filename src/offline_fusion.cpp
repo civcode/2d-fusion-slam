@@ -1350,6 +1350,10 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
            <<" matcher="<<matched.backend
            <<" accepted="<<matched.accepted<<"/"<<matched.attempted
            <<" graph="<<graph.status
+           <<" loop_nearby="<<graph.lidar_nearby_pairs
+           <<" loop_icp_pairs="<<graph.lidar_registration_attempted
+           <<" loop_geometry_pass="<<graph.lidar_geometry_verified
+           <<" loop_redundant="<<graph.lidar_redundant_suppressed
            <<" loops="<<graph.accepted_loops
            <<"\nreport="<<(directory/"fusion_report.json").string()<<'\n';
 }
