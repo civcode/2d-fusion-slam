@@ -173,6 +173,52 @@ candidate passes, the report honestly shows zero accepted closures and
 the graph remains odometry-only. Recorded FR079 LiDAR/odometry SLAM
 does **not yet** use this synthetic fused-graph loop closure frontend.
 
+## Diagnosing the late-run map distortion
+
+The GTSAM batch optimizer computes a **new pose for every graph node**.
+The offline pipeline subsequently calls `make_map(sim,graph.poses,
+p.gyro_deskewed,...)`, so `graph_optimized.slammap` is built fresh
+using all optimized scan poses. The loop correction is **not**
+applied to the final node alone. However, the sequential graph edges
+are only gyro/wheel relative increments; the frozen-map matched scan
+poses are used as initialization, **not** as independent graph
+constraints. A single 0 -> 186 LiDAR loop can reduce endpoint drift
+without repairing local relative-pose errors on frames ~171–194, and
+frames 187–194 have no later loop connection.
+
+**Viewer correction:** earlier versions of `/fusion` always projected
+deskewed hit samples using the `fused_scan_matched` path even when a
+`graph_optimized` map overlay was chosen. The updated browser
+automatically changes **Scan-point trajectory** to **Graph optimized**
+when that occupancy overlay is selected. It also exposes an explicit
+trajectory projection selector for comparisons. Current and cumulative
+hits are then drawn at the graph poses (not the fused poses).
+This changes **visualization only**; it does not modify a saved
+map artifact. `wheel_only` cannot project a fully consistent
+wheel-deskewed scan because only gyro/wheel-deskewed and raw hit samples
+are stored in the trace; choose the appropriate LiDAR view for the
+LiDAR-only map.
+
+The synthetic post-hoc comparison tool now shows RMSE and **maximum**
+pose error for the last 12% independently from the full-run RMSE,
+together with mean/maximum optimized pose displacement versus the
+odometry-only graph, the error immediately before the accepted loop
+node and the error on subsequent frames:
+
+~~~sh
+python tools/fusion_loop_compare.py \
+  --baseline apps/demo/fusion/warehouse_asymmetric-no-loops-001 \
+  --loops apps/demo/fusion/warehouse_asymmetric-loops-001
+~~~
+
+A nonzero pose displacement proves graph propagation; a reduced
+per-window synthetic pose error supports actual geometric improvement.
+Neither proves each occupied cell is correct. Longer-term fixes should
+supply **additional independently gated local scan constraints** and
+revisit detection along the misaligned segment, while refusing weak
+or ambiguous shelf matches. Simply increasing loop weight cannot
+replace missing measurements.
+
 ## Honest visualization
 
 The same native Fusion page offers two distinct read-only views:
