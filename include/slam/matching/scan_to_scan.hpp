@@ -23,6 +23,14 @@ struct ScanToScanResult {
   double translation_m{}, rotation_rad{};
 };
 
+// The default is deliberately narrow for consecutive scans. Nonconsecutive
+// place-revisit hypotheses may opt into a wider displacement envelope, but
+// must still pass separate reciprocal geometry and graph-innovation checks.
+struct ScanRegistrationLimits {
+  double max_translation_m{0.90};
+  double max_rotation_rad{0.32};
+};
+
 // Conservative deterministic trimmed nearest-neighbor registration. Intended
 // only as an explicitly enabled bootstrap for the synthetic LiDAR-only path.
 // Rejects insufficient or weakly constrained geometry instead of inventing
@@ -31,6 +39,7 @@ struct ScanToScanResult {
     const std::vector<Eigen::Vector2d>& previous,
     const std::vector<Eigen::Vector2d>& current,
     Pose2 initial_previous_from_current = {},
-    bool wide_initial_search = true);
+    bool wide_initial_search = true,
+    ScanRegistrationLimits limits = {});
 
 } // namespace slam::matching
