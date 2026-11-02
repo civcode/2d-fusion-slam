@@ -161,7 +161,7 @@ class FusionHTTP(unittest.TestCase):
                 metadata = self.get_json(base + "/maps/lidar_only")
                 self.assertEqual(metadata["source_id"], report["scene"])
                 with request.urlopen(self.base + base + "/maps/lidar_only/image.png") as img:
-                    self.assertEqual(img.read(8), b"\\x89PNG\\r\\n\\x1a\\n")
+                    self.assertEqual(img.read(8), b"\x89PNG\r\n\x1a\n")
             finally:
                 if folder.exists():
                     shutil.rmtree(folder)
