@@ -62,6 +62,19 @@ int main() {
           *ideal.symmetric_p95_wall_distance_m == 0.0,
           "perfect reference wall distance is zero");
 
+  const auto perfect_wall_tolerances=evaluate_wall_tolerances(map,ap);
+  require(perfect_wall_tolerances.size()==3,
+          "three default tolerance bands");
+  for(const auto& band:perfect_wall_tolerances)
+    require(band.predicted_near_reference==1. &&
+            band.reference_near_predicted==1. &&
+            band.symmetric_f1==1.,
+            "exact wall map matches at every distance tolerance");
+  require(perfect_wall_tolerances[0].tolerance_m==.10 &&
+          perfect_wall_tolerances[1].tolerance_m==.25 &&
+          perfect_wall_tolerances[2].tolerance_m==.50,
+          "explicit 10/25/50 centimetre scoring thresholds");
+
   std::ostringstream text1, text2;
   write_map_accuracy_json(text1, ideal, ap);
   write_map_accuracy_json(text2, evaluate_map_accuracy(map, ap), ap);
@@ -100,6 +113,22 @@ int main() {
           *worse.symmetric_mean_wall_distance_m > 0 &&
           worse.symmetric_p95_wall_distance_m,
           "symmetric wall error detects geometric distortion");
+
+  const auto wall_bands=evaluate_wall_tolerances(degraded,ap);
+  require(wall_bands.size()==3 &&
+          wall_bands[0].predicted_near_reference<=
+              wall_bands[1].predicted_near_reference &&
+          wall_bands[1].predicted_near_reference<=
+              wall_bands[2].predicted_near_reference &&
+          wall_bands[0].reference_near_predicted<=
+              wall_bands[1].reference_near_predicted &&
+          wall_bands[1].reference_near_predicted<=
+              wall_bands[2].reference_near_predicted,
+          "metric distance tolerance must yield nondecreasing wall agreement");
+  must_reject([&]{ (void)evaluate_wall_tolerances(map,ap,{-.1}); },
+              "negative tolerance refused");
+  must_reject([&]{ (void)evaluate_wall_tolerances(map,ap,{3.}); },
+              "unbounded tolerance refused");
 
   // A map estimated from synthetic measurements is not itself exact truth.
   auto estimated_label = map;
