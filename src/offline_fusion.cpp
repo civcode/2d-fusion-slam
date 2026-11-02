@@ -6,6 +6,7 @@
 #include "slam/graph/pose_graph.hpp"
 #include "slam/mapping/map_bundle.hpp"
 #include "slam/matching/geometry.hpp"
+#include "slam/matching/scan_to_scan.hpp"
 #include "slam/motion/trajectory.hpp"
 
 #include <algorithm>
@@ -43,6 +44,7 @@ struct FusionMatchOptions {
   bool continuous_cost{};
   // Read-only bounded diagnostic around the stalled LiDAR-only seed.
   bool lidar_only_support_probe{};
+  bool lidar_only_bootstrap{};
 };
 std::size_t posint(std::string_view value,std::size_t max) {
   if(value.empty()||value.front()=='0'||
@@ -387,7 +389,10 @@ struct LidarMatchAudit {
   std::size_t solver_invalid_residuals{};
   double seed_overlap{}, candidate_translation_m{};
   bool seed_full_rank{}, candidate_evaluated{}, accepted{}, has_obstacles{};
-  std::string reason;
+  std::string reason,registration_method{"none"};
+  std::size_t registration_forward_inliers{},registration_reverse_inliers{};
+  double registration_forward_overlap{},registration_reverse_overlap{};
+  double registration_error_m{},registration_translation_m{},registration_yaw_rad{};
   // All probe measurements are read-only against the historical map.
   std::size_t probe_poses{}, probe_supported_poses{}, probe_ranked_poses{};
   std::size_t probe_best_supported_hits{};
@@ -400,6 +405,8 @@ struct LidarOnly {
   Mask mapped;
   std::size_t accepted{},rejected{},skipped{},field_rebuilds{};
   std::size_t matching_input_hits_total{};
+  std::size_t bootstrap_attempted{},bootstrap_accepted{},bootstrap_rejected{};
+  std::size_t edt_accepted{},edt_refined_accepted{};
   std::map<std::string,std::size_t> rejections;
 };
 LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
@@ -418,6 +425,9 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
   std::shared_ptr<const slam::mapping::MapSnapshot> cached_snapshot;
   std::shared_ptr<const slam::mapping::DistanceField> cached_field;
   std::size_t last_field_frame=0;
+  std::size_t last_accepted_scan=0;
+  slam::Pose2 last_relative_scan{};
+  bool has_relative_scan=false;
   for(std::size_t i=1;i<p.raw_lidar.size();++i) {
     if((i-1)%options.match_every!=0) {
       // A skipped scan is neither a rejection nor a trusted insertion.
@@ -491,13 +501,79 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     }
     evidence.accepted=qualified(candidate,*cached_snapshot,seed,.65);
     evidence.reason=evidence.accepted?"accepted":rejection_reason(candidate.status);
+    Pose2 chosen_laser=candidate.map_from_laser;
+    if(evidence.accepted) {
+      evidence.registration_method="edt";
+      ++out.edt_accepted;
+    } else if(options.lidar_only_bootstrap) {
+      ++out.bootstrap_attempted;
+      // Only the last accepted LiDAR scan and pose are used. There is no
+      // wheel/gyro or simulator-relative-motion input to registration.
+      const auto previous_scan=sample_matching_hits(
+          p.raw_lidar[last_accepted_scan],options.match_stride);
+      const auto registered=slam::matching::register_consecutive_scans(
+          previous_scan,matching_hits,
+          has_relative_scan?last_relative_scan:Pose2{});
+      evidence.registration_forward_inliers=registered.forward_inliers;
+      evidence.registration_reverse_inliers=registered.reverse_inliers;
+      evidence.registration_forward_overlap=registered.forward_overlap;
+      evidence.registration_reverse_overlap=registered.reverse_overlap;
+      evidence.registration_error_m=registered.mean_error_m;
+      evidence.registration_translation_m=registered.translation_m;
+      evidence.registration_yaw_rad=registered.rotation_rad;
+      if(registered.accepted) {
+        const Pose2 previous_laser=slam::compose(
+            out.poses.back(),kBaseFromLaser);
+        const Pose2 proposed_laser=slam::compose(
+            previous_laser,registered.previous_from_current);
+        // Prefer strict Ceres refinement when the new laser pose has
+        // independent real EDT support. A finite unknown cost alone never
+        // authorizes a pose, and the registered pose remains the fallback.
+        slam::matching::MatchSettings gate;
+        gate.min_supported_hits=18;
+        gate.minimum_overlap=.45;
+        const auto support=slam::matching::evaluate_geometry(
+            *cached_field,matching_hits,proposed_laser,gate);
+        if(support.supported_hits>=gate.min_supported_hits&&
+           support.overlap>=gate.minimum_overlap&&support.full_rank) {
+          const auto refined=match(cached_field,matching_hits,proposed_laser,options);
+          if(qualified(refined,*cached_snapshot,proposed_laser,.32)&&
+             (refined.map_from_laser.translation-
+              proposed_laser.translation).norm()<=.25&&
+             std::abs(slam::wrap_yaw(refined.map_from_laser.yaw_rad-
+                                     proposed_laser.yaw_rad))<=.12) {
+            chosen_laser=refined.map_from_laser;
+            evidence.registration_method="edt_refined";
+            ++out.edt_refined_accepted;
+          } else {
+            chosen_laser=proposed_laser;
+            evidence.registration_method="scan_to_scan";
+          }
+        } else {
+          chosen_laser=proposed_laser;
+          evidence.registration_method="scan_to_scan";
+        }
+        evidence.accepted=true;
+        evidence.reason="accepted";
+        ++out.bootstrap_accepted;
+      } else {
+        ++out.bootstrap_rejected;
+      }
+    }
     out.audit.push_back(evidence);
     if(evidence.accepted) {
-      const auto base=slam::compose(candidate.map_from_laser,
-                                   slam::inverse(kBaseFromLaser));
+      const Pose2 previous_laser=slam::compose(
+          out.poses.back(),kBaseFromLaser);
+      const Pose2 relative=slam::compose(
+          slam::inverse(previous_laser),chosen_laser);
+      const auto base=slam::compose(chosen_laser,
+                                    slam::inverse(kBaseFromLaser));
       out.poses.push_back(base);
       out.mapped[i]=true;
       insert(rolling,base,p.raw_lidar[i],options.map_stride);
+      last_relative_scan=relative;
+      has_relative_scan=true;
+      last_accepted_scan=i;
       ++out.accepted;
     } else {
       out.poses.push_back(out.poses.back());
