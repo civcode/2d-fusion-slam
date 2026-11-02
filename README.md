@@ -317,7 +317,12 @@ and warehouse scenes. These options apply to the held-out and LiDAR-only
 matching paths, and map insertion across all generated map variants.
 The [synthetic fusion beam sweep](docs/fusion-matching-options.md) uses
 independently simulated poses and walls for scoring and keeps matching-beam
-selection separate from map-beam insertion. No default is changed.
+selection separate from map-beam insertion. The opt-in
+`--lidar-only-bootstrap` flag adds gated LiDAR-to-LiDAR scan registration
+when the incremental map cannot yet supply sufficient strict EDT support,
+with strict Ceres refinement when observed geometry becomes usable.
+The default remains unchanged; any bootstrap gain must be validated
+against independent synthetic trajectory and map scores.
 
 ## Moving-scan offline gyro/wheel SLAM experiment
 
