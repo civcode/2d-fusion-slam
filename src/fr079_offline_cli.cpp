@@ -282,6 +282,7 @@ void save_report(const std::filesystem::path& file,
      <<",\"field_rebuild_every\":"<<options.rebuild_field_every
      <<",\"map_beam_stride\":"<<options.map_beam_stride
      <<",\"match_beam_stride\":"<<options.match_beam_stride
+     <<",\"match_beam_phase\":"<<options.match_beam_phase
      <<",\"attempts\":"<<result.attempts
      <<",\"accepted\":"<<result.accepted
      <<",\"rejected\":"<<result.rejected
@@ -338,7 +339,8 @@ int run(int argc,char** argv){
       ("match-every","Match once per N scans",cxxopts::value<std::string>())
       ("field-every","Rebuild distance field every N scans",cxxopts::value<std::string>())
       ("map-stride","Use every Nth valid beam for occupancy updates",cxxopts::value<std::string>())
-      ("match-stride","Use every Nth valid beam for matching",cxxopts::value<std::string>())
+      ("match-stride","Use every Nth original beam for matching",cxxopts::value<std::string>())
+      ("match-phase","Starting raw beam index within match stride (0-based)",cxxopts::value<std::string>())
       ("distance-truncation","EDT truncation in metres",cxxopts::value<std::string>())
       ("h,help","Print help");
   cli.parse_positional({"log","prefix"});
@@ -376,6 +378,15 @@ int run(int argc,char** argv){
   options.rebuild_field_every=positive("field-every",options.rebuild_field_every);
   options.map_beam_stride=positive("map-stride",options.map_beam_stride);
   options.match_beam_stride=positive("match-stride",options.match_beam_stride);
+  if(args.count("match-phase")){
+    const auto raw=args["match-phase"].as<std::string>();
+    ensure(!raw.empty()&&raw.size()<=2&&
+           std::all_of(raw.begin(),raw.end(),[](char c){return c>='0'&&c<='9';}),
+           "match-phase must be a nonnegative integer");
+    options.match_beam_phase=static_cast<std::size_t>(std::stoul(raw));
+  }
+  ensure(options.match_beam_phase<options.match_beam_stride,
+         "match-phase must be less than match-stride");
   if(args.count("distance-truncation"))
     options.distance_truncation_m=positive_distance(
         args["distance-truncation"].as<std::string>());
