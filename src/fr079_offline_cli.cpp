@@ -149,6 +149,10 @@ void save_matches(const std::filesystem::path& file,
        <<",\"overlap\":"<<f.overlap
        <<",\"robust_cost\":"<<f.robust_cost
        <<",\"ceres_invalid_residual_evaluations\":"<<f.ceres_invalid_residual_evaluations
+       <<",\"ceres_continuous_unknown_evaluations\":"<<f.ceres_continuous_unknown_evaluations
+       <<",\"ceres_continuous_truncated_evaluations\":"<<f.ceres_continuous_truncated_evaluations
+       <<",\"ceres_continuous_outside_evaluations\":"<<f.ceres_continuous_outside_evaluations
+       <<",\"ceres_continuous_other_evaluations\":"<<f.ceres_continuous_other_evaluations
        <<",\"ceres_invalid_unknown_cells\":"<<f.ceres_invalid_unknown_cells
        <<",\"ceres_invalid_truncated\":"<<f.ceres_invalid_truncated
        <<",\"ceres_invalid_outside_grid\":"<<f.ceres_invalid_outside_grid
@@ -245,9 +249,13 @@ void save_report(const std::filesystem::path& file,
      <<",\"loop_closures\":0"
      <<",\"pose_graph_optimized\":false"
      <<",\"realtime_deadlines_verified\":false"
-     <<",\"matcher\":\""<<(result.used_support_aware_ceres?"ceres_support_aware":(result.used_ceres?"ceres":"geometry_reference_fallback"))<<"\""
+     <<",\"matcher\":\""<<(result.used_continuous_cost_ceres?"ceres_continuous_cost":(result.used_support_aware_ceres?"ceres_support_aware":(result.used_ceres?"ceres":"geometry_reference_fallback")))<<"\""
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
      <<",\"ceres_invalid_residual_evaluations\":"<<result.total_invalid_residual_evaluations
+     <<",\"ceres_continuous_unknown_evaluations\":"<<result.total_continuous_unknown_evaluations
+     <<",\"ceres_continuous_truncated_evaluations\":"<<result.total_continuous_truncated_evaluations
+     <<",\"ceres_continuous_outside_evaluations\":"<<result.total_continuous_outside_evaluations
+     <<",\"ceres_continuous_other_evaluations\":"<<result.total_continuous_other_evaluations
      <<",\"ceres_invalid_unknown_cells\":"<<result.total_invalid_unknown_cells
      <<",\"ceres_invalid_truncated\":"<<result.total_invalid_truncated
      <<",\"ceres_invalid_outside_grid\":"<<result.total_invalid_outside_grid
@@ -310,6 +318,7 @@ int run(int argc,char** argv){
       ("prefix","New output prefix",cxxopts::value<std::string>())
       ("reference","Use geometry-reference matcher without Ceres")
       ("support-aware","Enable opt-in certified-support Ceres matcher")
+      ("continuous-cost","Enable opt-in finite cost for unknown EDT cells")
       ("capture","Write frozen-map pose perturbation benchmark")
       ("capture-every","Capture interval",cxxopts::value<std::string>())
       ("capture-max-frames","Maximum captured frame count",cxxopts::value<std::string>())
@@ -331,6 +340,7 @@ int run(int argc,char** argv){
   slam::datasets::Fr079SlamOptions options;
   options.use_ceres=!(args.count("reference")&&args["reference"].as<bool>());
   options.support_aware_ceres=args.count("support-aware")&&args["support-aware"].as<bool>();
+  options.continuous_cost_ceres=args.count("continuous-cost")&&args["continuous-cost"].as<bool>();
   const bool capture=args.count("capture")&&args["capture"].as<bool>();
   const auto positive=[&](const char* key,std::size_t fallback) {
     return args.count(key)?positive_integer(args[key].as<std::string>()):fallback;
@@ -370,6 +380,7 @@ int run(int argc,char** argv){
   if(capture) {
     capture_benchmark=std::make_unique<slam::datasets::Fr079CaptureBenchmark>(
         capture_csv,digest,options.use_ceres,options.support_aware_ceres,
+        options.continuous_cost_ceres,
         capture_every,capture_max_frames);
     options.capture_probe=[&](std::size_t index,const slam::Pose2& anchor,
         std::shared_ptr<const slam::mapping::MapSnapshot> prior,
