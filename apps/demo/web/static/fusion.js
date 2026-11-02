@@ -123,7 +123,10 @@
     shown("fusion-loops",report.graph_accepted_loops+" / "+report.graph_loop_candidates);
     shown("fusion-loop-source",report.loop_measurements==="lidar_scan_registration_correlated"?
       "LiDAR scan registration (correlated; not independent)"+
-      " · "+(report.graph_lidar_loop_registration_attempted||0)+" ICP checks":
+      " · "+(report.graph_lidar_loop_nearby_pairs??"—")+" nearby pairs"+
+      " · "+(report.graph_lidar_loop_registration_attempted||0)+" ICP pairs tested"+
+      " · "+(report.graph_lidar_loop_geometry_verified??"—")+" geometric passes"+
+      " · "+(report.graph_lidar_loop_redundant_suppressed??"—")+" redundant suppressed":
       report.loop_measurements==="independently_simulated_relative_pose"?
       "Independent simulated relative-pose sensor":
       "No enabled loop source (odometry graph only)");
