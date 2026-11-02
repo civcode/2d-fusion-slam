@@ -60,6 +60,38 @@ int main(){
   require(weak_result.loop_decisions[0]==LoopDecision::insufficient_geometry &&
           weak_result.loop_decisions[1]==LoopDecision::accepted,
           "unsupported proposal must not poison subsequent valid loop");
+  // Experimental LiDAR closure is scan-derived and explicitly NOT
+  // independent of the scan-seeded trajectory. Its robust factor can be
+  // admitted only under stricter noise/support/provenance requirements.
+  auto scan_input=measured;
+  scan_input.loops.clear();
+  auto scan_factor=edge(0,4,{{0,0},0},.20);
+  scan_factor.sigma_yaw_rad=.14;
+  scan_factor.provenance={
+      EvidenceClass::lidar_scan_registration,"lidar_pair_v1",true,false};
+  scan_input.loops.push_back({scan_factor,120,.94,true});
+  const auto scan_result=optimize_pose_graph(scan_input);
+  require(scan_result.accepted_loops==1&&
+          scan_result.loop_decisions[0]==LoopDecision::accepted,
+          "well-constrained, explicitly correlated LiDAR loop admitted");
+  auto too_certain=scan_input;
+  too_certain.loops[0].edge.sigma_x_m=.03;
+  const auto weak_sigma=optimize_pose_graph(too_certain);
+  require(weak_sigma.accepted_loops==0&&
+          weak_sigma.loop_decisions[0]==LoopDecision::unverified_or_correlated_evidence,
+          "LiDAR-derived closure cannot claim independent-sensor confidence");
+  auto false_provenance=scan_input;
+  false_provenance.loops[0].edge.provenance.independent_of_initial_trajectory=true;
+  const auto wrong_claim=optimize_pose_graph(false_provenance);
+  require(wrong_claim.accepted_loops==0&&
+          wrong_claim.loop_decisions[0]==LoopDecision::unverified_or_correlated_evidence,
+          "scan-conditioned factor must not claim independence");
+  auto weak_geom=scan_input;
+  weak_geom.loops[0].supported_hits=30;
+  const auto weak_support=optimize_pose_graph(weak_geom);
+  require(weak_support.accepted_loops==0&&
+          weak_support.loop_decisions[0]==LoopDecision::unverified_or_correlated_evidence,
+          "LiDAR loop requires stronger geometry than independently measured factor");
   in.odometry[0].provenance.source=EvidenceClass::unverified;
   bool denied=false;try{(void)optimize_pose_graph(in);}catch(const std::invalid_argument&){denied=true;}
   require(denied,"unverified odometry cannot become a graph factor");
