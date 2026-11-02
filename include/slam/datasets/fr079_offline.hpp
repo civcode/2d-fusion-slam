@@ -3,6 +3,7 @@
 #include "slam/mapping/map_bundle.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,6 +25,12 @@ struct Fr079SlamOptions {
   double max_correction_m{0.40};
   double max_correction_yaw_rad{0.17};
   bool use_ceres{true};
+  // Optional diagnostic observer: receives only the last accepted estimated
+  // pose, query scan, and a *previously built* immutable map snapshot.
+  // Never influences SLAM state, and never supplies ground-truth poses.
+  std::function<void(std::size_t,const Pose2&,
+                     std::shared_ptr<const mapping::MapSnapshot>,
+                     const std::vector<Eigen::Vector2d>&)> capture_probe;
 };
 struct Fr079SlamFrame {
   Pose2 odom;           // odometry in first-scan gauge; never ground truth
