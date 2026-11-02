@@ -195,26 +195,26 @@ bool DistanceField::supports_disk_map(const Eigen::Vector2d& point,
   const auto& c=source_->config();
   const auto local=transform(grid_from_map_,point);
   const double r=c.resolution_m;
-  const double max_x=(static_cast<double>(c.width)-0.5)*r;
-  const double max_y=(static_cast<double>(c.height)-0.5)*r;
-  // Every interpolated sample centre must remain in [0.5r,(N-0.5)r).
-  if(local.x()-radius_m<0.5*r||local.y()-radius_m<0.5*r||
-     local.x()+radius_m>=max_x||local.y()+radius_m>=max_y)
-    return false;
-  // An interpolation stencil can reach at most sqrt(2)*r from its
-  // sample point. Every cell centre in this enclosing square must be
-  // known and have an informative distance (< truncation).
-  const double extent=radius_m+1.4142135623730951*r;
-  const auto first_x=static_cast<std::size_t>(std::max(
-      0.0,std::floor((local.x()-extent)/r-0.5)));
-  const auto first_y=static_cast<std::size_t>(std::max(
-      0.0,std::floor((local.y()-extent)/r-0.5)));
-  const auto last_x=static_cast<std::size_t>(std::min(
-      static_cast<double>(c.width-1),std::ceil((local.x()+extent)/r-0.5)));
-  const auto last_y=static_cast<std::size_t>(std::min(
-      static_cast<double>(c.height-1),std::ceil((local.y()+extent)/r-0.5)));
-  for(std::size_t y=first_y;y<=last_y;++y)
-    for(std::size_t x=first_x;x<=last_x;++x) {
+  // Any pose in a disk is inside this enclosing axis-aligned square.
+  // Determine *all interpolation stencils* that such a point could use.
+  const double gx0=(local.x()-radius_m)/r-0.5;
+  const double gx1=(local.x()+radius_m)/r-0.5;
+  const double gy0=(local.y()-radius_m)/r-0.5;
+  const double gy1=(local.y()+radius_m)/r-0.5;
+  if(!std::isfinite(gx0)||!std::isfinite(gx1)||
+     !std::isfinite(gy0)||!std::isfinite(gy1)||
+     gx0<0.0||gy0<0.0||
+     gx1>=static_cast<double>(c.width-1)||
+     gy1>=static_cast<double>(c.height-1)) return false;
+  const auto x0=static_cast<std::size_t>(std::floor(gx0));
+  const auto x1=static_cast<std::size_t>(std::floor(gx1));
+  const auto y0=static_cast<std::size_t>(std::floor(gy0));
+  const auto y1=static_cast<std::size_t>(std::floor(gy1));
+  // Every possible bilinear 2x2 stencil must be fully observed and within
+  // the informative EDT. This is stronger than sampling only disk corners,
+  // which could silently miss unknown wedges between the corners.
+  for(std::size_t y=y0;y<=y1+1;++y)
+    for(std::size_t x=x0;x<=x1+1;++x) {
       const auto k=y*c.width+x;
       if(!source_->cells()[k].observed||values_[k]>=truncation_metres_)
         return false;
