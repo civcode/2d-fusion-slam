@@ -1,17 +1,22 @@
 cmake_minimum_required(VERSION 3.25)
 project(fusion_slam VERSION 0.1.0 LANGUAGES CXX)
 
-# Pin the command-line parser. FetchContent is intentionally unconditional:
-# all native CLI binaries (including small inspectors) use this target.
-include(FetchContent)
-set(CXXOPTS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(CXXOPTS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(CXXOPTS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(cxxopts
-  GIT_REPOSITORY https://github.com/jarro2783/cxxopts.git
-  GIT_TAG v3.3.1
-  GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(cxxopts)
+# Prefer an installed cxxopts CMake target so the project's intentionally
+# disconnected Docker builds remain offline. Otherwise fetch a pinned release.
+# Developers can supply -DFETCHCONTENT_SOURCE_DIR_CXXOPTS=/path/to/cxxopts
+# to make source-based builds work without network access.
+find_package(cxxopts 3.1 QUIET CONFIG)
+if(NOT TARGET cxxopts::cxxopts)
+  include(FetchContent)
+  set(CXXOPTS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(CXXOPTS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(CXXOPTS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(cxxopts
+    GIT_REPOSITORY https://github.com/jarro2783/cxxopts.git
+    GIT_TAG v3.3.1
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(cxxopts)
+endif()
 
 
 # Ubuntu 24.04's stable APT packages contain GTSAM 4.2 and Catch2 3.4.
