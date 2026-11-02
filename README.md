@@ -105,6 +105,16 @@ offline CMake build by installing Ubuntu's `libcxxopts-dev`; all CLIs
 support `--help` and reject unknown flags. See
 [CLI migration, options and local tests](docs/native-cli-cxxopts.md).
 
+## Experimental FR079 matcher ablation and matching-beam benchmark
+
+The opt-in [factorial Ceres and beam-count benchmark](docs/fr079-matcher-beam-ablation.md)
+compares legacy, finite residuals with identical seed-supported cohorts,
+all-beam residuals, and two acceptance gates. It varies only matching-beam
+stride/phase while keeping map insertion and other parameters fixed, and
+records first-divergence and per-frame candidate evidence. It does **not**
+change default matching behavior or assert that more beams must always
+improve map accuracy.
+
 ## Experimental finite-cost Ceres matching
 
 The FR079 offline CLI now supports `--continuous-cost`, a third, opt-in
