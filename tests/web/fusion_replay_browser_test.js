@@ -119,21 +119,29 @@ async function launch(withRaw,query) {
       {runs:[{id:"office-continuous-s01",name:"office-continuous-s01"}]}:
       url.endsWith("/trajectories")?poses:
       url.endsWith("/replay")?trace:
-      url.endsWith("/profile")?null:report;
+      url.endsWith("/profile")?null:
+      url.endsWith("/maps/graph_optimized")?
+        {width:1,height:1,resolution_m:.1,origin:{x:0,y:0,yaw_rad:0}}:
+      url.endsWith("/maps/gyro_wheel")?
+        {width:1,height:1,resolution_m:.1,origin:{x:0,y:0,yaw_rad:0}}:
+      url.endsWith("/image.png")?{image:true}:report;
     return {ok:value!==null,status:value===null?404:200,
-      json:async()=>value};
+      json:async()=>value,blob:async()=>({size:128})};
   };
   const scope={
     document,window:{location:{search:query},devicePixelRatio:1},
     fetch,Option:function(label,value){this.label=label;this.value=value;},
-    URLSearchParams,URL:{revokeObjectURL(){}},ResizeObserver:class {
-      observe(){}
-    },
+    URLSearchParams,URL:{revokeObjectURL(){},
+      createObjectURL(){return "blob:mock-png";}},
+    ResizeObserver:class {observe(){}},
     requestAnimationFrame(){},
-    Image:class{}
+    Image:class{
+      set src(value){this._src=value;if(this.onload)this.onload();}
+      get src(){return this._src;}
+    }
   };
   const entry=script.replace(/\}\)\(\);\s*$/,
-    ';globalThis.__test={scanPoints,scanPose,setView,setFrame,loadRun};})();');
+    ';globalThis.__test={scanPoints,scanPose,setView,setFrame,selectMap,loadRun};})();');
   assert.notEqual(entry,script,"test injection anchor must exist");
   vm.runInNewContext(entry,scope,{timeout:5000});
   for(let i=0;i<100;i++)await Promise.resolve();
@@ -159,6 +167,15 @@ async function main() {
   assert.match(raw.element("fusion-view-note").textContent,/Graph optimized/);
   raw.setFrame(1);
   assert.match(raw.element("fusion-pose-shift").textContent,/0.200 m/);
+  raw.element("fusion-projection").value="fused_scan_matched";
+  await raw.selectMap("graph_optimized");
+  assert.equal(raw.element("fusion-projection").value,"graph_optimized",
+    "switching to graph occupancy must also reproject scan hits at optimized poses");
+  assert.equal(raw.scanPose()[1][0],2.7);
+  assert.match(raw.element("fusion-map-note").textContent,/FINAL Graph optimized/);
+  await raw.selectMap("gyro_wheel");
+  assert.equal(raw.scanPose()[1][0],2.4,
+    "gyro/wheel map must use gyro/wheel pose for replayed scan samples");
   raw.setView("lidar");
   assert.equal(raw.scanPose()[1][0],2.3,
     "raw LiDAR always uses LiDAR-only poses, independent of SLAM projection");
