@@ -727,81 +727,130 @@ struct GraphOutput {
   std::vector<GraphLoopEvent> events;
   std::size_t accepted_loops{},loop_candidates{};
   std::size_t lidar_registration_attempted{},lidar_registration_verified{};
+  std::size_t lidar_nearby_pairs{},lidar_geometry_verified{},
+              lidar_redundant_suppressed{};
   std::string status;
 };
 struct LiDARLoopProposals {
   std::vector<slam::graph::LoopCandidate> candidates;
   std::vector<GraphLoopEvent> rejected;
-  std::size_t attempted{};
+  std::size_t attempted{},nearby_pairs{},geometry_verified{},redundant_suppressed{};
 };
-// Estimated poses shortlist nonadjacent places. Only LiDAR matching produces
-// a relative loop transform; synthetic truth is never an estimator input.
+// Estimated poses shortlist nonadjacent places, never supply a loop
+// measurement. Only aligned LiDAR scan geometry creates its relative
+// transform. Repeated hits across nearby keyframes are correlated evidence:
+// avoid densely stacking factors on the same two stretches of trajectory.
 LiDARLoopProposals detect_lidar_loops(const Prepared& p,const Matched& matched,
                                       const FusionMatchOptions& options) {
+  constexpr std::size_t kKeyframeStep=2;
+  constexpr std::size_t kMinimumTemporalSeparation=40;
+  constexpr std::size_t kMinimumDistinctKeyframeGap=6;
+  constexpr std::size_t kMaxRegistrationHypotheses=6;
+  constexpr std::size_t kMaxClosures=8;
+  constexpr double kSearchDistanceM=2.8;
+  constexpr double kSearchYawRad=.50;
   LiDARLoopProposals found;
   const auto& poses=matched.poses;
-  std::size_t last_verified_to=0;
-  for(std::size_t i=48;i<poses.size();i+=6) {
-    if(last_verified_to && i-last_verified_to<18)continue;
+  for(std::size_t i=48;i<poses.size();i+=kKeyframeStep) {
+    if(found.candidates.size()==kMaxClosures)break;
     struct Nearby {std::size_t j;double distance;};
     std::vector<Nearby> nearby;
-    for(std::size_t j=0;j+40<i;j+=6) {
+    for(std::size_t j=0;j+kMinimumTemporalSeparation<i;
+        j+=kKeyframeStep) {
       const Pose2 relative=slam::compose(slam::inverse(poses[j]),poses[i]);
-      if(relative.translation.norm()<=.78 &&
-         std::abs(slam::wrap_yaw(relative.yaw_rad))<=.26)
+      if(relative.translation.norm()<=kSearchDistanceM &&
+         std::abs(slam::wrap_yaw(relative.yaw_rad))<=kSearchYawRad)
         nearby.push_back({j,relative.translation.norm()});
     }
+    found.nearby_pairs+=nearby.size();
     std::sort(nearby.begin(),nearby.end(),[](const auto& a,const auto& b){
-      return a.distance<b.distance;
+      if(a.distance!=b.distance)return a.distance<b.distance;
+      return a.j<b.j;
     });
     const auto current=sample_matching_hits(
         p.gyro_deskewed[i],options.match_stride,options.match_offset);
-    const std::size_t tries=std::min<std::size_t>(4,nearby.size());
-    std::optional<slam::graph::LoopCandidate> best;
-    double best_overlap=-1.,best_error=1e9;
+    struct Verified {
+      slam::graph::LoopCandidate candidate;
+      double rms{};
+    };
+    std::vector<Verified> verified;
+    const auto tries=std::min(kMaxRegistrationHypotheses,nearby.size());
     for(std::size_t k=0;k<tries;++k) {
       const auto j=nearby[k].j;
       const auto previous=sample_matching_hits(
           p.gyro_deskewed[j],options.match_stride,options.match_offset);
       const auto previous_laser=slam::compose(poses[j],kBaseFromLaser);
       const auto current_laser=slam::compose(poses[i],kBaseFromLaser);
-      const Pose2 prior=slam::compose(slam::inverse(previous_laser),current_laser);
+      const Pose2 prior=slam::compose(slam::inverse(previous_laser),
+                                     current_laser);
+      // Broad only for nonconsecutive scans. The normal LiDAR-only
+      // bootstrap retains its strict 0.9 m / 0.32 rad motion envelope.
       const auto reg=slam::matching::register_consecutive_scans(
-          previous,current,prior,false);
+          previous,current,prior,false,
+          {.max_translation_m=3.0,.max_rotation_rad=.6});
       ++found.attempted;
       const double overlap=std::min(reg.forward_overlap,reg.reverse_overlap);
-      const double translation_innovation=
+      const double innovation_translation=
           (reg.previous_from_current.translation-prior.translation).norm();
-      const double yaw_innovation=std::abs(slam::wrap_yaw(
+      const double innovation_yaw=std::abs(slam::wrap_yaw(
           reg.previous_from_current.yaw_rad-prior.yaw_rad));
-      if(!reg.accepted || !reg.correspondence_rank ||
-         reg.forward_inliers<80 || reg.reverse_inliers<80 ||
-         overlap<.82 || reg.mean_error_m>.11 ||
-         translation_innovation>.55 || yaw_innovation>.17) {
+      if(!reg.accepted||!reg.correspondence_rank||
+         reg.forward_inliers<80||reg.reverse_inliers<80||
+         overlap<.82||reg.mean_error_m>.11||
+         innovation_translation>.55||innovation_yaw>.17) {
         found.rejected.push_back({j,i,"insufficient_geometry",
                                   "lidar_scan_registration",overlap,
                                   reg.mean_error_m});
         continue;
       }
+      ++found.geometry_verified;
       const Pose2 base_relative=slam::compose(kBaseFromLaser,
           slam::compose(reg.previous_from_current,
                         slam::inverse(kBaseFromLaser)));
       const slam::graph::FactorProvenance provenance{
           slam::graph::EvidenceClass::lidar_scan_registration,
           "synthetic_gyro_deskewed_lidar_scan_pair_v1",true,false};
+      // Strongly correlated revisits must not be treated as N
+      // independent high-confidence measurements.
       slam::graph::LoopCandidate candidate{
-          {j,i,base_relative,.20,.20,.14,provenance},
-          std::min(reg.forward_inliers,reg.reverse_inliers),overlap,true,
-          reg.mean_error_m};
-      if(!best || overlap>best_overlap+1e-8 ||
-         (std::abs(overlap-best_overlap)<1e-8 &&
-          reg.mean_error_m<best_error)) {
-        best=candidate;best_overlap=overlap;best_error=reg.mean_error_m;
-      }
+          {j,i,base_relative,.30,.30,.20,provenance},
+          std::min(reg.forward_inliers,reg.reverse_inliers),
+          overlap,true,reg.mean_error_m};
+      verified.push_back({candidate,reg.mean_error_m});
     }
-    if(best) {
-      found.candidates.push_back(*best);
-      last_verified_to=i;
+    // Prefer strong reciprocal geometry and lower residual, never the
+    // synthetic reference pose or the eventual graph's scoring metric.
+    std::sort(verified.begin(),verified.end(),[](const auto& a,const auto& b) {
+      if(a.candidate.overlap!=b.candidate.overlap)
+        return a.candidate.overlap>b.candidate.overlap;
+      if(a.rms!=b.rms)return a.rms<b.rms;
+      return a.candidate.edge.from<b.candidate.edge.from;
+    });
+    bool selected=false;
+    for(const auto& item:verified) {
+      const auto j=item.candidate.edge.from;
+      // Require BOTH temporal anchor regions to be distinct from all
+      // previously proposed closures. Otherwise six almost-identical
+      // pairs can falsely swamp the gyro/wheel graph.
+      const bool redundant=std::any_of(
+          found.candidates.begin(),found.candidates.end(),
+          [=](const auto& prior) {
+            const auto a=prior.edge.from,b=prior.edge.to;
+            const auto gap=[](std::size_t x,std::size_t y){
+              return x>y?x-y:y-x;
+            };
+            return gap(a,j)<kMinimumDistinctKeyframeGap||
+                   gap(b,i)<kMinimumDistinctKeyframeGap;
+          });
+      if(redundant||selected) {
+        ++found.redundant_suppressed;
+        found.rejected.push_back({
+            j,i,"duplicate_or_nearby","lidar_scan_registration",
+            item.candidate.overlap,item.rms});
+        continue;
+      }
+      found.candidates.push_back(item.candidate);
+      selected=true;
     }
   }
   return found;
@@ -856,6 +905,9 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
     const auto proposals=detect_lidar_loops(p,matcher,options);
     output.lidar_registration_attempted=proposals.attempted;
     output.lidar_registration_verified=proposals.candidates.size();
+    output.lidar_nearby_pairs=proposals.nearby_pairs;
+    output.lidar_geometry_verified=proposals.geometry_verified;
+    output.lidar_redundant_suppressed=proposals.redundant_suppressed;
     output.events=proposals.rejected;
     for(const auto& candidate:proposals.candidates)
       input.loops.push_back(candidate);
@@ -1249,6 +1301,9 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
           "independently_simulated_relative_pose":options.lidar_loop_closure?
           "lidar_scan_registration_correlated":"none")<<"\","
      <<"\n\"lidar_loop_closure\":"<<(options.lidar_loop_closure?"true":"false")<<","
+     <<"\n\"graph_lidar_loop_nearby_pairs\":"<<graph.lidar_nearby_pairs<<","
+     <<"\n\"graph_lidar_loop_geometry_verified\":"<<graph.lidar_geometry_verified<<","
+     <<"\n\"graph_lidar_loop_redundant_suppressed\":"<<graph.lidar_redundant_suppressed<<","
      <<"\n\"graph_lidar_loop_registration_attempted\":"<<graph.lidar_registration_attempted<<","
      <<"\n\"graph_lidar_loop_registration_verified\":"<<graph.lidar_registration_verified<<","
      <<"\n\"graph_loop_candidates\":"<<graph.loop_candidates<<","
