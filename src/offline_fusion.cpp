@@ -493,6 +493,17 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     evidence.candidate_evaluated=candidate.candidate_evaluated;
     evidence.candidate_translation_m=candidate.candidate_translation_m;
     evidence.has_obstacles=cached_field->has_obstacles();
+    // The same LiDAR registration must be auditable whether Ceres accepts
+    // its predicted pose or the scan-pair fallback is applied.
+    if(scan_prediction) {
+      evidence.registration_forward_inliers=scan_prediction->forward_inliers;
+      evidence.registration_reverse_inliers=scan_prediction->reverse_inliers;
+      evidence.registration_forward_overlap=scan_prediction->forward_overlap;
+      evidence.registration_reverse_overlap=scan_prediction->reverse_overlap;
+      evidence.registration_error_m=scan_prediction->mean_error_m;
+      evidence.registration_translation_m=scan_prediction->translation_m;
+      evidence.registration_yaw_rad=scan_prediction->rotation_rad;
+    }
     // Probe only scan frames 1-3 when selected by match cadence; never
     // apply a candidate, insert a ray, or use it to seed a later frame.
     // The probe never consults simulated truth, wheel or gyro estimates.
