@@ -1149,6 +1149,7 @@ void export_mapping_ablation(const std::filesystem::path& directory,
            <<"\"begin_frame\":"<<window.begin<<","
            <<"\"end_frame_exclusive\":"<<window.end<<","
            <<"\"deskew\":\""<<deskew<<"\","
+           <<"\"evidence\":\""<<odds.id<<"\","
            <<"\"hit_log_odds\":"<<odds.hit<<","
            <<"\"free_log_odds\":"<<odds.free<<","
            <<"\"map_path\":\""<<map_path<<"\","
