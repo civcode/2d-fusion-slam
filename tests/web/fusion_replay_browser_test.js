@@ -133,7 +133,7 @@ async function launch(withRaw,query) {
     Image:class{}
   };
   const entry=script.replace(/\}\)\(\);\s*$/,
-    ';globalThis.__test={scanPoints,scanPose,setView,loadRun};})();');
+    ';globalThis.__test={scanPoints,scanPose,setView,setFrame,loadRun};})();');
   assert.notEqual(entry,script,"test injection anchor must exist");
   vm.runInNewContext(entry,scope,{timeout:5000});
   for(let i=0;i<100;i++)await Promise.resolve();
@@ -157,6 +157,7 @@ async function main() {
   assert.equal(raw.scanPose()[1][0],2.7,
     "graph reprojected hit trail must use optimized pose, not the fused path");
   assert.match(raw.element("fusion-view-note").textContent,/Graph optimized/);
+  raw.setFrame(1);
   assert.match(raw.element("fusion-pose-shift").textContent,/0.200 m/);
   raw.setView("lidar");
   assert.equal(raw.scanPose()[1][0],2.3,
