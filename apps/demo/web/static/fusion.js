@@ -15,7 +15,7 @@
     graph_optimized:"Graph optimized"
   };
   const $run = el("fusion-runs"), $map = el("fusion-map");
-  const $view=el("fusion-view");
+  const $view=el("fusion-view"), $projection=el("fusion-projection");
   const routeParams=new URLSearchParams(window.location.search);
   const requestedRun=routeParams.get("run")||"";
   const requestedView=routeParams.get("view")==="lidar"?"lidar":"slam";
@@ -39,15 +39,23 @@
     frame.raw_points_laser:frame.points_laser;
   // Legacy traces have only deskewed points; keep them on the matched
   // trajectory rather than mislabeling wheel-deskewed data as LiDAR-only.
+  const selectedProjection=()=>!lidarView() &&
+    poses && poses.paths[$projection.value] ?
+    $projection.value:"fused_scan_matched";
   const scanPose=()=>poses.paths[lidarView()&&rawAvailable()?
-    "lidar_only":"fused_scan_matched"];
-  function setView(mode) {
-    $view.value=mode==="lidar"?"lidar":"slam";
+    "lidar_only":lidarView()?"fused_scan_matched":selectedProjection()];
+  function updateProjectionNote() {
+    $projection.disabled=lidarView()||!poses;
     shown("fusion-view-note",lidarView()?
       (rawAvailable()?
         "Raw LiDAR replay: pre-deskew sensor-frame hits projected using the estimated LiDAR-only pose at each scan midpoint. These are not ground-truth world hits.":
         "Legacy LiDAR replay: raw hits were not exported for this run. Showing its available gyro/wheel-deskewed scan samples on the scan-matched estimated pose instead; regenerate for raw sensor replay."):
-      "SLAM replay: gyro/wheel deskewed LiDAR hits projected using the scan-matched estimated pose. Trajectories and match decisions come from the completed run.");
+      "SLAM replay: gyro/wheel-deskewed LiDAR hits are reprojected at each "+
+      labels[selectedProjection()]+" estimated pose. This scan trail follows the selected path; the occupancy overlay is a final post-run map, not an intermediate map.");
+  }
+  function setView(mode) {
+    $view.value=mode==="lidar"?"lidar":"slam";
+    updateProjectionNote();
     if(trace)setFrame(frameIndex);
   }
   const visible = method => {
@@ -93,6 +101,12 @@
       " accepted / "+f.matching.cumulative_rejected+" rejected");
     shown("fusion-insertion",f.mapping.lidar_only_inserted?
       "LiDAR-only: inserted" : "LiDAR-only: rejected (not inserted)");
+    if(poses.paths.graph_optimized) {
+      const graph=poses.paths.graph_optimized[frameIndex];
+      const fused=poses.paths.fused_scan_matched[frameIndex];
+      const delta=Math.hypot(graph[0]-fused[0],graph[1]-fused[1]);
+      shown("fusion-pose-shift",fmt(delta,3)+" m graph correction");
+    } else shown("fusion-pose-shift","No graph output");
     shown("fusion-loop-status",f.loop_events.length ?
       f.loop_events.map(x=>x.from+" → "+x.to+" "+
         (x.source==="lidar_scan_registration"?"LiDAR scan pair": 
@@ -327,6 +341,16 @@
       shown("fusion-map-note","Accumulated measured hit samples are not an occupancy grid. No final-map overlay selected.");
       draw();return;
     }
+    // This is critical when reviewing corrected obstacle positions: a
+    // graph-optimized occupancy map must not be overlaid with an
+    // uncorrected fused-scan point trail by default.
+    if(poses && poses.paths[method] &&
+       ["graph_optimized","fused_scan_matched","gyro_wheel"].includes(method) &&
+       !lidarView()) {
+      $projection.value=method;
+      updateProjectionNote();
+      draw();
+    }
     try {
       const base=urlBase()+"/maps/"+encodeURIComponent(method);
       const [metadata,response]=await Promise.all([getJson(base),
@@ -343,7 +367,12 @@
       if(token!==imageToken){URL.revokeObjectURL(objectURL);return;}
       mapMeta=metadata;mapImage=image;
       shown("fusion-map-note","Displayed map is the FINAL "+labels[method]+
-        " occupancy snapshot. Points/trails stop at the selected frame; the image does not.");
+        " occupancy snapshot. Points/trails stop at the selected frame; the image does not."+
+        (method==="wheel_only"?
+          " Wheel-deskewed hits are not exported for this run; scan points use the selected deskewed projection.":
+         method==="lidar_only" && !lidarView()?
+          " Switch to LiDAR replay to visualize raw LiDAR hits on their LiDAR-only estimated poses.":
+         ""));
       draw();
     }catch(error){
       if(token!==imageToken)return;
@@ -379,11 +408,15 @@
       }
       $map.replaceChildren(new Option("None — observation trail only",""));
       for(const method of methods())$map.add(new Option(labels[method]+" · final",method));
-      $map.value="";frameIndex=0;setMetrics();showProfile(profile);updateExplorerLink();setReady(true);
+      $map.value="";frameIndex=0;
+      $projection.value="fused_scan_matched";
+      for(const option of $projection.options)
+        option.disabled=option.value==="graph_optimized"&&!poses.paths.graph_optimized;
+      setMetrics();showProfile(profile);updateExplorerLink();setReady(true);
       setView($view.value);
       el("fusion-slider").max=String(t.frames.length-1);
       resize();fit();setFrame(0);
-      shown("fusion-map-note","Hit samples accumulate using the scan-matched estimated trajectory. They are NOT intermediate occupancy. Select a final map separately.");
+      shown("fusion-map-note","Hit samples accumulate using the selected estimated trajectory. They are NOT intermediate occupancy. Select a final map separately.");
     }catch(error){
       if(token!==loadingToken)return;
       showMessage("Could not load verified fusion run: "+error.message);
@@ -432,6 +465,7 @@
   }
   $run.addEventListener("change",()=>loadRun($run.value));
   $view.addEventListener("change",()=>{showMessage("");setView($view.value);});
+  $projection.addEventListener("change",()=>{updateProjectionNote();draw();});
   $map.addEventListener("change",()=>{updateExplorerLink();selectMap($map.value);});
   el("fusion-refresh").addEventListener("click",refresh);
   el("fusion-fit").addEventListener("click",fit);
