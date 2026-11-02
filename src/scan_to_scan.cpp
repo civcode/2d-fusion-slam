@@ -122,7 +122,7 @@ ScanToScanResult score(const Points& previous,const Points& current,
 
 ScanToScanResult register_consecutive_scans(
     const Points& previous,const Points& current,
-    Pose2 initial_previous_from_current) {
+    Pose2 initial_previous_from_current,bool wide_initial_search) {
   ScanToScanResult best;
   if(!valid_cloud(previous)||!valid_cloud(current)||
      !initial_previous_from_current.translation.allFinite()||
@@ -132,9 +132,20 @@ ScanToScanResult register_consecutive_scans(
   // constant-relative-pose estimate may be supplied from prior accepted
   // LiDAR-only registrations; identity is the initial bootstrap.
   const std::array<double,3> shifts{0.,-.12,.12};
+  // A broad translation search is only needed without an accepted prior
+  // relative LiDAR displacement (initial bootstrap or recovery after gap).
+  // After that, three small yaw variants around last LiDAR-derived motion
+  // avoid repeated high-cost multi-start optimization.
+  const std::array<Eigen::Vector2d,5> offsets{
+    Eigen::Vector2d::Zero(),Eigen::Vector2d{.2,0.},
+    Eigen::Vector2d{-.2,0.},Eigen::Vector2d{0.,.2},
+    Eigen::Vector2d{0.,-.2}};
   bool chosen=false;
-  for(const double shift:shifts) {
+  const std::size_t seeds=wide_initial_search?offsets.size():1;
+  for(std::size_t k=0;k<seeds;++k)
+    for(const double shift:shifts) {
     Pose2 pose=initial_previous_from_current;
+    pose.translation+=offsets[k];
     pose.yaw_rad=wrap_yaw(pose.yaw_rad+shift);
     std::size_t iterations=0;
     for(;iterations<20;++iterations) {
