@@ -96,6 +96,8 @@ Fr079SlamResult run_fr079_offline_slam(
           opt.match_beam_stride>=1&&opt.match_beam_stride<=64&&
           opt.match_every>=1&&opt.match_every<=200&&
           opt.rebuild_field_every>=1&&opt.rebuild_field_every<=200&&
+          std::isfinite(opt.distance_truncation_m)&&opt.distance_truncation_m>=0.20&&
+          opt.distance_truncation_m<=3.0&&
           std::isfinite(opt.max_correction_m)&&opt.max_correction_m>0&&
           opt.max_correction_m<=2&&
           std::isfinite(opt.max_correction_yaw_rad)&&
@@ -158,7 +160,7 @@ Fr079SlamResult run_fr079_offline_slam(
       const auto start_field=Clock::now();
       if(!cached_field||i-last_field_frame>=opt.rebuild_field_every){
         cached_snapshot=mapping::MapSnapshot::capture(grid);
-        cached_field=mapping::DistanceField::build(cached_snapshot,.70);
+        cached_field=mapping::DistanceField::build(cached_snapshot,opt.distance_truncation_m);
         last_field_frame=i;
       }
       frame.field_ms=milliseconds(start_field,Clock::now());
@@ -188,6 +190,12 @@ Fr079SlamResult run_fr079_offline_slam(
         frame.match_ms=milliseconds(start_match,Clock::now());
         result.total_match_ms+=frame.match_ms;
         const auto& d=candidate.diagnostics;
+        frame.ceres_invalid_residual_evaluations=candidate.ceres_invalid_residual_evaluations;
+        frame.ceres_unsuccessful_steps=candidate.ceres_unsuccessful_steps;
+        frame.ceres_successful_steps=candidate.ceres_successful_steps;
+        frame.ceres_termination=candidate.ceres_termination;
+        result.total_invalid_residual_evaluations+=candidate.ceres_invalid_residual_evaluations;
+        result.total_unsuccessful_steps+=candidate.ceres_unsuccessful_steps;
         frame.supported_hits=d.supported_hits;frame.overlap=d.overlap;
         frame.robust_cost=d.robust_cost;
         frame.match_status=match_status(candidate.status);
