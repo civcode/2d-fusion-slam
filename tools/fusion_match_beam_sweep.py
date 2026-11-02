@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -109,6 +108,8 @@ def score_rows(directory, scene, matcher, stride, label, opts):
             "distance_truncation_m": opts.distance_truncation,
             "map_method": map_name, "frames": report["frames"],
             "heldout_attempted": report["heldout_attempted"],
+            "heldout_mean_input_beams": report["heldout_matching_input_hits_total"] / max(1, report["heldout_attempted"]),
+            "lidar_only_mean_input_beams": report["lidar_only_matching_input_hits_total"] / max(1, report["frames"] - 1 - report["lidar_only_skipped"]),
             "heldout_accepted": report["heldout_accepted"],
             "heldout_skipped": report["heldout_skipped"],
             "lidar_only_accepted": report["lidar_only_accepted"],
