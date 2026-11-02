@@ -318,7 +318,7 @@ int main(int argc,char** argv) {
       ("example-if-empty","Supply synthetic example when replay is empty")
       ("h,help","Print help");
     const auto args=cli.parse(argc,argv);
-    if(args.count("help")){std::cout<<cli.help();return 0;}
+    if(args.count("help")&&args["help"].as<bool>()){std::cout<<cli.help();return 0;}
     if(args.count("data-dir"))maps=args["data-dir"].as<std::string>();
     if(args.count("replay-dir")){replays=args["replay-dir"].as<std::string>();has_replays=true;}
     if(args.count("fusion-dir")){fusion_directory=args["fusion-dir"].as<std::string>();has_fusion=true;}
@@ -335,8 +335,8 @@ int main(int argc,char** argv) {
       else if(val=="0.0.0.0")broad=true;
       else throw std::invalid_argument("host must be loopback or 0.0.0.0");
     }
-    allow_network=args.count("allow-network")!=0;
-    example=args.count("example-if-empty")!=0;
+    allow_network=args.count("allow-network")&&args["allow-network"].as<bool>();
+    example=args.count("example-if-empty")&&args["example-if-empty"].as<bool>();
     if(maps.empty())throw std::invalid_argument("--data-dir is required");
     if(broad&&!allow_network)throw std::invalid_argument(
        "binding to non-loopback requires explicit --allow-network");
