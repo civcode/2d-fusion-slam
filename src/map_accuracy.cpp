@@ -259,6 +259,57 @@ MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
   return r;
 }
 
+std::vector<WallToleranceScore> evaluate_wall_tolerances(
+    const mapping::MapBundle& generated,const fixtures::Scene& scene,
+    const std::vector<double>& tolerances_m) {
+  if(!generated.snapshot ||
+     (generated.provenance.truth_class!="synthetic_estimated" &&
+      generated.provenance.truth_class!="synthetic_exact") ||
+     !generated.provenance.metric_origin_verified ||
+     generated.provenance.frame_id!="map" ||
+     generated.provenance.source_id!=scene.id)
+    throw std::invalid_argument("wall tolerance score requires aligned synthetic map");
+  if(tolerances_m.empty()||tolerances_m.size()>8)
+    throw std::invalid_argument("wall tolerance list must have 1..8 entries");
+  for(double tolerance:tolerances_m)
+    if(!std::isfinite(tolerance)||tolerance<=0||tolerance>2.)
+      throw std::invalid_argument("invalid wall distance tolerance");
+  const auto& grid=generated.snapshot->config();
+  const auto reference=rasterize_reference_walls(scene,grid);
+  const auto& cells=generated.snapshot->cells();
+  if(reference.size()!=cells.size())
+    throw std::invalid_argument("map and reference grid size differ");
+  std::vector<std::uint8_t> predicted(cells.size());
+  std::size_t number_predicted=0,number_reference=0;
+  for(std::size_t i=0;i<cells.size();++i) {
+    predicted[i]=cells[i].observed&&cells[i].log_odds>0. ? 1 : 0;
+    number_predicted+=predicted[i];
+    number_reference+=reference[i];
+  }
+  if(!number_reference)
+    throw std::invalid_argument("empty wall reference");
+  const auto to_reference=squared_edt(reference,grid.width,grid.height);
+  const auto to_predicted=squared_edt(predicted,grid.width,grid.height);
+  std::vector<WallToleranceScore> scored;
+  scored.reserve(tolerances_m.size());
+  for(double tolerance:tolerances_m) {
+    const double max_cells2=(tolerance/grid.resolution_m)*
+                            (tolerance/grid.resolution_m)+1e-10;
+    std::size_t near_predicted=0,near_reference=0;
+    for(std::size_t i=0;i<cells.size();++i){
+      if(predicted[i]&&to_reference[i]<=max_cells2)++near_predicted;
+      if(reference[i]&&to_predicted[i]<=max_cells2)++near_reference;
+    }
+    const double precision=number_predicted?
+        double(near_predicted)/double(number_predicted):0.;
+    const double recall=double(near_reference)/double(number_reference);
+    const double f1=precision+recall>0?
+        2.*precision*recall/(precision+recall):0.;
+    scored.push_back({tolerance,precision,recall,f1});
+  }
+  return scored;
+}
+
 void write_map_accuracy_json(std::ostream& out, const MapAccuracyReport& r,
                              const fixtures::Scene& scene) {
   out.imbue(std::locale::classic());
