@@ -1,8 +1,9 @@
 # Offline synthetic fusion matching options
 
 The `slam_offline_fusion` CLI accepts the **same matching-control flags**
-for both supported scenes, `apartment` (130 scans) and `warehouse`
-(195 scans). The flags affect both the held-out fused scan matcher and the
+for the original `apartment` (130 scans) and `warehouse`
+(195 scans), plus five additional independent synthetic geometries.
+The flags affect both the held-out fused scan matcher and the
 incremental LiDAR-only matcher. They do not add a new input dataset or
 change the independent simulator reference used only for scoring.
 
@@ -12,6 +13,7 @@ change the independent simulator reference used only for scoring.
 | `--field-every N` | 1 | Rebuild LiDAR-only distance field after N scan frames (cached earlier-map snapshot otherwise). The held-out training map is frozen; its distance field is constructed once. |
 | `--map-stride N` | 1 | Insert every Nth **valid** LiDAR hit into occupancy for all generated map variants (wheel-only, LiDAR-only, gyro-wheel, fused-matched, optional graph). This also controls held-out training-map insertion. |
 | `--match-stride N` | 1 | Match every Nth **valid** deskewed or raw hit; does not change mapping beams. A 240-bin synthetic scan has at most 240/N matching hits. |
+| `--match-offset N` | 0 | Start decimation at valid-hit index `N % match_stride` (0–63); keeps the original phase-0 algorithm unchanged and tests sampling-pattern sensitivity. |
 | `--distance-truncation METRES` | 0.7 | EDT truncation in both frozen and incremental matchers (0.2–3.0 m). |
 | `--continuous-cost` | off | Use `match_ceres_continuous` for **both** matchers; requires Ceres, and fails instead of silently selecting the reference implementation if unavailable. |
 | `--lidar-only-bootstrap` | off | Enable conservative scan-to-scan registration for the LiDAR-only baseline, with strict EDT refinement when real map support becomes available; other map variants remain unchanged. |
@@ -306,8 +308,108 @@ with the matching scene/matcher/stride from the original sweep. A high
 acceptance count is **not sufficient** if independent map agreement,
 translation RMSE, or timing worsens.
 
+## Generalization suite: varied maps, routes and beam phases
+
+**Do not infer a universal beam-count trend from one warehouse.** Its
+parallel, regularly spaced shelving is a particularly ambiguous case for
+nearest-neighbor ICP. The following additional exact, deterministic maps
+exercise different geometry and motion profiles:
+
+| Scene | Geometry | Robot motion |
+| --- | --- | --- |
+| `apartment` | Two partitions with door gaps | Original compact 1.35 m-radius loop, 130 scans |
+| `warehouse` | Four equally spaced parallel shelves | Original wide perimeter ellipse, 195 scans |
+| `warehouse_asymmetric` | Uneven shelf lengths/positions and diagonal braces | **Same route** as warehouse, 195 scans: symmetry ablation |
+| `office` | Uneven office partitions, corridors, oblique wall | Smaller elliptical entry-area loop, 150 scans |
+| `loft` | Open room with an irregular furniture island | Mid-size elliptical loop, 168 scans |
+| `atrium` | Nonrectangular central core, oblique ribs | Interior ring of a large enclosure, 200 scans |
+| `industrial` | Heterogeneous rectangular machinery and diagonal objects | Wide, faster perimeter ring, 195 scans |
+
+The new fixtures are generated using the same moving-scan LiDAR physics,
+gyro/wheel sensor model, 240 raw acquisition bins and independently
+withheld simulator truth as the original two. Their reference trajectories
+are checked against wall geometry before any run. **The original
+`apartment` and `warehouse` fixtures remain unchanged.**
+
+This expands *synthetic* coverage; it is **not independent real-world
+generalization**. The environments still share an analytic ray caster,
+noise model and smooth elliptical routes. Follow this suite with diverse
+recorded LiDAR datasets and independently validated ground truth before
+selecting a production beam count or changing any matcher defaults.
+
+### Stage A — seven maps, same beam phase
+
+Run the complete seven-scene comparison with both Ceres variants
+and six beam densities (7 × 2 × 6 = **84 runs**) using a NEW directory:
+
+~~~bash
+docker compose build test
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R 'fixtures_smoke|offline_fusion|fusion_scene_diversity|fusion_match_beam_tools'
+
+python tools/fusion_match_beam_sweep.py \
+  --repo "$PWD" --out-dir benchmarks/fusion-beams-diverse-001 \
+  --docker \
+  --scenes apartment warehouse warehouse_asymmetric office loft atrium industrial \
+  --matchers legacy continuous \
+  --map-stride 1 --match-every 1 --field-every 1 \
+  --distance-truncation 0.7 --match-strides 1 2 3 4 6 8 \
+  --match-offsets 0 \
+  --lidar-only-bootstrap --lidar-only-predict-first
+
+python tools/fusion_beam_generalization.py \
+  --scorecard benchmarks/fusion-beams-diverse-001/scorecard.csv
+~~~
+
+If those regressions are sensitive to a particular scene, use Stage B
+rather than trying to tune the matcher to the original warehouse.
+
+### Stage B — sampling-phase sensitivity
+
+`--match-offsets` changes which valid LiDAR hit starts decimation,
+**without affecting the simulated sensor data or map insertion rays**.
+The sweep schedules each unique *effective* phase per stride; with
+strides 1, 2, 4 and 6 and requested offsets 0, 1, 2, that means
+**1 + 2 + 3 + 3 = 9** phase/stride combinations per scene/matcher.
+
+A focused continuous-Ceres multi-scene phase check (7 × 9 = **63 runs**):
+
+~~~bash
+python tools/fusion_match_beam_sweep.py \
+  --repo "$PWD" --out-dir benchmarks/fusion-beams-diverse-phases-001 \
+  --docker \
+  --scenes apartment warehouse warehouse_asymmetric office loft atrium industrial \
+  --matchers continuous \
+  --map-stride 1 --match-every 1 --field-every 1 \
+  --distance-truncation 0.7 --match-strides 1 2 4 6 \
+  --match-offsets 0 1 2 \
+  --lidar-only-bootstrap --lidar-only-predict-first
+
+python tools/fusion_beam_generalization.py \
+  --scorecard benchmarks/fusion-beams-diverse-phases-001/scorecard.csv
+~~~
+
+Report **per-scene** and **per-phase** LiDAR-only translation RMSE,
+map IoU, true matching-beam count, Ceres/ICP acceptance and execution
+cost. The generalization report shows median and worst-case RMSE by
+density, within-scene-and-phase increases in error with more beams, and
+the 240-beam/60-beam RMSE ratio **for paired phase-zero cases**.
+Do not pool different phases as if they were independent map datasets.
+Non-matching `wheel_only` and `gyro_wheel` map fingerprints must be
+identical across beam configurations. The `fused_scan_matched` control
+only needs to stay invariant when comparing bootstrap modes at the
+**same** scene, matching stride and sampling phase; it legitimately
+changes when changing the matched-beam subset.
+
+The run manifest contains each scene/phase/stride tuple and command,
+all artifacts remain in separate directories, and no existing benchmark
+outputs are overwritten. `--dry-run` previews commands without running.
+
 ## Multi-scene matching-beam benchmark
 
+The original two-scene synthetic comparison is reproducible, but
+the broader seven-scene suite above should be used for generalization.
 A direct synthetic experiment is especially useful here because the
 **simulated reference poses and walls are independent of the estimator**
 and are never passed as matching inputs. It is better evidence for a
