@@ -53,6 +53,7 @@ struct Fr079SlamResult {
   std::vector<Fr079SlamFrame> frames;
   std::size_t attempts{}, accepted{}, rejected{}, inserted_scans{};
   double total_field_ms{}, total_match_ms{}, total_insertion_ms{};
+  double capture_benchmark_ms{}; // diagnostic only; exclude from SLAM compute FPS
   std::size_t total_invalid_residual_evaluations{};
   std::size_t total_invalid_unknown_cells{},total_invalid_truncated{},total_invalid_outside_grid{},total_invalid_other{};
   std::size_t total_unsuccessful_steps{};
