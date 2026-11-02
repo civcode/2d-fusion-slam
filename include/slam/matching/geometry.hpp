@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace slam::matching {
@@ -42,6 +43,9 @@ struct MatchResult {
   Pose2 map_from_laser{};
   MatchDiagnostics diagnostics{};
   unsigned iterations{};
+  std::size_t ceres_invalid_residual_evaluations{}; // failed EDT samples across solver trials
+  std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
+  std::string ceres_termination{"not_run"};
   // No posterior covariance is asserted. This is a conditioned tracking pose,
   // NOT an independent LiDAR graph factor, even with a geometry-only objective.
 };
