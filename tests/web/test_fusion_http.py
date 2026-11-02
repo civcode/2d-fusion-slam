@@ -179,6 +179,13 @@ class FusionHTTP(unittest.TestCase):
             self.assertEqual(raised.exception.code, 422)
             path.write_bytes(before)
             trace = json.loads(before)
+            trace["frames"][0].pop("raw_points_laser")
+            path.write_text(json.dumps(trace))
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + base + "/replay")
+            self.assertEqual(raised.exception.code, 422)
+            path.write_bytes(before)
+            trace = json.loads(before)
             trace["match_offset"] = 63
             path.write_text(json.dumps(trace))
             with self.assertRaises(error.HTTPError) as raised:
