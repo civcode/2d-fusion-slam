@@ -437,6 +437,7 @@ MatchResult match_ceres_continuous(
   ceres::Solve(options,&problem,&summary);
   result.iterations=static_cast<unsigned>(summary.iterations.size());
   result.ceres_invalid_residual_evaluations=unexpected_invalid.load(std::memory_order_relaxed);
+  result.ceres_invalid_other=result.ceres_invalid_residual_evaluations;
   result.ceres_continuous_unknown_evaluations=finite_unsupported[0].load(std::memory_order_relaxed);
   result.ceres_continuous_truncated_evaluations=finite_unsupported[1].load(std::memory_order_relaxed);
   result.ceres_continuous_outside_evaluations=finite_unsupported[2].load(std::memory_order_relaxed);
