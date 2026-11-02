@@ -73,8 +73,17 @@ function fusionIdentity(item) {
   return {run:match[1],method:match[2],scene:item.scene||match[1]};
 }
 function sceneTitle(scene,run) {
+  const id=/^synthetic-([a-z_]+)-v1$/.exec(String(scene||""));
+  const known={
+    apartment:"Apartment",warehouse:"Warehouse",office:"Office",
+    loft:"Loft",atrium:"Atrium",industrial:"Industrial",
+    warehouse_asymmetric:"Asymmetric warehouse"
+  };
+  if(id&&known[id[1]])return known[id[1]];
+  // Older map exports may expose only the run name.
   const source=String(scene||run).toLowerCase().split(/[-_]/);
   if(source.includes("apartment"))return "Apartment";
+  if(source.includes("warehouse")&&source.includes("asymmetric"))return "Asymmetric warehouse";
   if(source.includes("warehouse"))return "Warehouse";
   const readable=String(run).replace(/[-_]\d+$/,"").replace(/[-_]+/g," ").trim();
   return readable.replace(/\b\w/g,c=>c.toUpperCase())||run;
@@ -166,6 +175,18 @@ function paintList() {
       const method=methodDisplay(item.method);
       options.append(makeRadio(item,method.label,method.description));
     }
+    // Each synthetic map can open the source run in either replay mode.
+    // These are read-only deep links, not actions that regenerate SLAM.
+    const replayLinks=document.createElement("div");
+    replayLinks.className="scene-replay-links";
+    for(const [mode,text] of [["lidar","▶ LiDAR replay"],
+                              ["slam","◎ SLAM replay"]]) {
+      const link=document.createElement("a");
+      link.href="/fusion?run="+encodeURIComponent(group.run)+"&view="+mode;
+      link.textContent=text;
+      replayLinks.append(link);
+    }
+    options.append(replayLinks);
     container.append(options);list.append(container);
   }
   if(standalone.length){
