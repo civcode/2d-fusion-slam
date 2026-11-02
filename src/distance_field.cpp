@@ -164,6 +164,30 @@ std::optional<double> DistanceField::cell_distance(std::size_t x, std::size_t y)
   return values_[y * c.width + x];
 }
 
+DistanceSupport DistanceField::support_map(const Eigen::Vector2d& p) const noexcept {
+  if(!has_obstacles_)return DistanceSupport::no_obstacles;
+  if(!p.allFinite())return DistanceSupport::invalid_input;
+  const auto& c=source_->config();
+  const auto local=transform(grid_from_map_,p);
+  const double gx=local.x()/c.resolution_m-0.5;
+  const double gy=local.y()/c.resolution_m-0.5;
+  if(!std::isfinite(gx)||!std::isfinite(gy)||gx<0||gy<0||
+     gx>=static_cast<double>(c.width-1)||
+     gy>=static_cast<double>(c.height-1))
+    return DistanceSupport::outside_grid;
+  const auto x=static_cast<std::size_t>(gx),y=static_cast<std::size_t>(gy);
+  const auto k=y*c.width+x;
+  if(!source_->cells()[k].observed||!source_->cells()[k+1].observed||
+     !source_->cells()[k+c.width].observed||
+     !source_->cells()[k+c.width+1].observed)
+    return DistanceSupport::unknown_cells;
+  if(values_[k]>=truncation_metres_||values_[k+1]>=truncation_metres_||
+     values_[k+c.width]>=truncation_metres_||
+     values_[k+c.width+1]>=truncation_metres_)
+    return DistanceSupport::truncated;
+  return DistanceSupport::supported;
+}
+
 std::optional<DistanceSample> DistanceField::sample_map(const Eigen::Vector2d& p) const noexcept {
   if (!has_obstacles_ || !p.allFinite()) return std::nullopt;
   const auto& c = source_->config();
