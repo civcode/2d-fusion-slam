@@ -69,8 +69,11 @@ def compare(baseline: Path, with_loops: Path):
         raise ValueError("graph loop replay/report count mismatch")
     print(f"Scene: {new['scene']} · frames: {new['frames']}")
     print("Non-graph paths and map fingerprints: unchanged")
-    print(f"LiDAR ICP loop checks: {new['graph_lidar_loop_registration_attempted']}")
-    print(f"Geometrically verified proposals: {new['graph_lidar_loop_registration_verified']}")
+    print(f"Pose-nearby revisit pairs: {new.get('graph_lidar_loop_nearby_pairs', 'not recorded')}")
+    print(f"LiDAR ICP pair checks: {new['graph_lidar_loop_registration_attempted']}")
+    print(f"Strict geometry passes: {new.get('graph_lidar_loop_geometry_verified', 'not recorded')}")
+    print(f"Redundant proposals suppressed: {new.get('graph_lidar_loop_redundant_suppressed', 'not recorded')}")
+    print(f"Nonredundant graph proposals: {new['graph_lidar_loop_registration_verified']}")
     print(f"Graph accepted loops: {new['graph_accepted_loops']} / {new['graph_loop_candidates']}")
     print(f"{'Metric':38} {'No LiDAR loops':>16} {'LiDAR loops':>16}")
     for label, method in (("Graph translation RMSE (m)", "translation_rmse_m"),
@@ -132,6 +135,11 @@ def compare(baseline: Path, with_loops: Path):
     else:
         print("Accepted loop frames: " + ", ".join(
             f"{item['from']}->{item['to']}" for item in accepted))
+        for event in accepted:
+            print("  pair {:3}->{:3}: overlap={}, ICP RMS={} m".format(
+                event["from"],event["to"],
+                event.get("overlap", "not recorded"),
+                event.get("registration_error_m", "not recorded")))
     print("These are independent synthetic POST-HOC scoring metrics, not loop-factor evidence.")
 
 
