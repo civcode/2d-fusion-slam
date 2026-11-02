@@ -28,6 +28,8 @@ int main() {
   auto empty_field = DistanceField::build(empty);
   require(!empty_field->has_obstacles(), "no occupied cells means no EDT support");
   require(!empty_field->sample_map({1.5, 1.5}), "empty map no false residual");
+  require(empty_field->support_map({1.5, 1.5})==DistanceSupport::no_obstacles,
+          "empty EDT classified without fabricated data");
   require(empty->revision() == 0, "empty revision");
   std::vector<WorldRay> clear;
   for (int y = 0; y < 40; ++y) {
@@ -53,6 +55,10 @@ int main() {
   require(sample && close(sample->metres, 0.05, 1e-8), "bilinear centre interpolation");
   require(close(sample->gradient_map.x(), 1.0, 1e-8), "bilinear analytical gradient");
   require(!field->sample_map({-1,0}) && !field->sample_map({4.0,2}), "outside not zero residual");
+  require(field->support_map({-1,0})==DistanceSupport::outside_grid,
+          "out of bounds classified");
+  require(field->support_map({2.10,2.05})==DistanceSupport::supported,
+          "valid interpolation classified");
   const auto original = snapshot->fingerprint();
   (void)grid.integrate_rays({{{0.05,3.05},{1.05,3.05},ReturnKind::hit}});
   require(snapshot->revision() == 2 && snapshot->fingerprint() == original,
@@ -68,6 +74,8 @@ int main() {
   auto partial = DistanceField::build(MapSnapshot::capture(unknown),5.0);
   require(partial->has_obstacles(), "partial map has occupied seed");
   require(!partial->sample_map({3.15,3.15}), "unknown stencil cannot match");
+  require(partial->support_map({3.15,3.15})==DistanceSupport::unknown_cells,
+          "unknown stencil classified");
   require(!partial->sample_map({2.05,2.05}), "even hit needs fully known bilinear support");
 
   // Test rotated map gradient in the world frame and capped support.
@@ -90,5 +98,9 @@ int main() {
   auto truncated=DistanceField::build(snapshot,0.20);
   require(close(*truncated->cell_distance(0,0),0.20), "truncation cap");
   require(!truncated->sample_map({0.5,0.5}), "truncated plateau excluded");
+  require(truncated->support_map({0.5,0.5})==DistanceSupport::truncated,
+          "truncation boundary classified");
+  require(truncated->support_map({2.10,2.05})==DistanceSupport::supported,
+          "near-wall interpolation remains supported");
   std::cout << "immutable snapshot and exact Euclidean EDT checks passed\n";
 }
