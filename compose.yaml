@@ -9,7 +9,9 @@ services:
       - "127.0.0.1:8765:8765"
     volumes:
       - ./apps/demo/maps:/maps:ro
-      - ./apps/demo/fusion:/fusion:ro
+      # Point at a completed sweep to browse all its runs directly.
+      # No files are copied and the native server remains read-only.
+      - ${FUSION_DEMO_RUNS_DIR:-./apps/demo/fusion}:/fusion:ro
     init: true
     restart: "no"
 
