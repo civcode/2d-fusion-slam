@@ -600,7 +600,8 @@ void export_trajectories(const std::filesystem::path& output,
 // synthesized matcher/graph outcomes. No raw oracle trajectory is included.
 void export_replay(const std::filesystem::path& output,const Simulation& sim,
                    const Prepared& p,const LidarOnly& lidar,
-                   const Matched& matched,const GraphOutput& graph) {
+                   const Matched& matched,const GraphOutput& graph,
+                   const FusionMatchOptions& options) {
   std::ofstream out(output);
   if(!out)throw std::runtime_error("failed opening fusion replay");
   out<<std::setprecision(17);
@@ -608,6 +609,11 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
      <<"\",\"reference_class\":\"synthetic_exact\","
      <<"\"source\":\"moving_synthetic_lidar_gyro_wheel\","
      <<"\"matcher\":\""<<matched.backend<<"\","
+     <<"\"match_every\":"<<options.match_every<<","
+     <<"\"field_every\":"<<options.field_every<<","
+     <<"\"map_stride\":"<<options.map_stride<<","
+     <<"\"match_stride\":"<<options.match_stride<<","
+     <<"\"distance_truncation_m\":"<<options.distance_truncation_m<<","
      <<"\"scan_frame\":\"laser_midpoint_deskewed_full_se2\","
      <<"\"laser_from_base_translation_m\":["
      <<kBaseFromLaser.translation.x()<<","<<kBaseFromLaser.translation.y()<<"],"
@@ -618,12 +624,16 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
     if(i)out<<",\n";
     const auto& scan=sim.sensors.scans[i];
     const bool query=i%2==1;
+    const bool attempted=query&&(((i-1)/2)%options.match_every==0);
     const auto& result=matched.outcomes[i];
-    const bool approved=query&&matched.accepted_mask[i];
-    if(query){if(approved)++accepted;else ++rejected;}
+    const bool approved=attempted&&matched.accepted_mask[i];
+    if(attempted){if(approved)++accepted;else ++rejected;}
     const char* status="training";
     std::string reason="not_evaluated_training_scan";
-    if(query) {
+    if(query&&!attempted) {
+      status="skipped";
+      reason="match_cadence_skip";
+    }else if(attempted) {
       status=approved?"accepted":"rejected";
       reason=approved?"accepted":rejection_reason(result.status);
     }
@@ -637,12 +647,12 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
       if(k)out<<",";
       out<<"["<<hits[k].x()<<","<<hits[k].y()<<"]";
     }
-    out<<"],\"matching\":{\"attempted\":"<<(query?"true":"false")
+    out<<"],\"matching\":{\"attempted\":"<<(attempted?"true":"false")
        <<",\"accepted\":"<<(approved?"true":"false")
        <<",\"status\":\""<<status<<"\",\"reason\":\""<<reason<<"\""
        <<",\"cumulative_accepted\":"<<accepted
        <<",\"cumulative_rejected\":"<<rejected;
-    if(query){
+    if(attempted){
       const auto& d=result.diagnostics;
       out<<",\"supported_hits\":"<<d.supported_hits
          <<",\"input_hits\":"<<d.input_hits
@@ -672,45 +682,46 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
   if(!out)throw std::runtime_error("failed writing fusion replay");
 }
 void execute(const Simulation& sim,const std::filesystem::path& directory,
-             bool synthetic_loops,slam::fusion::PipelineProfiler& profiler) {
+             bool synthetic_loops,slam::fusion::PipelineProfiler& profiler,
+             const FusionMatchOptions& options) {
   if(std::filesystem::exists(directory))
     throw std::invalid_argument("output already exists; refuse to overwrite");
   if(!std::filesystem::create_directories(directory))
     throw std::runtime_error("cannot create exclusive output directory");
   const auto p=prepare(sim.sensors,sim.initial_anchor,profiler);
-  const auto matched=match_heldout(sim,p,profiler);
-  const auto lidar=lidar_only(sim,p,p.gyro_wheel.front(),profiler);
+  const auto matched=match_heldout(sim,p,profiler,options);
+  const auto lidar=lidar_only(sim,p,p.gyro_wheel.front(),profiler,options);
   const auto graph=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"graph_optimize");
     return optimize_graph(sim,p,matched,synthetic_loops);
   }();
   const auto wheel_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"wheel_map_build");
-    return make_map(sim,p.wheel_only,p.wheel_deskewed,all(p.wheel_only.size()));
+    return make_map(sim,p.wheel_only,p.wheel_deskewed,all(p.wheel_only.size()),options);
   }();
   const auto lidar_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_map_build");
-    return make_map(sim,lidar.poses,p.raw_lidar,lidar.mapped);
+    return make_map(sim,lidar.poses,p.raw_lidar,lidar.mapped,options);
   }();
   const auto fused_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"gyro_map_build");
-    return make_map(sim,p.gyro_wheel,p.gyro_deskewed,all(p.gyro_wheel.size()));
+    return make_map(sim,p.gyro_wheel,p.gyro_deskewed,all(p.gyro_wheel.size()),options);
   }();
   const auto matched_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"fused_map_build");
-    return make_map(sim,matched.poses,p.gyro_deskewed,all(matched.poses.size()),&profiler);
+    return make_map(sim,matched.poses,p.gyro_deskewed,all(matched.poses.size()),options,&profiler);
   }();
   export_bundle(directory/"wheel_only.slammap",wheel_map);
   export_bundle(directory/"lidar_only.slammap",lidar_map);
   export_bundle(directory/"gyro_wheel.slammap",fused_map);
   export_bundle(directory/"fused_scan_matched.slammap",matched_map);
   export_trajectories(directory/"trajectories.json",sim,p,lidar,matched,graph);
-  export_replay(directory/"fusion_replay.json",sim,p,lidar,matched,graph);
+  export_replay(directory/"fusion_replay.json",sim,p,lidar,matched,graph,options);
   std::optional<slam::mapping::MapBundle> graph_map;
   if(!graph.poses.empty()) {
     {
       slam::fusion::PipelineProfiler::Scope timing(profiler,"graph_map_build");
-      graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()));
+      graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()),options);
     }
     export_bundle(directory/"graph_optimized.slammap",*graph_map);
   }
@@ -733,11 +744,19 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"stationary_calibration_ticks\":"<<p.integrated.stationary_ticks<<","
      <<"\n\"full_se2_deskew_verified\":true,"
      <<"\n\"matcher\":\""<<matched.backend<<"\","
+     <<"\n\"match_every\":"<<options.match_every<<","
+     <<"\n\"field_every\":"<<options.field_every<<","
+     <<"\n\"map_stride\":"<<options.map_stride<<","
+     <<"\n\"match_stride\":"<<options.match_stride<<","
+     <<"\n\"distance_truncation_m\":"<<options.distance_truncation_m<<","
+     <<"\n\"heldout_skipped\":"<<matched.skipped<<","
      <<"\n\"heldout_attempted\":"<<matched.attempted<<","
      <<"\n\"heldout_accepted\":"<<matched.accepted<<","
      <<"\n\"heldout_rejected\":"<<matched.rejected<<","
      <<"\n\"lidar_only_accepted\":"<<lidar.accepted<<","
-     <<"\n\"lidar_only_rejected\":"<<lidar.rejected<<",";
+     <<"\n\"lidar_only_rejected\":"<<lidar.rejected<<","
+     <<"\n\"lidar_only_skipped\":"<<lidar.skipped<<","
+     <<"\n\"lidar_only_field_rebuilds\":"<<lidar.field_rebuilds<<",";
   write_rejections(out,"heldout_rejection_reasons",matched.rejections);
   write_rejections(out,"lidar_only_rejection_reasons",lidar.rejections);
   out<<"\n\"graph_status\":\""<<graph.status<<"\","
