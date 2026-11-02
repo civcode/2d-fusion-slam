@@ -817,3 +817,35 @@ See [replay performance fix and Docker commands](replay-performance.md).
   Full browser grouping/defaults/selection/navigation was also
   exercised in a V8 DOM harness. Native Docker/C++ tests require a
   full checkout to verify. No GitHub Actions executed.
+
+
+## 2026-11-02 — FR079 EDT truncation and controlled capture-range experiment
+
+Added end-to-end reproducible instrumentation rather than changing the
+0.7 m default or disabling Ceres trust-region warnings.
+
+- FR079 offline CLI accepts --distance-truncation with finite bounds
+  0.2–3.0 m; exports the actual cutoff in FUSFR079SLAM1.
+- Ceres matcher records invalid EDT residual evaluations (unknown cells,
+  truncated distances, outside grid, other), successful/unsuccessful
+  solver steps and termination type. FUSFR079MATCH1 includes per-frame
+  counts; the run report includes aggregate counts.
+- A new immutable prior-map observer optionally runs a deterministic
+  frozen-snapshot pose perturbation test on accepted SLAM estimates,
+  with six EDT cutoffs, six translation offsets, six yaw offsets, two
+  directions and both tight/wide pose-search limits. Output
+  FUSFR079CAPTURE1 includes full provenance and relative-to-proxy
+  recovery; the observer does not alter the authoritative SLAM state
+  or count its overhead against SLAM compute FPS.
+- tools/fr079_truncation_sweep.py holds all other mapping settings
+  fixed over full real-data runs and emits scorecards/manifest plus
+  optional correlated-reference comparisons. The optional frozen
+  capture study is run only against the 0.7 m mapping baseline.
+- tools/fr079_capture_summary.py produces grouped recovery/failed-
+  residual metrics and heatmaps without claiming surveyed truth.
+- Added distance-field support-classification checks and regression
+  tests fr079_capture_benchmark and fr079_benchmark_tools. Native
+  compilation and actual FR079 benchmark measurements still require
+  the full local checkout; no GitHub Actions were dispatched.
+
+See [FR079 EDT truncation experiment](fr079-truncation-benchmark.md).
