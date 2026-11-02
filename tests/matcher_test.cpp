@@ -55,6 +55,16 @@ int main() {
   const auto ceres_found=match_ceres(field,points,seed);
   require(ceres_found.status==MatchStatus::accepted,"Ceres scan matching improved");
   require(ceres_found.diagnostics.source_fingerprint==snap->fingerprint(),"Ceres pinned source");
+  require(ceres_found.ceres_invalid_residual_evaluations==
+          ceres_found.ceres_invalid_unknown_cells+
+          ceres_found.ceres_invalid_truncated+
+          ceres_found.ceres_invalid_outside_grid+
+          ceres_found.ceres_invalid_other,
+          "Ceres invalid reasons partition failed evaluations");
+  require(ceres_found.ceres_termination!="not_run",
+          "Ceres termination is preserved");
+  require(ceres_found.ceres_successful_steps+ceres_found.ceres_unsuccessful_steps>0,
+          "Ceres step totals exported");
   require(ceres_found.diagnostics.overlap>=0.65 && ceres_found.diagnostics.full_rank,
           "Ceres geometry support and observability");
   require(ceres_found.diagnostics.robust_cost < seed_quality.robust_cost,
