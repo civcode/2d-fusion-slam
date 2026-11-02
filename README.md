@@ -96,6 +96,27 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## FR079 EDT truncation: controlled accuracy and capture-range benchmark
+
+To study the 0.7 m distance-field cutoff instead of guessing a larger
+radius, the native FR079 SLAM CLI now supports a validated
+--distance-truncation option (0.2–3.0 m, default remains 0.7 m).
+Ceres residual failures are counted and classified as unknown cells,
+EDT truncation, outside-grid support, or other missing support.
+
+Run a six-cutoff sweep on the same FR079 recording with matching
+frequency, beam stride and field-refresh interval held fixed. The
+sweep optionally compares each reconstructed occupancy grid with
+fr079-maps.tgz as a **correlated reference**, never independent truth.
+An optional frozen earlier-scan snapshot benchmark perturbs accepted
+poses by known translation and yaw offsets under both the existing
+tight Ceres pose bounds and wider bounds. It produces a proxy-recovery
+CSV and heatmaps showing whether EDT support or search bounds limit
+local convergence.
+
+See [FR079 truncation benchmark and Docker commands](docs/fr079-truncation-benchmark.md).
+No GitHub Actions are required or executed.
+
 ## FR079 recorded LiDAR + odometry: end-to-end incremental SLAM
 
 A new **slam_fr079_offline** native C++20 executable processes all
