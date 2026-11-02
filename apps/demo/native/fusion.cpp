@@ -69,7 +69,14 @@ bool is_plain_directory(const std::filesystem::path& path) {
   return std::filesystem::is_directory(std::filesystem::symlink_status(path,ec));
 }
 bool valid_scene(const std::string& scene) {
-  return scene=="synthetic-apartment-v1"||scene=="synthetic-warehouse-v1";
+  // Explicitly recognized synthetic fixtures only. Never trust arbitrary
+  // scene IDs from untrusted run directories.
+  static constexpr std::array<std::string_view,7> scenes{
+    "synthetic-apartment-v1", "synthetic-warehouse-v1",
+    "synthetic-office-v1", "synthetic-loft-v1",
+    "synthetic-atrium-v1", "synthetic-industrial-v1",
+    "synthetic-warehouse_asymmetric-v1"};
+  return std::find(scenes.begin(),scenes.end(),scene)!=scenes.end();
 }
 std::size_t size_array(const Json& j,std::size_t bound,const char* what) {
   need(j.kind==Json::Kind::array && j.array.size()<=bound,what);
@@ -158,6 +165,13 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
            "fusion report/replay matching option mismatch");
     }
   }
+  // New beam-subset offset must agree between report and replay.
+  // Old valid phase-zero runs omit this field in both artifacts.
+  if(r.has("match_offset")||t.has("match_offset"))
+    need(r.has("match_offset")&&t.has("match_offset")&&
+         r.at("match_offset").uint()<=63 &&
+         t.at("match_offset").uint()==r.at("match_offset").uint(),
+         "fusion matching offset mismatch");
   if(r.has("distance_truncation_m"))
     need(t.has("distance_truncation_m")&&
          finite(r.at("distance_truncation_m"),3.0)>=0.2&&
@@ -218,6 +232,18 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
     for(const auto& pt:points.array){
       need(size_array(pt,2,"invalid replay hit point")==2,"hit must be XY");
       for(const auto& coord:pt.array)(void)finite(coord,200.0);
+    }
+    // Optional raw LiDAR points (new exporter). Older traces carry only
+    // deskewed points and remain readable as SLAM replays.
+    if(frame.has("raw_points_laser")) {
+      const auto& raw=frame.at("raw_points_laser");
+      need(size_array(raw,720,"excessive raw LiDAR replay points")<=hits,
+           "raw replay hit count exceeds physical hits");
+      for(const auto& pt:raw.array) {
+        need(size_array(pt,2,"invalid raw LiDAR hit point")==2,
+             "raw hit must be XY");
+        for(const auto& coord:pt.array)(void)finite(coord,200.0);
+      }
     }
     const auto& m=frame.at("matching");
     const bool attempted=m.at("attempted").flag(),approved=m.at("accepted").flag();
