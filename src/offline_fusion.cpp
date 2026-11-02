@@ -761,6 +761,8 @@ void export_lidar_match_audit(const std::filesystem::path& output,
      <<"\"ground_truth_used\":false,"
      <<"\"support_probe_read_only\":"
      <<(options.lidar_only_support_probe?"true":"false")
+     <<",\"lidar_only_bootstrap\":"
+     <<(options.lidar_only_bootstrap?"true":"false")
      <<",\"match_stride\":"<<options.match_stride
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
      <<",\"attempts\":"<<(lidar.accepted+lidar.rejected)
@@ -782,6 +784,14 @@ void export_lidar_match_audit(const std::filesystem::path& output,
        <<",\"candidate_supported_hits\":"<<a.candidate_supported_hits
        <<",\"candidate_translation_m\":"<<a.candidate_translation_m
        <<",\"solver_invalid_residual_evaluations\":"<<a.solver_invalid_residuals
+       <<",\"registration_method\":\""<<a.registration_method<<"\""
+       <<",\"registration_forward_inliers\":"<<a.registration_forward_inliers
+       <<",\"registration_reverse_inliers\":"<<a.registration_reverse_inliers
+       <<",\"registration_forward_overlap\":"<<a.registration_forward_overlap
+       <<",\"registration_reverse_overlap\":"<<a.registration_reverse_overlap
+       <<",\"registration_error_m\":"<<a.registration_error_m
+       <<",\"registration_translation_m\":"<<a.registration_translation_m
+       <<",\"registration_yaw_rad\":"<<a.registration_yaw_rad
        <<",\"probe_poses\":"<<a.probe_poses
        <<",\"probe_supported_poses\":"<<a.probe_supported_poses
        <<",\"probe_ranked_poses\":"<<a.probe_ranked_poses
@@ -960,6 +970,12 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"lidar_only_skipped\":"<<lidar.skipped<<","
      <<"\n\"lidar_only_field_rebuilds\":"<<lidar.field_rebuilds<<","
      <<"\n\"lidar_only_support_probe\":"<<(options.lidar_only_support_probe?"true":"false")<<","
+     <<"\n\"lidar_only_bootstrap\":"<<(options.lidar_only_bootstrap?"true":"false")<<","
+     <<"\n\"lidar_only_bootstrap_attempted\":"<<lidar.bootstrap_attempted<<","
+     <<"\n\"lidar_only_bootstrap_accepted\":"<<lidar.bootstrap_accepted<<","
+     <<"\n\"lidar_only_bootstrap_rejected\":"<<lidar.bootstrap_rejected<<","
+     <<"\n\"lidar_only_edt_accepted\":"<<lidar.edt_accepted<<","
+     <<"\n\"lidar_only_edt_refined_accepted\":"<<lidar.edt_refined_accepted<<","
      <<"\n\"lidar_only_before_solver_insufficient_support\":"
      <<std::count_if(lidar.audit.begin(),lidar.audit.end(),
          [](const LidarMatchAudit& a){
@@ -1020,6 +1036,7 @@ int main(int argc,char** argv) {
       ("distance-truncation","EDT cutoff in metres (default 0.7)",cxxopts::value<std::string>())
       ("continuous-cost","Use experimental finite-cost Ceres for both matchers")
       ("lidar-only-support-probe","Read-only local support search on first 3 LiDAR-only attempts")
+      ("lidar-only-bootstrap","Opt-in LiDAR scan-pair registration and strict EDT handover")
       ("h,help","Show help");
   cli.parse_positional({"scene","output"});
   cli.positional_help("<apartment|warehouse> <new-output-directory>");
@@ -1044,6 +1061,8 @@ int main(int argc,char** argv) {
         args["continuous-cost"].as<bool>();
     options.lidar_only_support_probe=args.count("lidar-only-support-probe")&&
         args["lidar-only-support-probe"].as<bool>();
+    options.lidar_only_bootstrap=args.count("lidar-only-bootstrap")&&
+        args["lidar-only-bootstrap"].as<bool>();
     if(args.count("distance-truncation")) {
       const auto value=args["distance-truncation"].as<std::string>();
       std::size_t parsed=0;
