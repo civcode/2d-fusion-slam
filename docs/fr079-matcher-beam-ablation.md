@@ -1,7 +1,7 @@
 # FR079 Ceres residual/gate ablation and matching-beam benchmark
 
 **Status:** Experimental, opt-in. Legacy Ceres remains the default; ordinary
-\`--continuous-cost\` remains unchanged. No GitHub Actions are used.
+`--continuous-cost` remains unchanged. No GitHub Actions are used.
 
 ## Why this experiment exists
 
@@ -27,15 +27,15 @@ This benchmark measures the effect rather than assuming monotonicity.
 The following matcher paths are all available from the *same* Ceres
 executable and use the same iteration limits, bounded pose search, frozen
 prior-geometry snapshots, Huber settings, and final frontend innovation
-checks. New modes require explicit \`--continuous-cost --ablation MODE\`:
+checks. New modes require explicit `--continuous-cost --ablation MODE`:
 
 | Mode | Ceres residual | Solver beam cohort | Improvement gate |
 | --- | --- | --- | --- |
-| \`legacy\` | strict, may fail outside observed EDT | seed-supported only | strict geometric cost |
-| \`finite-seed-legacy\` | finite | seed-supported only | strict geometric cost |
-| \`finite-all-legacy\` | finite | all finite hits | strict geometric cost |
-| \`finite-seed-continuous\` | finite | seed-supported only | fixed-cohort finite Huber cost |
-| \`continuous\` | finite | all finite hits | fixed-cohort finite Huber cost |
+| `legacy` | strict, may fail outside observed EDT | seed-supported only | strict geometric cost |
+| `finite-seed-legacy` | finite | seed-supported only | strict geometric cost |
+| `finite-all-legacy` | finite | all finite hits | strict geometric cost |
+| `finite-seed-continuous` | finite | seed-supported only | fixed-cohort finite Huber cost |
+| `continuous` | finite | all finite hits | fixed-cohort finite Huber cost |
 
 Each matcher additionally retains the seed's strict support/rank/overlap
 gate and a candidate strict-support/rank/overlap gate. The continuous
@@ -43,25 +43,25 @@ improvement gate is evaluated on **all input finite hits at both poses**
 even in the seed-only experimental solver mode: it is explicitly a
 fixed-cohort *scoring* gate, not a different solver beam cohort.
 
-The pair \`legacy\` vs \`finite-seed-legacy\` changes the residual
+The pair `legacy` vs `finite-seed-legacy` changes the residual
 evaluation while preserving the seed-supported beam selection and
-legacy improvement gate. The pair \`finite-seed-legacy\` vs
-\`finite-all-legacy\` changes only the residual cohort. The pair
-\`finite-seed-legacy\` vs \`finite-seed-continuous\` changes only
-the improvement gate. \`continuous\` is the existing production-optional
+legacy improvement gate. The pair `finite-seed-legacy` vs
+`finite-all-legacy` changes only the residual cohort. The pair
+`finite-seed-legacy` vs `finite-seed-continuous` changes only
+the improvement gate. `continuous` is the existing production-optional
 finite objective with all eligible matching beams.
 
 These are **closed-loop** ablations. As soon as a run differs in its accepted
 correction, its future pose predictions, occupancy map and cached EDT can
-also differ. Consult \`first-divergence.csv\` before attributing *later*
+also differ. Consult `first-divergence.csv` before attributing *later*
 differences to a single per-frame objective change. A fully frozen common
 map/pose corpus would be an additional study.
 
 ## Beam-count isolation
 
-\`--map-stride 1\` is held constant for **all** experiments. Only
-\`--match-stride\` is varied: it selects original CARMEN beam indices,
-*before* range validation, by \`phase, phase+stride, ...\`. Thus with
+`--map-stride 1` is held constant for **all** experiments. Only
+`--match-stride` is varied: it selects original CARMEN beam indices,
+*before* range validation, by `phase, phase+stride, ...`. Thus with
 360 raw front-laser bins, nominal beam ceilings are:
 
 | Match stride | Nominal input beams at phase 0 |
@@ -73,12 +73,12 @@ map/pose corpus would be an additional study.
 | 12 | 30 |
 
 Actual finite, range-valid matching hits can be fewer; the audit records
-\`match_input_beams\` and \`solver_residual_blocks\` per attempted frame.
+`match_input_beams` and `solver_residual_blocks` per attempted frame.
 The legacy seed-supported cohort is often substantially smaller than
-the input count. \`--match-phase\` changes the starting raw beam index
+the input count. `--match-phase` changes the starting raw beam index
 while **not changing map insertion**; test phases to reveal decimation
-aliasing. Beam-count experiments do not change \`--field-every\`,
-\`--match-every\`, map resolution, truncation, reference archive or input.
+aliasing. Beam-count experiments do not change `--field-every`,
+`--match-every`, map resolution, truncation, reference archive or input.
 
 ## Build and test locally
 
@@ -100,7 +100,7 @@ replace a real FR079 sweep or a hardware test.
 ## FR079 factorial + beam sweep
 
 Activate the existing local FR079 analysis virtual environment (for
-\`numpy\`, \`scipy\` and \`matplotlib\` used by the optional reference comparison):
+`numpy`, `scipy` and `matplotlib` used by the optional reference comparison):
 
 ~~~bash
 source .venv-fr079-eval/bin/activate
@@ -118,9 +118,9 @@ python tools/fr079_matcher_beam_benchmark.py \
 ~~~
 
 This is 20 complete, fresh reconstructions. The output directory must
-not exist before the run. Add \`--dry-run\` to inspect every Docker
-invocation first; use \`--binary /absolute/path/to/slam_fr079_offline\`
-instead of \`--docker\` for an equivalent native run.
+not exist before the run. Add `--dry-run` to inspect every Docker
+invocation first; use `--binary /absolute/path/to/slam_fr079_offline`
+instead of `--docker` for an equivalent native run.
 
 A smaller first pass to examine beam-count trends without all ablations:
 
@@ -147,24 +147,24 @@ prefix is unique; existing results are never overwritten.
 
 ## Outputs and interpretation
 
-- \`scorecard.csv\`: requested stride and phase, nominal/actual beam counts,
+- `scorecard.csv`: requested stride and phase, nominal/actual beam counts,
   solver residual blocks, accept rates, invalid/finite unsupported evaluations,
   accepted regressions in the two cost definitions, p95 frame and matching
   time, FPS, and optional reference-wall F1/IoU/distance/coverage proxies.
-- \`frame-audit.csv\`: per-frame seed/candidate strict and finite costs,
+- `frame-audit.csv`: per-frame seed/candidate strict and finite costs,
   support, correction magnitudes, Ceres evaluations, acceptance and timing.
   Rejected candidate metrics remain present when Ceres produced a candidate;
   a solver failure or early support rejection is flagged separately.
-- \`first-divergence.csv\`: first frame of differing correction for adjacent
+- `first-divergence.csv`: first frame of differing correction for adjacent
   matcher modes at the same stride and phase, allowing fair interpretation
   of subsequent closed-loop divergence.
-- \`manifest.json\`: source identity, fixed parameters, exact commands,
+- `manifest.json`: source identity, fixed parameters, exact commands,
   run names and limitations.
-- Per-run \`.report.json\`, \`.matches.json\`, \`.trajectory.json\`,
-  \`.slammap\` and the map/reference comparison JSON/PNG if requested.
+- Per-run `.report.json`, `.matches.json`, `.trajectory.json`,
+  `.slammap` and the map/reference comparison JSON/PNG if requested.
 
-Read \`accepted_strict_cost_regressions\` and
-\`accepted_finite_cost_regressions\` carefully: the two objectives differ.
+Read `accepted_strict_cost_regressions` and
+`accepted_finite_cost_regressions` carefully: the two objectives differ.
 Neither is independent ground truth. The supplied FR079 reference map
 comes from the same recording and alignment is fitted post hoc, so wall
 F1/IoU remain *correlated geometric agreement proxies*. A decrease with
