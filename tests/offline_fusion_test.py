@@ -508,6 +508,15 @@ class OfflineFusionExperiment(unittest.TestCase):
             self.assertEqual(new["graph_status"],
                              "gtsam_with_lidar_scan_loop_closure")
             self.assertGreater(new["graph_lidar_loop_registration_attempted"],0)
+            self.assertGreaterEqual(new["graph_lidar_loop_nearby_pairs"],
+                                    new["graph_lidar_loop_registration_attempted"])
+            self.assertGreaterEqual(new["graph_lidar_loop_registration_attempted"],
+                                    new["graph_lidar_loop_geometry_verified"])
+            self.assertEqual(
+                new["graph_lidar_loop_geometry_verified"],
+                new["graph_lidar_loop_registration_verified"] +
+                new["graph_lidar_loop_redundant_suppressed"])
+            self.assertLessEqual(new["graph_lidar_loop_registration_verified"],8)
             self.assertLessEqual(new["graph_lidar_loop_registration_verified"],
                                  new["graph_lidar_loop_registration_attempted"])
             self.assertEqual(new["graph_lidar_loop_registration_verified"],
@@ -537,6 +546,33 @@ class OfflineFusionExperiment(unittest.TestCase):
                          "--synthetic-independent-loops","--lidar-loop-closure")
             self.assertNotEqual(rejected.returncode,0)
             self.assertFalse(conflicting.exists())
+
+    def test_asymmetric_warehouse_revisits_get_multiple_chances(self):
+        # An endpoint closure must not block the rest of the final scan
+        # sequence. We assert candidate *coverage* rather than claiming
+        # multiple independent correct loop constraints or lower RMSE.
+        with tempfile.TemporaryDirectory() as root:
+            run_dir=pathlib.Path(root)/"warehouse-loops"
+            result=run(EXE,"warehouse_asymmetric",str(run_dir),
+                       "--lidar-loop-closure","--match-stride","1")
+            if result.returncode!=0 and "GTSAM" in result.stderr:
+                self.skipTest("optional GTSAM backend not compiled")
+            self.assertEqual(result.returncode,0,result.stderr)
+            report=json.loads((run_dir/"fusion_report.json").read_text())
+            self.assertGreater(report["graph_lidar_loop_nearby_pairs"],1)
+            self.assertGreater(report["graph_lidar_loop_registration_attempted"],1)
+            self.assertLessEqual(report["graph_loop_candidates"],8)
+            replay=json.loads((run_dir/"fusion_replay.json").read_text())
+            events=[e for frame in replay["frames"] for e in frame["loop_events"]]
+            proposals=[e for e in events if e["decision"]=="accepted"]
+            self.assertEqual(len(proposals),report["graph_accepted_loops"])
+            self.assertTrue(all(e["to"]>e["from"]+40 for e in events))
+            # Multiple accepted factors must not reinforce a single
+            # almost-identical early and late scan pair.
+            for index,a in enumerate(proposals):
+                for b in proposals[index+1:]:
+                    self.assertGreaterEqual(abs(a["from"]-b["from"]),6)
+                    self.assertGreaterEqual(abs(a["to"]-b["to"]),6)
 
     def test_repeatability_refusal_and_provenance(self):
         with tempfile.TemporaryDirectory() as root:
