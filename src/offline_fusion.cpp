@@ -318,10 +318,12 @@ void write_rejections(std::ostream& out,const char* name,
   out<<"},";
 }
 std::vector<Eigen::Vector2d> sample_matching_hits(
-    const std::vector<Eigen::Vector2d>& points,std::size_t stride) {
+    const std::vector<Eigen::Vector2d>& points,std::size_t stride,
+    std::size_t offset) {
   std::vector<Eigen::Vector2d> sampled;
   sampled.reserve((points.size()+stride-1)/stride);
-  for(std::size_t i=0;i<points.size();i+=stride)
+  // Offset is measured among valid hits, not original raw angular bins.
+  for(std::size_t i=offset%stride;i<points.size();i+=stride)
     sampled.push_back(points[i]);
   return sampled;
 }
@@ -383,7 +385,7 @@ Matched match_heldout(const Simulation& sim,const Prepared& p,
     slam::fusion::PipelineProfiler::Scope timing(profiler,"heldout_scan_match",i,true);
     const Pose2 seed=slam::compose(p.gyro_wheel[i],kBaseFromLaser);
     const auto matching_hits=sample_matching_hits(
-        p.gyro_deskewed[i],options.match_stride);
+        p.gyro_deskewed[i],options.match_stride,options.match_offset);
     result.matching_input_hits_total+=matching_hits.size();
     auto candidate=match(field,matching_hits,seed,options);
     ++result.attempted;
@@ -467,12 +469,12 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     // All prediction data comes from accepted raw LiDAR scans alone.
     const Pose2 previous_laser=slam::compose(out.poses.back(),kBaseFromLaser);
     const auto matching_hits=sample_matching_hits(
-        p.raw_lidar[i],options.match_stride);
+        p.raw_lidar[i],options.match_stride,options.match_offset);
     out.matching_input_hits_total+=matching_hits.size();
     std::optional<slam::matching::ScanToScanResult> scan_prediction;
     if(options.lidar_only_predict_first) {
       const auto previous_hits=sample_matching_hits(
-          p.raw_lidar[last_accepted_scan],options.match_stride);
+          p.raw_lidar[last_accepted_scan],options.match_stride,options.match_offset);
       auto predicted=slam::matching::register_consecutive_scans(
           previous_hits,matching_hits,
           has_relative_scan?last_relative_scan:Pose2{},
@@ -597,7 +599,7 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
           slam::matching::ScanToScanResult{});
       if(!scan_prediction) {
         const auto previous_scan=sample_matching_hits(
-            p.raw_lidar[last_accepted_scan],options.match_stride);
+            p.raw_lidar[last_accepted_scan],options.match_stride,options.match_offset);
         registered=slam::matching::register_consecutive_scans(
             previous_scan,matching_hits,
             has_relative_scan?last_relative_scan:Pose2{},
@@ -866,6 +868,7 @@ void export_lidar_match_audit(const std::filesystem::path& output,
      <<",\"lidar_only_predict_first\":"
      <<(options.lidar_only_predict_first?"true":"false")
      <<",\"match_stride\":"<<options.match_stride
+     <<",\"match_offset\":"<<options.match_offset
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
      <<",\"attempts\":"<<(lidar.accepted+lidar.rejected)
      <<",\"frames\":[";
@@ -927,6 +930,7 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
      <<"\"field_every\":"<<options.field_every<<","
      <<"\"map_stride\":"<<options.map_stride<<","
      <<"\"match_stride\":"<<options.match_stride<<","
+     <<"\"match_offset\":"<<options.match_offset<<","
      <<"\"distance_truncation_m\":"<<options.distance_truncation_m<<","
      <<"\"scan_frame\":\"laser_midpoint_deskewed_full_se2\","
      <<"\"laser_from_base_translation_m\":["
@@ -1064,6 +1068,7 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"field_every\":"<<options.field_every<<","
      <<"\n\"map_stride\":"<<options.map_stride<<","
      <<"\n\"match_stride\":"<<options.match_stride<<","
+     <<"\n\"match_offset\":"<<options.match_offset<<","
      <<"\n\"distance_truncation_m\":"<<options.distance_truncation_m<<","
      <<"\n\"heldout_skipped\":"<<matched.skipped<<","
      <<"\n\"heldout_matching_input_hits_total\":"<<matched.matching_input_hits_total<<","
@@ -1142,6 +1147,7 @@ int main(int argc,char** argv) {
       ("field-every","Refresh incremental LiDAR-only EDT every N frames (default 1)",cxxopts::value<std::string>())
       ("map-stride","Insert every Nth valid LiDAR hit into all maps (default 1)",cxxopts::value<std::string>())
       ("match-stride","Match every Nth valid LiDAR hit (default 1)",cxxopts::value<std::string>())
+      ("match-offset","Valid-hit subsampling offset 0..63 (default 0)",cxxopts::value<std::string>())
       ("distance-truncation","EDT cutoff in metres (default 0.7)",cxxopts::value<std::string>())
       ("continuous-cost","Use experimental finite-cost Ceres for both matchers")
       ("lidar-only-support-probe","Read-only local support search on first 3 LiDAR-only attempts")
@@ -1149,7 +1155,7 @@ int main(int argc,char** argv) {
       ("lidar-only-predict-first","LiDAR-only scan motion seeds Ceres before map registration (requires bootstrap)")
       ("h,help","Show help");
   cli.parse_positional({"scene","output"});
-  cli.positional_help("<apartment|warehouse> <new-output-directory>");
+  cli.positional_help("<apartment|warehouse|office|loft|atrium|industrial|warehouse_asymmetric> <new-output-directory>");
   cxxopts::ParseResult args;
   try { args=cli.parse(argc,argv); }
   catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
@@ -1167,6 +1173,11 @@ int main(int argc,char** argv) {
     options.field_every=positive("field-every",options.field_every,200);
     options.map_stride=positive("map-stride",options.map_stride,64);
     options.match_stride=positive("match-stride",options.match_stride,64);
+    if(args.count("match-offset")) {
+      const auto offset=args["match-offset"].as<std::string>();
+      if(offset=="0")options.match_offset=0;
+      else options.match_offset=posint(offset,63);
+    }
     options.continuous_cost=args.count("continuous-cost")&&
         args["continuous-cost"].as<bool>();
     options.lidar_only_support_probe=args.count("lidar-only-support-probe")&&
