@@ -109,6 +109,50 @@ def summarize(rows, map_method="lidar_only"):
         for scene in sorted(by_scene):
             print(f"  {scene}: per-phase median 240/60 RMSE ratio "
                   f"{median(by_scene[scene]):.3f}")
+    print("\n=== FULL 240-BEAM REFERENCE VS ALL SPARSE PHASES ===")
+    print("The full 240-beam scan has no decimation phase; one scene's full")
+    print("scan is compared with each sparse offset in that SAME scene.")
+    print("Multiple phase comparisons within a scene are correlated.")
+    for matcher in sorted({key[1] for key in groups}):
+        for stride, nominal in ((6,40), (4,60), (2,120)):
+            comparisons = []
+            for (scene, mode, phase), series in sorted(groups.items()):
+                if mode != matcher or stride not in series:
+                    continue
+                full = groups.get((scene,matcher,0),{}).get(1)
+                if full is None:
+                    continue
+                sparse_error = float(series[stride]["translation_rmse_m"])
+                full_error = float(full["translation_rmse_m"])
+                comparisons.append((scene,phase,sparse_error,full_error))
+            if not comparisons:
+                continue
+            wins = sum(full < sparse-1e-9
+                       for _,_,sparse,full in comparisons)
+            ties = sum(abs(full-sparse)<=1e-9
+                       for _,_,sparse,full in comparisons)
+            losses = len(comparisons)-wins-ties
+            by_scene = defaultdict(list)
+            for scene,phase,sparse,full in comparisons:
+                if sparse > 0:
+                    by_scene[scene].append(full/sparse)
+            scene_wins = sum(median(v)<1.0-1e-9
+                             for v in by_scene.values())
+            ratios = [full/sparse for _,_,sparse,full in comparisons
+                      if sparse>0]
+            print(f"{matcher}: {nominal} -> 240 beams: "
+                  f"{wins}/{len(comparisons)} sparse phases improved; "
+                  f"{ties} tied, {losses} worsened; "
+                  f"scene-level median improvement "
+                  f"{scene_wins}/{len(by_scene)}")
+            if ratios:
+                print(f"  median full/sparse RMSE ratio {median(ratios):.3f}, "
+                      f"worst ratio {max(ratios):.3f}")
+            for scene in sorted(by_scene):
+                ratios_scene = by_scene[scene]
+                print(f"  {scene}: {sum(v<1.0-1e-9 for v in ratios_scene)}/"
+                      f"{len(ratios_scene)} phases improved; "
+                      f"median ratio {median(ratios_scene):.3f}")
     return groups
 
 
