@@ -308,6 +308,10 @@ if(ZLIB_FOUND AND OpenSSL_FOUND)
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_benchmark_tools_test.py")
     set_tests_properties(fr079_benchmark_tools PROPERTIES TIMEOUT 60)
+    add_test(NAME fr079_matcher_beam_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_matcher_beam_tools_test.py")
+    set_tests_properties(fr079_matcher_beam_tools PROPERTIES TIMEOUT 60)
     if(SLAM_FR079_LOG)
       if(TARGET slam_match_ceres)
         add_test(NAME fr079_offline_real_data
