@@ -1495,6 +1495,9 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   out<<"}\n}\n";
   if(!out)throw std::runtime_error("failed writing fusion report");
   out.close();
+  if(options.mapping_ablation) {
+    export_mapping_ablation(directory,sim,p,graph,options);
+  }
   {
     std::ofstream profile(directory/"fusion_profile.json");
     if(!profile)throw std::runtime_error("failed opening fusion profiler output");
@@ -1524,6 +1527,7 @@ int main(int argc,char** argv) {
       ("output","New output directory",cxxopts::value<std::string>())
       ("synthetic-independent-loops","Enable synthetic independent loop constraints")
       ("lidar-loop-closure","Opt-in LiDAR scan-pair factors in fused GTSAM graph (correlated evidence)")
+      ("mapping-ablation","Opt-in separate fixed-graph occupancy evidence/re-deskew and window diagnostics")
       ("match-every","Match every N eligible scans (default 1)",cxxopts::value<std::string>())
       ("field-every","Refresh incremental LiDAR-only EDT every N frames (default 1)",cxxopts::value<std::string>())
       ("map-stride","Insert every Nth valid LiDAR hit into all maps (default 1)",cxxopts::value<std::string>())
@@ -1569,6 +1573,8 @@ int main(int argc,char** argv) {
         args["lidar-only-predict-first"].as<bool>();
     options.lidar_loop_closure=args.count("lidar-loop-closure")&&
         args["lidar-loop-closure"].as<bool>();
+    options.mapping_ablation=args.count("mapping-ablation")&&
+        args["mapping-ablation"].as<bool>();
     if(loops&&options.lidar_loop_closure)
       throw std::invalid_argument(
           "choose either --synthetic-independent-loops or --lidar-loop-closure");
@@ -1588,8 +1594,9 @@ int main(int argc,char** argv) {
         "--continuous-cost requires a Ceres-enabled fusion build");
 #endif
 #ifndef SLAM_FUSION_WITH_GTSAM
-    if(loops||options.lidar_loop_closure)throw std::invalid_argument(
-      "loop closure requires a GTSAM-enabled build");
+    if(loops||options.lidar_loop_closure||options.mapping_ablation)
+      throw std::invalid_argument(
+        "loop closure or mapping ablation requires a GTSAM-enabled build");
 #endif
     slam::fusion::PipelineProfiler profiler;
     const auto simulation=[&]{
