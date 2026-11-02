@@ -1,3 +1,4 @@
+#include "slam/cli/parse.hpp"
 #include "slam/evaluation/map_accuracy.hpp"
 #include "slam/fixtures/synthetic.hpp"
 #include "slam/mapping/distance_field.hpp"
@@ -282,14 +283,18 @@ void write_report(std::ostream& out, const Dataset& d, const FrontendStats& stat
 } // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::cerr << "Usage: slam_synthetic_mapping_benchmark "
-                 "<apartment|warehouse> <empty-output-directory>\n";
-    return 2;
-  }
+  slam::cli::Positionals parsed;
   try {
-    const Dataset d = generate(argv[1]);
-    const std::filesystem::path directory(argv[2]);
+    parsed=slam::cli::parse_positionals(argc,argv,"slam_synthetic_mapping_benchmark",
+        "<apartment|warehouse> <empty-output-directory>",2,2);
+  }catch(const std::exception& e) {
+    std::cerr<<e.what()<<'\n';return 2;
+  }
+  if(parsed.help){std::cout<<parsed.usage;return 0;}
+  const auto& cli_args=parsed.values;
+  try {
+    const Dataset d = generate(cli_args[0]);
+    const std::filesystem::path directory(cli_args[1]);
     if (std::filesystem::exists(directory))
       throw std::invalid_argument("output directory exists; refuse to overwrite benchmark");
     if (!std::filesystem::create_directories(directory))
