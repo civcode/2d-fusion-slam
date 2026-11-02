@@ -26,9 +26,10 @@ bool valid_sigma(const PoseEdge& e) {
          std::isfinite(e.sigma_yaw_rad) && e.sigma_yaw_rad >= 1e-6 && e.sigma_yaw_rad < 3.15;
 }
 bool verified(const FactorProvenance& p) {
-  return p.source != EvidenceClass::unverified && !p.source_id.empty() &&
-         p.source_id.size() <= 256 && p.clock_and_frame_verified &&
-         p.independent_of_initial_trajectory;
+  return p.source != EvidenceClass::unverified &&
+         p.source != EvidenceClass::lidar_scan_registration &&
+         !p.source_id.empty() && p.source_id.size() <= 256 &&
+         p.clock_and_frame_verified && p.independent_of_initial_trajectory;
 }
 gtsam::Pose2 gpose(const Pose2& p) {
   return {p.translation.x(),p.translation.y(),p.yaw_rad};
@@ -90,9 +91,25 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
        used.contains({e.from,e.to})){
       out.loop_decisions.push_back(LoopDecision::duplicate_or_nearby_nodes);continue;
     }
-    if (!verified(e.provenance) ||
-        (e.provenance.source == EvidenceClass::independently_measured &&
-         odometry_sources.contains(e.provenance.source_id))) {
+    // Scan-to-scan loop detection shares LiDAR evidence with the
+    // frontend and is seeded by an estimated pose. It is NOT an
+    // independently measured factor. Admit only explicit, conservative
+    // robust scan factors with bounded reciprocal geometry; never allow
+    // these provenance flags on odometry or external-sensor paths.
+    const bool scan_loop=e.provenance.source==
+        EvidenceClass::lidar_scan_registration;
+    const bool scan_verified=scan_loop &&
+        !e.provenance.source_id.empty() &&
+        e.provenance.source_id.size()<=256 &&
+        e.provenance.clock_and_frame_verified &&
+        !e.provenance.independent_of_initial_trajectory &&
+        !odometry_sources.contains(e.provenance.source_id) &&
+        e.sigma_x_m>=.18 && e.sigma_y_m>=.18 &&
+        e.sigma_yaw_rad>=.12 &&
+        candidate.supported_hits>=80 &&
+        candidate.overlap>=.82;
+    if (!(scan_verified||verified(e.provenance)) ||
+        odometry_sources.contains(e.provenance.source_id)) {
       out.loop_decisions.push_back(LoopDecision::unverified_or_correlated_evidence);continue;
     }
     if(candidate.supported_hits < options.minimum_supported_hits ||
