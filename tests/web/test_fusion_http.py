@@ -7,6 +7,7 @@ against the native viewer, without starting any solver in the HTTP process.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -123,6 +124,33 @@ class FusionHTTP(unittest.TestCase):
         last = report["frames"] - 1
         self.assertEqual(self.get_json(base + f"/frame/{last}"),
                          replay["frames"][last])
+
+    def test_tuned_matching_cadence_replay_is_readable(self):
+        # The viewer must distinguish skipped odd-index matching queries
+        # from both training scans and matcher rejections.
+        tuned = self.root / "cadence_tuned"
+        try:
+            result = subprocess.run([
+                self.cli, "apartment", str(tuned),
+                "--match-every", "3", "--field-every", "5",
+                "--map-stride", "2", "--match-stride", "2"],
+                capture_output=True, text=True, timeout=180)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = self.get_json("/api/fusion/runs/cadence_tuned")
+            replay = self.get_json("/api/fusion/runs/cadence_tuned/replay")
+            self.assertEqual(report["match_every"], 3)
+            self.assertEqual(replay["match_every"], 3)
+            self.assertEqual(replay["field_every"], 5)
+            self.assertEqual(replay["map_stride"], 2)
+            self.assertEqual(replay["match_stride"], 2)
+            skipped = [f for f in replay["frames"]
+                       if f["matching"]["status"] == "skipped"]
+            self.assertEqual(len(skipped), report["heldout_skipped"])
+            self.assertTrue(all(f["index"] % 2 == 1 and
+                                not f["matching"]["attempted"] for f in skipped))
+        finally:
+            if tuned.exists():
+                shutil.rmtree(tuned)
 
     def test_map_fingerprint_png_assets_and_no_mutation(self):
         base = "/api/fusion/runs/apartment_001"
