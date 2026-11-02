@@ -49,6 +49,7 @@ struct MatchResult {
   std::string ceres_termination{"not_run"};
   std::size_t support_aware_selected_hits{}, support_aware_skipped_hits{};
   std::size_t support_aware_stages{}, support_aware_accepted_stages{};
+  bool support_aware_no_safe_stage{}; // insufficient certified geometry, not solver success
   // No posterior covariance is asserted. This is a conditioned tracking pose,
   // NOT an independent LiDAR graph factor, even with a geometry-only objective.
 };
