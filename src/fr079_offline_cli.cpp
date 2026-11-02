@@ -352,7 +352,8 @@ int run(int argc,char** argv){
   std::unique_ptr<slam::datasets::Fr079CaptureBenchmark> capture_benchmark;
   if(capture) {
     capture_benchmark=std::make_unique<slam::datasets::Fr079CaptureBenchmark>(
-        capture_csv,digest,options.use_ceres,capture_every,capture_max_frames);
+        capture_csv,digest,options.use_ceres,options.support_aware_ceres,
+        capture_every,capture_max_frames);
     options.capture_probe=[&](std::size_t index,const slam::Pose2& anchor,
         std::shared_ptr<const slam::mapping::MapSnapshot> prior,
         const std::vector<Eigen::Vector2d>& points) {
