@@ -790,3 +790,30 @@ See [full FR079 implementation protocol](fr079-offline-slam.md).
   sandbox. No GitHub Actions were dispatched.
 
 See [replay performance fix and Docker commands](replay-performance.md).
+
+
+## 2026-11-02 — Map Explorer groups scenes and method variants
+
+- Updated from latest main before editing; native /api/maps continues
+  to return the same canonical map IDs and routes, with additive
+  run_id, scene, and method fields on validated fusion entries.
+- Replaced a long flat list of synthetic fusion maps with a
+  **scene-first, one-run-per-section accordion**. Scene names
+  such as Apartment and Warehouse appear once per run, with the
+  exact run ID visible when multiple runs target the same scene.
+- Each scene offers accessible radio controls with descriptions for
+  all actually exported mapping variants, ordered: graph_optimized,
+  fused_scan_matched, gyro_wheel, lidar_only, wheel_only. Unknown
+  future method names are retained in a stable fallback order.
+  A new scene opens with graph_optimized when exported; otherwise
+  it uses its highest-ranked available method. Last selection per
+  scene is remembered during the browsing session.
+- Unrelated FR079, workshop and other .slammap exports remain in
+  Other maps; verified active generation pointers and explicit
+  ?map= deep links continue to work. No SLAM map, replay, timing or
+  mapping format changed.
+- Added optional Node map_selector_browser CTest and extended
+  fusion_replay_http to check per-map scene/run/method metadata.
+  Full browser grouping/defaults/selection/navigation was also
+  exercised in a V8 DOM harness. Native Docker/C++ tests require a
+  full checkout to verify. No GitHub Actions executed.
