@@ -454,9 +454,9 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     evidence.candidate_evaluated=candidate.candidate_evaluated;
     evidence.candidate_translation_m=candidate.candidate_translation_m;
     evidence.has_obstacles=cached_field->has_obstacles();
-    // Probe only the first 3 matching attempts; no candidate is selected,
-    // applied, inserted, or used to seed any later frame. This deliberately
-    // does not consult simulated truth, wheel or gyro estimates.
+    // Probe only scan frames 1-3 when selected by match cadence; never
+    // apply a candidate, insert a ray, or use it to seed a later frame.
+    // The probe never consults simulated truth, wheel or gyro estimates.
     if(options.lidar_only_support_probe&&i<=3) {
       slam::matching::MatchSettings probe_settings;
       probe_settings.min_supported_hits=18;
