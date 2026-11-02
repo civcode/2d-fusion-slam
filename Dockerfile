@@ -9,7 +9,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates build-essential cmake ninja-build pkg-config python3 \
-      libeigen3-dev zlib1g-dev libssl-dev libceres-dev libgtsam-dev catch2 \
+      libeigen3-dev zlib1g-dev libssl-dev libceres-dev libgtsam-dev catch2 libcxxopts-dev \
       libboost-serialization-dev libboost-system-dev libboost-filesystem-dev \
       libboost-thread-dev libboost-program-options-dev libboost-date-time-dev \
       libboost-timer-dev libboost-chrono-dev libboost-regex-dev \
@@ -72,7 +72,7 @@ ARG SLAM_DOCKER_JOBS=2
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build ca-certificates \
-    libeigen3-dev zlib1g-dev libssl-dev \
+    libeigen3-dev zlib1g-dev libssl-dev libcxxopts-dev \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
 COPY . /workspace
