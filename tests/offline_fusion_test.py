@@ -481,6 +481,62 @@ class OfflineFusionExperiment(unittest.TestCase):
                                  report["graph_loop_candidates"])
             self.assertIn("graph_optimized", report["results"])
 
+    def test_opt_in_lidar_scan_loop_closure(self):
+        # Geometric closures are not the independent simulated loop sensor.
+        # Without an enabled graph backend, the flag must fail before writing.
+        with tempfile.TemporaryDirectory() as root:
+            prior=pathlib.Path(root)/"baseline"
+            proposed=pathlib.Path(root)/"lidar-loops"
+            args=("--continuous-cost","--lidar-only-bootstrap",
+                  "--lidar-only-predict-first","--match-stride","1")
+            baseline=run(EXE,"office",str(prior),*args)
+            self.assertEqual(baseline.returncode,0,baseline.stderr)
+            baseline_report=json.loads((prior/"fusion_report.json").read_text())
+            trial=run(EXE,"office",str(proposed),*args,"--lidar-loop-closure")
+            if baseline_report["graph_status"]=="gtsam_not_built":
+                self.assertNotEqual(trial.returncode,0)
+                self.assertIn("GTSAM",trial.stderr)
+                self.assertFalse(proposed.exists())
+                return
+            self.assertEqual(trial.returncode,0,trial.stderr)
+            new=json.loads((proposed/"fusion_report.json").read_text())
+            before=json.loads((prior/"trajectories.json").read_text())
+            after=json.loads((proposed/"trajectories.json").read_text())
+            self.assertTrue(new["lidar_loop_closure"])
+            self.assertEqual(new["loop_measurements"],
+                             "lidar_scan_registration_correlated")
+            self.assertEqual(new["graph_status"],
+                             "gtsam_with_lidar_scan_loop_closure")
+            self.assertGreater(new["graph_lidar_loop_registration_attempted"],0)
+            self.assertLessEqual(new["graph_lidar_loop_registration_verified"],
+                                 new["graph_lidar_loop_registration_attempted"])
+            self.assertEqual(new["graph_lidar_loop_registration_verified"],
+                             new["graph_loop_candidates"])
+            self.assertLessEqual(new["graph_accepted_loops"],
+                                 new["graph_loop_candidates"])
+            for name in ("wheel_only","gyro_wheel","fused_scan_matched","lidar_only"):
+                self.assertEqual(before["paths"][name],after["paths"][name])
+                self.assertEqual(baseline_report["results"][name]["map"]["map_fingerprint"],
+                                 new["results"][name]["map"]["map_fingerprint"])
+            replay=json.loads((proposed/"fusion_replay.json").read_text())
+            events=[e for frame in replay["frames"] for e in frame["loop_events"]]
+            self.assertTrue(all(e["source"]=="lidar_scan_registration" for e in events))
+            self.assertEqual(sum(e["decision"]=="accepted" for e in events),
+                             new["graph_accepted_loops"])
+            self.assertEqual(len(events),
+                             new["graph_lidar_loop_registration_attempted"])
+            self.assertTrue(all(e["to"]>e["from"]+39 for e in events))
+            self.assertIn("graph_optimized",after["paths"])
+            # Neither the independent loop sensor nor its oracle
+            # simulator measurements may be used by this experiment.
+            self.assertNotEqual(new["loop_measurements"],
+                                "independently_simulated_relative_pose")
+            conflicting=pathlib.Path(root)/"conflicting"
+            rejected=run(EXE,"office",str(conflicting),
+                         "--synthetic-independent-loops","--lidar-loop-closure")
+            self.assertNotEqual(rejected.returncode,0)
+            self.assertFalse(conflicting.exists())
+
     def test_repeatability_refusal_and_provenance(self):
         with tempfile.TemporaryDirectory() as root:
             first, bytes_first = self.scene("apartment", pathlib.Path(root) / "one")
