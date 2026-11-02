@@ -120,6 +120,28 @@ class OfflineFusionExperiment(unittest.TestCase):
                                                "no_improvement", "invalid_input", "qualification_gate"})
         self.assertEqual(report["lidar_only_accepted"] + report["lidar_only_rejected"],
                          report["frames"] - 1)
+        audit = json.loads((folder / "lidar_only_match_audit.json").read_text())
+        self.assertEqual(audit["format"], "FUSLIDARAUDIT1")
+        self.assertFalse(audit["ground_truth_used"])
+        self.assertFalse(audit["support_probe_read_only"])
+        self.assertEqual(audit["attempts"],
+                         report["lidar_only_accepted"] + report["lidar_only_rejected"])
+        self.assertEqual(len(audit["frames"]), audit["attempts"])
+        self.assertEqual(sum(int(f["accepted"]) for f in audit["frames"]),
+                         report["lidar_only_accepted"])
+        self.assertEqual(
+            sum(f["status"] == "insufficient_support" and
+                not f["candidate_evaluated"] and
+                f["solver_residual_blocks"] == 0 for f in audit["frames"]),
+            report["lidar_only_before_solver_insufficient_support"])
+        self.assertEqual(
+            sum(f["status"] == "insufficient_support" and
+                f["candidate_evaluated"] for f in audit["frames"]),
+            report["lidar_only_after_solver_insufficient_support"])
+        self.assertTrue(all(f["input_beams"] > 0 and
+                            0 <= f["seed_overlap"] <= 1 and
+                            f["seed_supported_hits"] <= f["input_beams"]
+                            for f in audit["frames"]))
         self.assertIn(report["matcher"],
                       ("ceres", "geometry_reference_fallback"))
         self.assertEqual(report["loop_measurements"], "none")
@@ -236,6 +258,35 @@ class OfflineFusionExperiment(unittest.TestCase):
                         report["heldout_attempted"])
                 for name in report["results"]:
                     self.assertTrue((folder / f"{name}.slammap").is_file())
+
+    def test_lidar_only_support_probe_is_read_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            for tag, flags in (("baseline", ()), ("probed", ("--lidar-only-support-probe",))):
+                result = run(EXE, "apartment", str(pathlib.Path(root) / tag), *flags)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            baseline = json.loads(
+                (pathlib.Path(root) / "baseline" / "fusion_report.json").read_text())
+            probed = json.loads(
+                (pathlib.Path(root) / "probed" / "fusion_report.json").read_text())
+            self.assertFalse(baseline["lidar_only_support_probe"])
+            self.assertTrue(probed["lidar_only_support_probe"])
+            self.assertEqual(baseline["lidar_only_accepted"],probed["lidar_only_accepted"])
+            self.assertEqual(baseline["lidar_only_rejected"],probed["lidar_only_rejected"])
+            for name in baseline["results"]:
+                self.assertEqual(
+                    baseline["results"][name]["map"]["map_fingerprint"],
+                    probed["results"][name]["map"]["map_fingerprint"])
+            audit = json.loads(
+                (pathlib.Path(root) / "probed" / "lidar_only_match_audit.json").read_text())
+            self.assertTrue(audit["support_probe_read_only"])
+            self.assertEqual(len(audit["frames"]),probed["frames"]-1)
+            self.assertTrue(all(f["probe_poses"] == 13*13*9
+                                for f in audit["frames"][:3]))
+            self.assertTrue(all(f["probe_poses"] == 0
+                                for f in audit["frames"][3:]))
+            self.assertTrue(all(f["probe_ranked_poses"] <=
+                                f["probe_supported_poses"] <= f["probe_poses"]
+                                for f in audit["frames"]))
 
     def test_continuous_cost_for_both_scenes_or_fail_closed(self):
         for scene in ("apartment", "warehouse"):
