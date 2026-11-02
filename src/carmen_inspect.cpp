@@ -1,3 +1,4 @@
+#include "slam/cli/parse.hpp"
 #include "slam/datasets/carmen.hpp"
 
 #include <zlib.h>
@@ -29,15 +30,20 @@ std::string read_gzip(const char* filename) {
 }
 }
 int main(int argc,char** argv) {
-  if ((argc != 2 && argc != 3) || std::string(argv[1]) == "--help") {
-    std::cout << "Usage: slam_carmen_inspect <FR079 CARMEN .log or .log.gz> [expected_scan_count]\n";
-    return argc == 2 ? 0 : 2;
-  }
+  slam::cli::Positionals parsed;
   try {
-    const std::string filename=argv[1];
+    parsed=slam::cli::parse_positionals(argc,argv,"slam_carmen_inspect",
+        "<FR079 CARMEN .log or .log.gz> [expected_scan_count]",1,2);
+  }catch(const std::exception& e) {
+    std::cerr<<e.what()<<'\n';return 2;
+  }
+  if(parsed.help){std::cout<<parsed.usage;return 0;}
+  const auto& cli_args=parsed.values;
+  try {
+    const std::string filename=cli_args[0];
     std::string content;
     if (filename.size() >= 3 && filename.substr(filename.size()-3)==".gz") {
-      content=read_gzip(argv[1]);
+      content=read_gzip(cli_args[0]);
     } else {
       std::ifstream f(filename);
       if (!f) throw std::runtime_error("cannot open input file");
@@ -47,7 +53,7 @@ int main(int argc,char** argv) {
     std::istringstream input(content);
     const auto s=slam::datasets::CarmenReader{}.inspect(input);
     if (s.scans==0) throw std::runtime_error("no CARMEN laser scans found");
-    if(argc==3 && (std::stoull(argv[2])!=s.scans || s.minimum_beams!=360 || s.maximum_beams!=360))
+    if(cli_args.size()==2 && (std::stoull(cli_args[1])!=s.scans || s.minimum_beams!=360 || s.maximum_beams!=360))
       throw std::runtime_error("unexpected FR079 scan count/beam shape");
     std::cout << "{\"scans\":" << s.scans << ",\"odometry\":" << s.odometry
               << ",\"beams\":" << s.ranges << ",\"hits\":" << s.hits
