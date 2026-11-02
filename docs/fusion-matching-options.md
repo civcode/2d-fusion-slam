@@ -60,6 +60,83 @@ queries, LiDAR-only attempted/skipped/rebuilt-field counts and actual
 matching-input beams. The replay reports per-frame match-input hit counts
 and solver residual blocks for attempted held-out matches.
 
+## Diagnosing the LiDAR-only bootstrap failure
+
+In the first 24-run synthetic beam sweep, LiDAR-only accepted **0**
+corrections in both scenes, with **all** attempts reported as
+`insufficient_support` (129 apartment / 194 warehouse). This status
+may result either from insufficient strict EDT support **at the initial
+seed**, or loss of strict support **after Ceres solves**. It does not by
+itself show which path occurred. The baseline predicts its next pose as
+the previous accepted pose, with no inertial, wheel or ground-truth motion
+prediction. When the first match fails, this can leave it stranded.
+
+New fusion runs export a `lidar_only_match_audit.json` file. Every
+attempt records the frame index, matching-beam count, strict seed
+supported hits and overlap, rank, map obstacle presence and map revision,
+solver residual blocks, whether a candidate was evaluated, candidate
+support, and acceptance/rejection status. The fusion report additionally
+contains `lidar_only_before_solver_insufficient_support` and
+`lidar_only_after_solver_insufficient_support` totals.
+
+The optional `--lidar-only-support-probe` performs an **observational
+search only** at frames 1–3. It evaluates strict geometry on a grid
+around the last LiDAR-only pose: X and Y offsets from -0.6 m to +0.6 m
+in 0.1 m steps, and yaw offsets from -0.24 rad to +0.24 rad in 0.06
+rad steps (1,521 trials per frame). The probe records how many poses
+satisfy support and full-rank criteria and the offset with greatest
+supported beam count. It **never changes estimated pose, matcher acceptance,
+occupancy, or the trajectory**. Do not interpret its most-supported
+candidate as an accurate registration or independent truth.
+
+Run both scenes without re-running the full beam matrix:
+
+~~~bash
+for scene in apartment warehouse; do
+  docker compose run --rm \
+    -v "$PWD/apps/demo/fusion:/fusion" \
+    --entrypoint ./build-docker/slam_offline_fusion test \
+    "$scene" "/fusion/${scene}-support-probe-$(date +%Y%m%d-%H%M%S)" \
+    --map-stride 1 --match-stride 1 \
+    --distance-truncation 0.7 --lidar-only-support-probe
+done
+~~~
+
+Then summarize the latest experiments:
+
+~~~bash
+python - <<'PY'
+import json
+from pathlib import Path
+for scene in ("apartment","warehouse"):
+    runs=sorted(Path("apps/demo/fusion").glob(f"{scene}-support-probe-*"))
+    if not runs:
+        print(scene,"no support-probe run");continue
+    folder=runs[-1]
+    report=json.loads((folder/"fusion_report.json").read_text())
+    audit=json.loads((folder/"lidar_only_match_audit.json").read_text())
+    print(f"\n{scene}: pre-solver support failures="
+          f"{report['lidar_only_before_solver_insufficient_support']}, "
+          f"post-solver support failures="
+          f"{report['lidar_only_after_solver_insufficient_support']}")
+    for frame in audit["frames"][:3]:
+        print({k:frame[k] for k in (
+            "index","input_beams","seed_supported_hits","seed_overlap",
+            "seed_full_rank","map_has_obstacles","map_revision",
+            "solver_residual_blocks","candidate_evaluated",
+            "probe_supported_poses","probe_ranked_poses",
+            "probe_best_supported_hits","probe_best_overlap",
+            "probe_best_offset")})
+PY
+~~~
+
+Only if a nearby pose exhibits independent strict geometry support
+should we try a **separate, opt-in** coarse-to-fine bootstrap. Any
+candidate must still satisfy rank, support, motion-bound and finite
+fixed-cohort improvement checks, and improve **independent** synthetic
+trajectory/map scores. A large number of supported candidates can
+also indicate ambiguity, not reliable localization.
+
 ## Multi-scene matching-beam benchmark
 
 A direct synthetic experiment is especially useful here because the
