@@ -44,6 +44,7 @@ function makeDOM() {
         addEventListener(name,callback){this.handlers[name]=callback;},
         getBoundingClientRect(){return {width:1000,height:600,left:0,top:0};},
         getContext(){return ctx;},
+        querySelector(){return {textContent:""};},
         setAttribute(){},setPointerCapture(){},hasPointerCapture(){return false;}
       };
       nodes.set(id,el);
