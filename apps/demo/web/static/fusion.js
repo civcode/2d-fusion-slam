@@ -32,21 +32,23 @@
     Number(n).toFixed(digits) : "—";
   const methods = () => poses ? Object.keys(poses.paths) : [];
   const lidarView=()=> $view.value==="lidar";
-  const scanPoints=frame=>lidarView() && Array.isArray(frame.raw_points_laser)?
+  const rawAvailable=()=>!!trace&&trace.frames.every(f=>
+    Array.isArray(f.raw_points_laser));
+  const hasRawFrame=frame=>Array.isArray(frame.raw_points_laser);
+  const scanPoints=frame=>lidarView()&&hasRawFrame(frame)?
     frame.raw_points_laser:frame.points_laser;
-  const scanPose=()=>poses.paths[lidarView()?"lidar_only":"fused_scan_matched"];
+  // Legacy traces have only deskewed points; keep them on the matched
+  // trajectory rather than mislabeling wheel-deskewed data as LiDAR-only.
+  const scanPose=()=>poses.paths[lidarView()&&rawAvailable()?
+    "lidar_only":"fused_scan_matched"];
   function setView(mode) {
-    const rawAvailable=!!trace&&trace.frames.every(f=>
-      Array.isArray(f.raw_points_laser));
-    const option=$view.querySelector('option[value="lidar"]');
-    option.disabled=!rawAvailable;
-    $view.value=mode==="lidar"&&rawAvailable?"lidar":"slam";
+    $view.value=mode==="lidar"?"lidar":"slam";
     shown("fusion-view-note",lidarView()?
-      "Raw LiDAR replay: pre-deskew sensor-frame hits projected using the estimated LiDAR-only pose at each scan midpoint. These are not ground-truth world hits.":
+      (rawAvailable()?
+        "Raw LiDAR replay: pre-deskew sensor-frame hits projected using the estimated LiDAR-only pose at each scan midpoint. These are not ground-truth world hits.":
+        "Legacy LiDAR replay: raw hits were not exported for this run. Showing its available gyro/wheel-deskewed scan samples on the scan-matched estimated pose instead; regenerate for raw sensor replay."):
       "SLAM replay: gyro/wheel deskewed LiDAR hits projected using the scan-matched estimated pose. Trajectories and match decisions come from the completed run.");
     if(trace)setFrame(frameIndex);
-    if(mode==="lidar"&&!rawAvailable&&trace)
-      showMessage("This run predates raw LiDAR replay. Regenerate its fusion artifacts to enable raw scan mode.");
   }
   const visible = method => {
     const input=document.querySelector('input[data-path="'+method+'"]');
@@ -78,7 +80,9 @@
     shown("fusion-time",fmt(elapsed,2)+" s elapsed");
     shown("fusion-scan-hits",f.hits+" / "+f.beam_count+
       " ("+scanPoints(f).length+" plotted)");
-    shown("fusion-scan-kind",lidarView()?"Raw, not deskewed":"Gyro/wheel deskewed");
+    shown("fusion-scan-kind",lidarView()?
+      (hasRawFrame(f)?"Raw, not deskewed":"Legacy deskewed samples"):
+      "Gyro/wheel deskewed");
     shown("fusion-match-status",f.matching.status);
     shown("fusion-match-reason",f.matching.reason.replaceAll("_"," "));
     shown("fusion-supported",f.matching.attempted ?
@@ -296,7 +300,8 @@
     } else {
       // Raw hits are projected in the LiDAR-only estimator's own pose
       // frame; never display them as though they came from fused deskew.
-      pathLayer(poses.paths.lidar_only,"lidar_only");
+      pathLayer(scanPose(),rawAvailable()?
+        "lidar_only":"fused_scan_matched");
     }
     if(el("fusion-truth").checked)
       pathLayer(poses.synthetic_truth_for_scoring,"synthetic_truth_for_scoring");
