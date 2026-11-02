@@ -145,6 +145,17 @@ void save_matches(const std::filesystem::path& file,
     out<<"{\"index\":"<<i<<",\"status\":\""<<f.match_status
        <<"\",\"attempted\":"<<(f.matched?"true":"false")
        <<",\"accepted\":"<<(f.accepted?"true":"false")
+       <<",\"match_input_beams\":"<<f.match_input_beams
+       <<",\"solver_residual_blocks\":"<<f.solver_residual_blocks
+       <<",\"candidate_evaluated\":"<<(f.candidate_evaluated?"true":"false")
+       <<",\"seed_supported_hits\":"<<f.seed_supported_hits
+       <<",\"candidate_supported_hits\":"<<f.candidate_supported_hits
+       <<",\"seed_strict_cost\":"<<f.seed_strict_cost
+       <<",\"candidate_strict_cost\":"<<f.candidate_strict_cost
+       <<",\"seed_finite_cost\":"<<f.seed_finite_cost
+       <<",\"candidate_finite_cost\":"<<f.candidate_finite_cost
+       <<",\"candidate_translation_m\":"<<f.candidate_translation_m
+       <<",\"candidate_rotation_rad\":"<<f.candidate_rotation_rad
        <<",\"supported_hits\":"<<f.supported_hits
        <<",\"overlap\":"<<f.overlap
        <<",\"robust_cost\":"<<f.robust_cost
@@ -251,6 +262,7 @@ void save_report(const std::filesystem::path& file,
      <<",\"realtime_deadlines_verified\":false"
      <<",\"matcher\":\""<<(result.used_continuous_cost_ceres?"ceres_continuous_cost":(result.used_support_aware_ceres?"ceres_support_aware":(result.used_ceres?"ceres":"geometry_reference_fallback")))<<"\""
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
+     <<",\"ablation_mode\":\""<<options.ablation_mode<<"\""
      <<",\"ceres_invalid_residual_evaluations\":"<<result.total_invalid_residual_evaluations
      <<",\"ceres_continuous_unknown_evaluations\":"<<result.total_continuous_unknown_evaluations
      <<",\"ceres_continuous_truncated_evaluations\":"<<result.total_continuous_truncated_evaluations
@@ -319,6 +331,7 @@ int run(int argc,char** argv){
       ("reference","Use geometry-reference matcher without Ceres")
       ("support-aware","Enable opt-in certified-support Ceres matcher")
       ("continuous-cost","Enable opt-in finite cost for unknown EDT cells")
+      ("ablation","Experimental finite Ceres variant: finite-seed-legacy, finite-all-legacy, finite-seed-continuous",cxxopts::value<std::string>())
       ("capture","Write frozen-map pose perturbation benchmark")
       ("capture-every","Capture interval",cxxopts::value<std::string>())
       ("capture-max-frames","Maximum captured frame count",cxxopts::value<std::string>())
@@ -341,7 +354,19 @@ int run(int argc,char** argv){
   options.use_ceres=!(args.count("reference")&&args["reference"].as<bool>());
   options.support_aware_ceres=args.count("support-aware")&&args["support-aware"].as<bool>();
   options.continuous_cost_ceres=args.count("continuous-cost")&&args["continuous-cost"].as<bool>();
+  if(args.count("ablation")){
+    options.ablation_mode=args["ablation"].as<std::string>();
+    ensure(options.continuous_cost_ceres&&options.use_ceres&&
+           !options.support_aware_ceres,
+           "--ablation requires --continuous-cost, not --reference/--support-aware");
+    ensure(options.ablation_mode=="finite-seed-legacy"||
+           options.ablation_mode=="finite-all-legacy"||
+           options.ablation_mode=="finite-seed-continuous",
+           "invalid --ablation mode");
+  }
   const bool capture=args.count("capture")&&args["capture"].as<bool>();
+  ensure(!capture||options.ablation_mode=="none",
+         "--capture cannot be combined with --ablation");
   const auto positive=[&](const char* key,std::size_t fallback) {
     return args.count(key)?positive_integer(args[key].as<std::string>()):fallback;
   };
