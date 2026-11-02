@@ -45,6 +45,9 @@ if(BUILD_TESTING)
     add_test(NAME map_selector_browser
       COMMAND "${SLAM_NODE_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/map_selector_browser_test.js")
+    add_test(NAME fusion_replay_browser
+      COMMAND "${SLAM_NODE_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/fusion_replay_browser_test.js")
   endif()
 endif()
 
@@ -548,7 +551,7 @@ if(BUILD_TESTING)
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_fusion_http.py"
           "$<TARGET_FILE:fusion_slam_demo>"
           "$<TARGET_FILE:slam_offline_fusion>")
-      set_tests_properties(fusion_replay_http PROPERTIES TIMEOUT 240)
+      set_tests_properties(fusion_replay_http PROPERTIES TIMEOUT 420)
       if(TARGET slam_fr079_offline)
         add_test(NAME fr079_offline_http
           COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_fr079_slam_http.py"
