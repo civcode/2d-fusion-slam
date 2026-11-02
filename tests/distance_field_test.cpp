@@ -149,12 +149,15 @@ int main() {
             "off-grid costs stay finite, capped, and differentiable");
   }
   const double h=1e-5;
-  const auto near_edge=truncated->sample_matching_cost({0.04,2.05});
+  // Use the long-range field here so the virtual maximum-cost border
+  // has a nonzero slope toward a genuinely observed, nearer wall.
+  const auto near_edge=field->sample_matching_cost({0.04,2.05});
   const double numerical_x=
-      (truncated->sample_matching_cost({0.04+h,2.05}).metres-
-       truncated->sample_matching_cost({0.04-h,2.05}).metres)/(2*h);
-  require(close(near_edge.gradient_map.x(),numerical_x,1e-6),
-          "interpolated border gradient agrees with finite difference");
+      (field->sample_matching_cost({0.04+h,2.05}).metres-
+       field->sample_matching_cost({0.04-h,2.05}).metres)/(2*h);
+  require(std::abs(near_edge.gradient_map.x())>1e-4 &&
+          close(near_edge.gradient_map.x(),numerical_x,1e-6),
+          "nontrivial padded-grid gradient agrees with finite difference");
   require(truncated->support_map({0.5,0.5})==DistanceSupport::truncated,
           "truncation boundary classified");
   require(!truncated->supports_disk_map({0.5,0.5},0.0),
