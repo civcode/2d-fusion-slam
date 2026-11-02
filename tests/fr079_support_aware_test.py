@@ -17,14 +17,34 @@ def main():
         dataset.write_text(carmen_fixture())
         standard=root/"legacy"
         guarded=root/"guarded"
+        continuous=root/"continuous"
         flags=("--match-every","1","--field-every","15",
                "--map-stride","3","--match-stride","4")
         run(binary,dataset,standard,*flags)
         run(binary,dataset,guarded,*flags,"--support-aware")
+        run(binary,dataset,continuous,*flags,"--continuous-cost")
         old=json.loads(standard.with_suffix(".report.json").read_text())
         new=json.loads(guarded.with_suffix(".report.json").read_text())
+        smooth=json.loads(continuous.with_suffix(".report.json").read_text())
         assert old["matcher"]=="ceres"
         assert new["matcher"]=="ceres_support_aware"
+        assert smooth["matcher"]=="ceres_continuous_cost"
+        assert smooth["frames"]==old["frames"]==55
+        assert smooth["source_sha256"]==old["source_sha256"]
+        assert smooth["map_beam_stride"]==old["map_beam_stride"]==3
+        assert smooth["match_beam_stride"]==old["match_beam_stride"]==4
+        assert smooth["inserted_scans"]==55
+        assert smooth["accepted"]+smooth["rejected"]==smooth["attempts"]
+        assert smooth["ceres_invalid_residual_evaluations"]==0, (
+            "continuous cost solver must not fail at finite missing field cells")
+        assert sum(smooth["ceres_continuous_"+key+"_evaluations"] for key in
+                   ("unknown", "truncated", "outside", "other"))>=0
+        smooth_frames=json.loads(
+            continuous.with_suffix(".matches.json").read_text())["frames"]
+        assert sum(f["ceres_continuous_unknown_evaluations"] for f in smooth_frames)==\
+               smooth["ceres_continuous_unknown_evaluations"]
+        assert sum(f["ceres_continuous_outside_evaluations"] for f in smooth_frames)==\
+               smooth["ceres_continuous_outside_evaluations"]
         assert new["frames"]==old["frames"]==55
         assert new["source_sha256"]==old["source_sha256"]
         assert new["distance_truncation_m"]==old["distance_truncation_m"]==0.7
@@ -50,7 +70,11 @@ def main():
                    for f in decisions["frames"])==0
         run(binary,dataset,root/"invalid","--reference","--support-aware",
             expected_success=False)
-        print("FR079 Ceres support-aware causal end-to-end fixture passed")
+        run(binary,dataset,root/"conflict","--support-aware","--continuous-cost",
+            expected_success=False)
+        run(binary,dataset,root/"bad-reference","--reference","--continuous-cost",
+            expected_success=False)
+        print("FR079 legacy, support-aware and finite-cost Ceres fixture passed")
 
 
 if __name__=="__main__":
