@@ -37,14 +37,15 @@ def main():
         assert smooth["accepted"]+smooth["rejected"]==smooth["attempts"]
         assert smooth["ceres_invalid_residual_evaluations"]==0, (
             "continuous cost solver must not fail at finite missing field cells")
-        assert sum(smooth["ceres_continuous_"+key+"_evaluations"] for key in
-                   ("unknown", "truncated", "outside", "other"))>=0
+        for category in ("unknown", "truncated", "outside", "other"):
+            assert smooth["ceres_continuous_"+category+"_evaluations"]>=0
         smooth_frames=json.loads(
             continuous.with_suffix(".matches.json").read_text())["frames"]
-        assert sum(f["ceres_continuous_unknown_evaluations"] for f in smooth_frames)==\
-               smooth["ceres_continuous_unknown_evaluations"]
-        assert sum(f["ceres_continuous_outside_evaluations"] for f in smooth_frames)==\
-               smooth["ceres_continuous_outside_evaluations"]
+        for category in ("unknown", "truncated", "outside", "other"):
+            key="ceres_continuous_"+category+"_evaluations"
+            assert sum(f[key] for f in smooth_frames)==smooth[key]
+        assert sum(f["ceres_invalid_residual_evaluations"]
+                   for f in smooth_frames)==smooth["ceres_invalid_residual_evaluations"]
         assert new["frames"]==old["frames"]==55
         assert new["source_sha256"]==old["source_sha256"]
         assert new["distance_truncation_m"]==old["distance_truncation_m"]==0.7
