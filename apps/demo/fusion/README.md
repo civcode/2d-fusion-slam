@@ -13,7 +13,29 @@ docker compose up --build demo
 ```
 
 Open http://127.0.0.1:8765/fusion. Output directories must not already
-exist; new runs are never overwritten. For non-Docker use, start
+exist; new runs are never overwritten.
+
+To explore already completed seven-scene benchmarks **without moving or
+regenerating their maps**, point the Docker demo's read-only fusion mount to a
+single completed sweep directory:
+
+```sh
+FUSION_DEMO_RUNS_DIR="$PWD/benchmarks/fusion-beams-diverse-001" \
+  docker compose up --build demo
+```
+
+The Map Explorer at http://127.0.0.1:8765/ automatically lists all
+run/method map variants from that directory. Expand Office, Loft, Atrium,
+Industrial, Asymmetric warehouse, Apartment or Warehouse and select
+**LiDAR replay** (raw, non-deskewed scan endpoints projected at the
+estimated LiDAR-only pose) or **SLAM replay** (deskewed, time-indexed
+scan-matched trajectories) from the run's links. Or open
+`/fusion?run=office-continuous-s01&view=lidar` directly.
+Choose `benchmarks/fusion-beams-diverse-phases-001` instead to inspect
+sampling-phase variations. A single sweep fits the existing bounded run
+discovery; do not concatenate multiple large sweeps into one root.
+Older fusion runs without `raw_points_laser` still support SLAM
+replay; regenerate those artifacts to enable the raw view. For non-Docker use, start
 `fusion_slam_demo --data-dir apps/demo/maps --fusion-dir apps/demo/fusion`.
 The server reads artifacts only; all source files remain outside the
 container image and are mounted read-only.
