@@ -126,7 +126,22 @@ of occupied cells is not automatically better reconstruction.
 ```sh
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R '^(map_accuracy|offline_fusion|fusion_mapping_ablation_tools)$'
+  -R '^(map_accuracy|fusion_mapping_ablation_tools)
+```
+
+No GitHub Actions are configured or dispatched by this experiment.
+Recorded FR079 inputs are outside the provenance scope of these scores.
+
+
+# Separate, longer native experiment (24 maps, possibly several minutes):
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R '^fusion_mapping_ablation
+```
+
+No GitHub Actions are configured or dispatched by this experiment.
+Recorded FR079 inputs are outside the provenance scope of these scores.
+
 ```
 
 No GitHub Actions are configured or dispatched by this experiment.
