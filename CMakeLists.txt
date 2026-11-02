@@ -24,6 +24,9 @@ if(BUILD_TESTING)
     add_test(NAME replay_browser_runtime
       COMMAND "${SLAM_NODE_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/replay_browser_runtime_test.js")
+    add_test(NAME map_selector_browser
+      COMMAND "${SLAM_NODE_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/map_selector_browser_test.js")
   endif()
 endif()
 
