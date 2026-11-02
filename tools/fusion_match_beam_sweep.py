@@ -185,7 +185,7 @@ def main():
     a.out_dir.mkdir(parents=True)
     manifest = {
         "format": "FUSFUSIONBEAMSWEEP1",
-        "source": "seven distinct analytic synthetic maps/routes with independently withheld simulator truth",
+        "source": "selected analytic synthetic maps/routes with independently withheld simulator truth",
         "commit_or_binary": str(a.binary) if a.binary else "Docker test image supplied by user",
         "scenes": a.scenes, "matchers": a.matchers,
         "match_strides": a.match_strides,
