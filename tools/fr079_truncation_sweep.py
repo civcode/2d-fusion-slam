@@ -61,6 +61,8 @@ def parse_args():
     if args.capture and not (1 <= args.capture_every <= 200 and
                              1 <= args.capture_max_frames <= 100):
         p.error("invalid capture sampling settings")
+    if args.capture and not any(abs(t - 0.7) < 1e-9 for t in args.truncations):
+        p.error("--capture requires 0.7 m in --truncations as the fixed anchor run")
     args.repo = args.repo.resolve(strict=True)
     args.log = args.log.resolve(strict=True)
     args.out_dir = args.out_dir.resolve()
@@ -77,7 +79,7 @@ def command(args, tag, truncation, prefix):
     options = ["--match-every", "1", "--field-every", "15",
                "--map-stride", "3", "--match-stride", "4",
                "--distance-truncation", format(truncation, ".3f")]
-    if args.capture:
+    if args.capture and abs(truncation - 0.7) < 1e-9:
         options += ["--capture", "--capture-every", str(args.capture_every),
                     "--capture-max-frames", str(args.capture_max_frames)]
     if args.docker:
@@ -151,7 +153,8 @@ def main():
             comparison = json.loads(Path(comparison_file).read_text())
             if comparison["independent_ground_truth"] is not False:
                 raise ValueError("invalid reference-provenance claim")
-        capture_file = str(prefix) + ".capture.csv" if args.capture else ""
+        capture_file = (str(prefix) + ".capture.csv"
+                        if args.capture and abs(value - 0.7) < 1e-9 else "")
         if capture_file:
             with open(capture_file, newline="") as h:
                 if not next(csv.DictReader(h), None):
@@ -203,7 +206,7 @@ def main():
                 "match_every": 1, "field_rebuild_every": 15,
                 "map_beam_stride": 3, "match_beam_stride": 4
             },
-            "capture_anchor": "same_run_accepted_pose_proxy_not_ground_truth"
+            "capture_anchor": "0.7m_run_same_run_accepted_pose_proxy_not_ground_truth"
                               if args.capture else None,
             "results": rows,
         }, out, indent=2)
