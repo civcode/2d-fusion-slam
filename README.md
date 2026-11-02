@@ -327,6 +327,12 @@ this mode seeds EDT/Ceres with a LiDAR-derived relative pose and rejects
 inconsistent Ceres corrections rather than optimizing from a stale pose.
 The default remains unchanged; any bootstrap gain must be validated
 against independent synthetic trajectory and map scores.
+For robustness beyond the two original scenes, the
+[seven-map/beam-phase generalization protocol](docs/fusion-matching-options.md#generalization-suite-varied-maps-routes-and-beam-phases)
+adds five asymmetric or non-repetitive synthetic geometries, matched
+warehouse/asymmetric-warehouse motion and multiple subsampling phases.
+It explicitly reports regressions across maps rather than assuming
+that more beams must always reduce nonlinear SLAM error.
 
 ## Moving-scan offline gyro/wheel SLAM experiment
 
