@@ -63,7 +63,7 @@ class LoopCompareTest(unittest.TestCase):
             output = buffer.getvalue()
             self.assertIn("Non-graph paths and map fingerprints: unchanged", output)
             self.assertIn("Final 12%", output)
-            self.assertIn("Before final closure", output)
+            self.assertIn("Up to final closure", output)
             self.assertIn("After final closure", output)
             self.assertIn("Frame  18", output)
             self.assertIn("Frame  19", output)
