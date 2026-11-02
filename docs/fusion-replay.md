@@ -136,25 +136,44 @@ The graph-optimized result is a fused-trajectory postprocessing output,
 
 The proposed scan closures:
 
-1. Shortlist historical poses separated by at least 40 scans and within
-   0.78 m / 0.26 rad of the *estimated* trajectory. Query only bounded
-   keyframes and up to four candidates per query.
-2. Register previous/current gyro/wheel-deskewed LiDAR hit clouds directly
-   with deterministic trimmed reciprocal ICP. The chosen relative
-   transform is **measured from scan geometry**, not copied from either
-   estimated pose or the simulator truth.
-3. Require two-way inlier coverage >=82%, >=80 inliers per direction,
-   selected-correspondence rank, <=0.11 m inlier RMS, <=0.55 m and
-   <=0.17 rad innovation around the candidate seed.
-4. Accept only the best verified loop per keyframe and keep successive
-   accepted queries at least 18 scans apart.
-5. Send it to the existing gauge-fixed GTSAM batch graph with robust
-   Huber loss, conservative *configured* uncertainties of
-   0.20 m / 0.20 m / 0.14 rad, and a second graph-stage innovation gate
-   of 0.8 m / 0.3 rad. These are experiment weights, **not
-   calibrated covariance estimates**.
-6. Preserve rejected proposal events, accepted events, number of ICP
-   registrations attempted and verified, and the generated graph map.
+1. Search estimated-pose-nearby historical keyframes every **two scans**,
+   retaining at least 40 scans of temporal separation. Consider relative
+   position <=2.8 m and heading <=0.50 rad, with at most **six** attempted
+   historical scan registrations per query. Unlike the original sparse
+   detector, an accepted closure does **not** suppress all subsequent
+   query frames for 18 scans.
+2. Register previous/current gyro/wheel-deskewed LiDAR hit clouds using
+   trimmed nearest-neighbor ICP, with a loop-specific 3.0 m / 0.6 rad
+   registration envelope. The ordinary LiDAR-only consecutive-scan ICP
+   retains its original 0.9 m / 0.32 rad bounds.
+3. Require >=80 inliers in both directions, >=82% reciprocal overlap,
+   selected-correspondence rank, <=0.11 m inlier RMS, and <=0.55 m /
+   0.17 rad innovation from the estimated-pose search seed. A second
+   reverse ICP registration must reproduce the inverse transform with
+   <=0.14 m / 0.07 rad composition error. No simulator truth or
+   post-run score influences candidate detection or verification.
+4. Propose only **one** verified pair per query and separate all
+   accepted proposal endpoints by at least **six scans at each end**;
+   cap the graph at eight LiDAR loop factors per run. Skipped
+   near-duplicate verified pairs are recorded as duplicate events, not
+   mistaken for independent support.
+5. Send nonredundant pairs to the fixed-gauge GTSAM graph with Huber
+   robust loss and more conservative configured weights of
+   0.30 m / 0.30 m / 0.20 rad (not estimated covariances), retaining
+   the 0.8 m / 0.3 rad graph-stage consistency gate.
+6. Export nearby candidate count, tried ICP pair count, geometry-pass
+   count, redundant factor suppression count, graph-stage acceptances,
+   and all accepted/rejected replay events. These counts distinguish
+   the search coverage from the number of trusted graph factors.
+
+This is still *pose-guided* retrieval: an otherwise valid revisit
+outside the 2.8 m / 0.50 rad search envelope will be missed. In a
+repetitive warehouse, many overlapping frames are strongly correlated
+and may also be aliased; they must not simply be inserted as dozens of
+independent graph constraints. Review per-window errors, final pose
+error, map IoU and accepted edge identities before judging the change
+as more accurate. Existing run artifacts are immutable: a new run
+is required to test the denser detector.
 
 The source is recorded as `lidar_scan_registration_correlated`.
 The scan pairs reuse observations that influenced the frontend and use
@@ -182,7 +201,7 @@ using all optimized scan poses. The loop correction is **not**
 applied to the final node alone. However, the sequential graph edges
 are only gyro/wheel relative increments; the frozen-map matched scan
 poses are used as initialization, **not** as independent graph
-constraints. A single 0 -> 186 LiDAR loop can reduce endpoint drift
+constraints. The earlier one-closure implementation (0 -> 186) can reduce endpoint drift
 without repairing local relative-pose errors on frames ~171–194, and
 frames 187–194 have no later loop connection.
 
