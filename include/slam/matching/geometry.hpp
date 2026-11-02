@@ -44,6 +44,12 @@ struct MatchResult {
   MatchDiagnostics diagnostics{};
   unsigned iterations{};
   std::size_t ceres_invalid_residual_evaluations{}; // failed EDT samples across solver trials
+  // Finite continuous-cost samples that would be unsupported by the
+  // strict EDT sampler. These are valid cost evaluations, NOT invalid steps.
+  std::size_t ceres_continuous_unknown_evaluations{};
+  std::size_t ceres_continuous_truncated_evaluations{};
+  std::size_t ceres_continuous_outside_evaluations{};
+  std::size_t ceres_continuous_other_evaluations{};
   std::size_t ceres_invalid_unknown_cells{}, ceres_invalid_truncated{}, ceres_invalid_outside_grid{}, ceres_invalid_other{};
   std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
   std::string ceres_termination{"not_run"};
@@ -79,6 +85,14 @@ struct MatchResult {
 // when its complete pose-step region has real, observed EDT support. No
 // fabricated residual is supplied for unknown cells. The legacy path above
 // remains the default for A/B comparisons.
+// Experimental finite-cost Ceres matcher. All finite input beams remain
+// in the objective; unknown/off-grid ED values receive maximum-cost
+// continuation rather than making a Ceres residual undefined.
+[[nodiscard]] MatchResult match_ceres_continuous(
+    std::shared_ptr<const mapping::DistanceField> field,
+    const std::vector<Eigen::Vector2d>& laser_points,
+    Pose2 initial_map_from_laser, const MatchSettings& settings = {});
+
 [[nodiscard]] MatchResult match_ceres_support_aware(
     std::shared_ptr<const mapping::DistanceField> field,
     const std::vector<Eigen::Vector2d>& laser_points,
