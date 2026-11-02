@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +22,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -32,6 +34,22 @@ constexpr slam::TimeNs kTickNs=25'000'000LL;
 constexpr slam::TimeNs kScanNs=300'000'000LL;
 constexpr slam::TimeNs kInitialNs=1'000'000'000LL;
 constexpr double kPi=std::numbers::pi;
+struct FusionMatchOptions {
+  std::size_t match_every{1};     // every eligible held-out / LiDAR-only query
+  std::size_t field_every{1};     // incremental LiDAR-only EDT refresh
+  std::size_t map_stride{1};     // occupancy insertion in every map
+  std::size_t match_stride{1};   // every Nth valid deskewed/raw hit
+  double distance_truncation_m{0.7};
+  bool continuous_cost{};
+};
+std::size_t posint(std::string_view value,std::size_t max) {
+  if(value.empty()||value.front()=='0'||
+     value.find_first_not_of("0123456789")!=std::string_view::npos)
+    throw std::invalid_argument("option must be a positive decimal integer");
+  const auto number=std::stoull(std::string(value));
+  if(number<1||number>max)throw std::invalid_argument("option exceeds allowed limit");
+  return static_cast<std::size_t>(number);
+}
 const Pose2 kBaseFromLaser{{.12,.01},.02};
 
 // Truth is used in the synthetic sensor GENERATOR and in independent scoring,
@@ -219,12 +237,12 @@ Prepared prepare(const Observations& obs,Pose2 initial,
   return p;
 }
 void insert(slam::mapping::OccupancyGrid& grid,Pose2 base,
-            const std::vector<Eigen::Vector2d>& hits) {
+            const std::vector<Eigen::Vector2d>& hits,std::size_t map_stride) {
   const auto laser=slam::compose(base,kBaseFromLaser);
   std::vector<slam::mapping::WorldRay> rays;
   rays.reserve(hits.size());
-  for(const auto& pt:hits)
-    rays.push_back({laser.translation,slam::transform(laser,pt),
+  for(std::size_t i=0;i<hits.size();i+=map_stride)
+    rays.push_back({laser.translation,slam::transform(laser,hits[i]),
                     slam::sensors::ReturnKind::hit});
   (void)grid.integrate_rays(rays);
 }
@@ -232,6 +250,7 @@ slam::mapping::MapBundle make_map(const Simulation& sim,
                                   const std::vector<Pose2>& poses,
                                   const Points& scans,
                                   const Mask& use,
+                                  const FusionMatchOptions& options,
                                   slam::fusion::PipelineProfiler* profiler=nullptr) {
   if(poses.size()!=scans.size()||poses.size()!=use.size())
     throw std::invalid_argument("map pose/ray size mismatch");
@@ -239,8 +258,8 @@ slam::mapping::MapBundle make_map(const Simulation& sim,
   for(std::size_t i=0;i<poses.size();++i)if(use[i]) {
     if(profiler) {
       slam::fusion::PipelineProfiler::Scope sample(*profiler,"fused_map_insert",i,true);
-      insert(grid,poses[i],scans[i]);
-    } else insert(grid,poses[i],scans[i]);
+      insert(grid,poses[i],scans[i],options.map_stride);
+    } else insert(grid,poses[i],scans[i],options.map_stride);
   }
   return {slam::mapping::MapSnapshot::capture(grid),
     {"map",sim.scene.id,"synthetic_estimated",true}};
@@ -250,7 +269,7 @@ struct Matched {
   std::vector<Pose2> poses;
   std::vector<slam::matching::MatchResult> outcomes;
   Mask accepted_mask; // passed *all* source/rank/innovation gates
-  std::size_t attempted{},accepted{},rejected{};
+  std::size_t attempted{},accepted{},rejected{},skipped{};
   std::string backend;
   std::map<std::string,std::size_t> rejections;
 };
@@ -275,9 +294,18 @@ void write_rejections(std::ostream& out,const char* name,
   }
   out<<"},";
 }
+std::vector<Eigen::Vector2d> sample_matching_hits(
+    const std::vector<Eigen::Vector2d>& points,std::size_t stride) {
+  std::vector<Eigen::Vector2d> sampled;
+  sampled.reserve((points.size()+stride-1)/stride);
+  for(std::size_t i=0;i<points.size();i+=stride)
+    sampled.push_back(points[i]);
+  return sampled;
+}
 slam::matching::MatchResult match(
     std::shared_ptr<const slam::mapping::DistanceField> field,
-    const std::vector<Eigen::Vector2d>& points,Pose2 seed) {
+    const std::vector<Eigen::Vector2d>& points,Pose2 seed,
+    const FusionMatchOptions& options) {
   slam::matching::MatchSettings settings;
   settings.min_supported_hits=18;
   settings.minimum_overlap=.45;
@@ -285,8 +313,12 @@ slam::matching::MatchResult match(
   settings.maximum_step_translation_m=.12;
   settings.maximum_step_yaw_rad=.075;
 #ifdef SLAM_FUSION_WITH_CERES
+  if(options.continuous_cost)
+    return slam::matching::match_ceres_continuous(field,points,seed,settings);
   return slam::matching::match_ceres(field,points,seed,settings);
 #else
+  if(options.continuous_cost)
+    throw std::invalid_argument("--continuous-cost requires a Ceres-enabled fusion build");
   return slam::matching::match_reference(field,points,seed,settings);
 #endif
 }
@@ -302,19 +334,21 @@ bool qualified(const slam::matching::MatchResult& m,
     std::abs(slam::wrap_yaw(m.map_from_laser.yaw_rad-seed.yaw_rad))<=.16;
 }
 Matched match_heldout(const Simulation& sim,const Prepared& p,
-                      slam::fusion::PipelineProfiler& profiler) {
+                      slam::fusion::PipelineProfiler& profiler,
+                      const FusionMatchOptions& options) {
   Mask even(p.gyro_wheel.size(),false);
   for(std::size_t i=0;i<even.size();i+=2)even[i]=true;
   const auto prepared=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"training_map_build");
-    const auto frozen=make_map(sim,p.gyro_wheel,p.gyro_deskewed,even);
-    return std::pair{frozen,slam::mapping::DistanceField::build(frozen.snapshot,.7)};
+    const auto frozen=make_map(sim,p.gyro_wheel,p.gyro_deskewed,even,options);
+    return std::pair{frozen,slam::mapping::DistanceField::build(
+        frozen.snapshot,options.distance_truncation_m)};
   }();
   const auto& frozen=prepared.first;
   const auto& field=prepared.second;
   Matched result;
 #ifdef SLAM_FUSION_WITH_CERES
-  result.backend="ceres";
+  result.backend=options.continuous_cost?"ceres_continuous_cost":"ceres";
 #else
   result.backend="geometry_reference_fallback";
 #endif
@@ -322,9 +356,11 @@ Matched match_heldout(const Simulation& sim,const Prepared& p,
   result.outcomes.resize(p.gyro_wheel.size());
   result.accepted_mask.assign(p.gyro_wheel.size(),false);
   for(std::size_t i=1;i<result.poses.size();i+=2) {
+    if(((i-1)/2)%options.match_every!=0){++result.skipped;continue;}
     slam::fusion::PipelineProfiler::Scope timing(profiler,"heldout_scan_match",i,true);
     const Pose2 seed=slam::compose(p.gyro_wheel[i],kBaseFromLaser);
-    auto candidate=match(field,p.gyro_deskewed[i],seed);
+    auto candidate=match(field,
+      sample_matching_hits(p.gyro_deskewed[i],options.match_stride),seed,options);
     ++result.attempted;
     if(qualified(candidate,*frozen.snapshot,seed)){
       // Convert matched laser pose back into map-from-base exactly.
@@ -343,11 +379,12 @@ Matched match_heldout(const Simulation& sim,const Prepared& p,
 struct LidarOnly {
   std::vector<Pose2> poses;
   Mask mapped;
-  std::size_t accepted{},rejected{};
+  std::size_t accepted{},rejected{},skipped{},field_rebuilds{};
   std::map<std::string,std::size_t> rejections;
 };
 LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
-                     slam::fusion::PipelineProfiler& profiler) {
+                     slam::fusion::PipelineProfiler& profiler,
+                     const FusionMatchOptions& options) {
   LidarOnly out;
   out.poses.reserve(p.raw_lidar.size());
   out.mapped.assign(p.raw_lidar.size(),false);
@@ -355,21 +392,36 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
   out.poses.push_back(first_anchor);out.mapped[0]=true;
   {
     slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_only_baseline",0,true);
-    insert(rolling,first_anchor,p.raw_lidar[0]);
+    insert(rolling,first_anchor,p.raw_lidar[0],options.map_stride);
   }
+  std::shared_ptr<const slam::mapping::MapSnapshot> cached_snapshot;
+  std::shared_ptr<const slam::mapping::DistanceField> cached_field;
+  std::size_t last_field_frame=0;
   for(std::size_t i=1;i<p.raw_lidar.size();++i) {
+    if((i-1)%options.match_every!=0) {
+      // A skipped scan is neither a rejection nor a trusted insertion.
+      out.poses.push_back(out.poses.back());
+      ++out.skipped;
+      continue;
+    }
     slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_only_baseline",i,true);
-    auto snapshot=slam::mapping::MapSnapshot::capture(rolling);
-    const auto field=slam::mapping::DistanceField::build(snapshot,.7);
+    if(!cached_field||i-last_field_frame>=options.field_every) {
+      cached_snapshot=slam::mapping::MapSnapshot::capture(rolling);
+      cached_field=slam::mapping::DistanceField::build(
+          cached_snapshot,options.distance_truncation_m);
+      last_field_frame=i;
+      ++out.field_rebuilds;
+    }
     // No wheel, gyro or ground-truth seed; only previous accepted laser pose.
     const auto seed=slam::compose(out.poses.back(),kBaseFromLaser);
-    const auto candidate=match(field,p.raw_lidar[i],seed);
-    if(qualified(candidate,*snapshot,seed,.65)) {
+    const auto candidate=match(cached_field,
+      sample_matching_hits(p.raw_lidar[i],options.match_stride),seed,options);
+    if(qualified(candidate,*cached_snapshot,seed,.65)) {
       const auto base=slam::compose(candidate.map_from_laser,
                                    slam::inverse(kBaseFromLaser));
       out.poses.push_back(base);
       out.mapped[i]=true;
-      insert(rolling,base,p.raw_lidar[i]);
+      insert(rolling,base,p.raw_lidar[i],options.map_stride);
       ++out.accepted;
     } else {
       out.poses.push_back(out.poses.back());
