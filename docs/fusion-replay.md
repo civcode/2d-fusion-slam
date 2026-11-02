@@ -117,6 +117,20 @@ variant in the Map Explorer. Run the same options **without**
 `--lidar-loop-closure` into a separate folder for a controlled A/B.
 Existing paths and maps (`wheel_only`, `gyro_wheel`, `lidar_only`,
 `fused_scan_matched`) must remain unchanged by the graph-only option.
+After collecting the two runs with **identical non-loop flags**, check the
+outcome without letting simulator truth influence loop verification:
+
+~~~sh
+python tools/fusion_loop_compare.py \
+  --baseline apps/demo/fusion/office-001 \
+  --loops apps/demo/fusion/office-loops-001
+~~~
+
+The comparison checks the unchanged non-graph map fingerprints and
+trajectories, then reports accepted closures, graph trajectory RMSE,
+**final-position error** and map occupied IoU from post-hoc synthetic
+scoring. If you used different baseline flags, regenerate a matching
+no-loop run under a new prefix.
 The graph-optimized result is a fused-trajectory postprocessing output,
 **not** a correction to the independent LiDAR-only baseline.
 
