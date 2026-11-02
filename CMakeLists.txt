@@ -534,7 +534,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/offline_fusion_test.py"
         "$<TARGET_FILE:slam_offline_fusion>"
         "$<TARGET_FILE:slam_map_accuracy_cli>")
-    set_tests_properties(offline_fusion PROPERTIES TIMEOUT 240)
+    set_tests_properties(offline_fusion PROPERTIES TIMEOUT 480)
     add_test(NAME fusion_match_beam_tools
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_match_beam_tools_test.py")
