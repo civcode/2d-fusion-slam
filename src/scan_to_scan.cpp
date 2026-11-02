@@ -70,6 +70,24 @@ std::vector<Pair> pairs(const Points& previous,const Points& current,
     out.resize(std::max(kMinMatches,out.size()*4/5));
   return out;
 }
+bool selected_correspondence_rank(const std::vector<Pair>& matched) {
+  if(matched.size()<40)return false;
+  // A full scan can be well distributed even if only a short wall segment
+  // was matched. Check geometry among actual selected correspondences.
+  Eigen::Vector2d mean=Eigen::Vector2d::Zero();
+  for(const auto& p:matched)mean+=p.target;
+  mean/=double(matched.size());
+  Eigen::Matrix2d cov=Eigen::Matrix2d::Zero();
+  for(const auto& p:matched) {
+    const auto d=p.target-mean;
+    cov.noalias()+=d*d.transpose();
+  }
+  cov/=double(matched.size());
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eigen(cov);
+  return eigen.info()==Eigen::Success &&
+         eigen.eigenvalues()[0]>.05 &&
+         eigen.eigenvalues()[0]>.01*eigen.eigenvalues()[1];
+}
 Pose2 solve_pairs(const std::vector<Pair>& matched) {
   Eigen::Vector2d a=Eigen::Vector2d::Zero(),b=Eigen::Vector2d::Zero();
   for(const auto& p:matched) {a+=p.source;b+=p.target;}
@@ -91,6 +109,8 @@ ScanToScanResult score(const Points& previous,const Points& current,
   ScanToScanResult r;
   r.previous_from_current=estimated;
   r.iterations=iterations;
+  r.correspondence_rank=selected_correspondence_rank(
+      pairs(previous,current,estimated));
   r.translation_m=estimated.translation.norm();
   r.rotation_rad=std::abs(wrap_yaw(estimated.yaw_rad));
   if(r.translation_m>kMaxTranslationM||r.rotation_rad>kMaxRotationRad)
