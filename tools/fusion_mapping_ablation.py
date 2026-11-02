@@ -47,6 +47,9 @@ def load(run: Path):
             report["results"]["graph_optimized"]["map"]["map_fingerprint"]):
         raise ValueError("original graph map fingerprint differs from mapping-only baseline")
     for row in rows:
+        if row.get("evidence") not in (
+                "baseline", "stronger_hit", "gentler_free", "combined"):
+            raise ValueError("unknown occupancy evidence variant")
         if row["map"]["format"] != "FUSMAPACC1":
             raise ValueError("unverified map scoring format")
         if row["map"]["reference_scene"] != report["scene"]:
@@ -80,6 +83,7 @@ def normalized_row(row):
         "variant": row["id"],
         "window": row["window"],
         "deskew": row["deskew"],
+        "evidence": row["evidence"],
         "hit": row["hit_log_odds"],
         "free": row["free_log_odds"],
         "occupied_iou": metric(m["occupied_iou"]),
@@ -111,7 +115,7 @@ def summarize(run: Path, csv_output: Path | None = None):
         for row in subset:
             def fmt(key):
                 return "undefined" if row[key] is None else f"{row[key]:.4f}"
-            print(f"{(row['deskew'] + '/' + row['variant'].split('_')[-1]):50} "
+            print(f"{(row['deskew'] + '/' + row['evidence']):50} "
                   f"{fmt('occupied_iou'):>7} {fmt('precision'):>7} "
                   f"{fmt('recall'):>7} {fmt('wall_mean_m'):>10} "
                   f"{fmt('f1_10cm'):>9} {fmt('f1_25cm'):>9} "
