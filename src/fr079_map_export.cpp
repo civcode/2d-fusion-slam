@@ -1,3 +1,4 @@
+#include "slam/cli/parse.hpp"
 #include "slam/datasets/fr079_train_only.hpp"
 #include "slam/mapping/map_bundle.hpp"
 
@@ -75,7 +76,15 @@ void verify_and_export(const std::string& filename,const std::filesystem::path& 
 }
 }
 int main(int argc,char** argv){
- if(argc!=3){std::cerr<<"Usage: slam_fr079_map_export <fr079.log.gz> <output-prefix>\n";return 2;}
- try{verify_and_export(argv[1],argv[2]);}
+  slam::cli::Positionals parsed;
+  try {
+    parsed=slam::cli::parse_positionals(argc,argv,"slam_fr079_map_export",
+        "<fr079.log.gz> <output-prefix>",2,2);
+  }catch(const std::exception& e) {
+    std::cerr<<e.what()<<'\n';return 2;
+  }
+  if(parsed.help){std::cout<<parsed.usage;return 0;}
+  const auto& cli_args=parsed.values;
+  try{verify_and_export(cli_args[0],cli_args[1]);}
  catch(const std::exception& e){std::cerr<<"Map export failed: "<<e.what()<<'\n';return 1;}
 }
