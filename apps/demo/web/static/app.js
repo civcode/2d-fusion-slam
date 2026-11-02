@@ -132,8 +132,7 @@ function paintList() {
   for(const group of groups){
     const container=document.createElement("details");
     container.className="scene-group";
-    container.open=expandedRuns.has(group.run)||
-      group.variants.some(m=>m.id===selected);
+    container.open=expandedRuns.has(group.run);
     const summary=document.createElement("summary");
     summary.className="scene-summary";
     const name=document.createElement("span");
