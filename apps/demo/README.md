@@ -203,9 +203,11 @@ In **http://127.0.0.1:8765/fusion**, the replay-mode selector offers:
 
 An explicit deep link such as
 `/fusion?run=office-continuous-s01&view=lidar` selects that run and
-mode. Existing replay artifacts remain readable; legacy traces without
-`raw_points_laser` can only use the deskewed SLAM view. Regenerate
-the run with the current CLI to obtain raw LiDAR playback.
+mode. Existing replay artifacts remain readable: legacy traces without
+`raw_points_laser` show available deskewed hit samples in the LiDAR
+view, labeled as legacy and projected on the scan-matched estimate.
+Regenerate the run with the current CLI to obtain genuine raw,
+non-deskewed LiDAR playback.
 
 To inspect beam-phase experiments, select
 `benchmarks/fusion-beams-diverse-phases-001` in
