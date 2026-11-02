@@ -33,10 +33,11 @@ Pose2 as_pose(const Pose2Record& p) {
   return {{p.x,p.y},slam::wrap_yaw(p.yaw)};
 }
 std::vector<Eigen::Vector2d> points(const CarmenLaser& scan,
-                                    std::size_t stride,double max_range) {
+                                    std::size_t stride,double max_range,
+                                    std::size_t phase=0) {
   std::vector<Eigen::Vector2d> out;
   out.reserve((scan.ranges.size()+stride-1)/stride);
-  for(std::size_t i=0;i<scan.ranges.size();i+=stride) {
+  for(std::size_t i=phase;i<scan.ranges.size();i+=stride) {
     const auto& b=scan.ranges[i];
     if(b.status!=RangeStatus::hit||!std::isfinite(b.metres)||
        !std::isfinite(b.angle_rad)||b.metres<0.10||b.metres>max_range)
@@ -94,6 +95,7 @@ Fr079SlamResult run_fr079_offline_slam(
           std::isfinite(opt.map_margin_m)&&opt.map_margin_m>=opt.max_hit_range_m+1&&
           opt.map_margin_m<=80&&opt.map_beam_stride>=1&&opt.map_beam_stride<=64&&
           opt.match_beam_stride>=1&&opt.match_beam_stride<=64&&
+           opt.match_beam_phase<opt.match_beam_stride&&
           opt.match_every>=1&&opt.match_every<=200&&
           opt.rebuild_field_every>=1&&opt.rebuild_field_every<=200&&
           std::isfinite(opt.distance_truncation_m)&&opt.distance_truncation_m>=0.20&&
@@ -187,7 +189,8 @@ Fr079SlamResult run_fr079_offline_slam(
         settings.maximum_iterations=30;
         settings.maximum_step_translation_m=.12;
         settings.maximum_step_yaw_rad=.08;
-        const auto scan_match_points=points(scan,opt.match_beam_stride,opt.max_hit_range_m);
+        const auto scan_match_points=points(scan,opt.match_beam_stride,opt.max_hit_range_m,
+                                            opt.match_beam_phase);
         frame.match_input_beams=scan_match_points.size();
         const auto start_match=Clock::now();
         // The last cached field contains strictly earlier scans, with an
@@ -302,7 +305,8 @@ Fr079SlamResult run_fr079_offline_slam(
     if(opt.capture_probe && frame.accepted && cached_snapshot) {
       const auto capture_start=Clock::now();
       opt.capture_probe(i,frame.estimated,cached_snapshot,
-                        points(scan,opt.match_beam_stride,opt.max_hit_range_m));
+                        points(scan,opt.match_beam_stride,opt.max_hit_range_m,
+                                            opt.match_beam_phase));
       result.capture_benchmark_ms+=milliseconds(capture_start,Clock::now());
     }
     result.frames.push_back(std::move(frame));
