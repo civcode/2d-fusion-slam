@@ -45,6 +45,8 @@ struct FusionMatchOptions {
   // Read-only bounded diagnostic around the stalled LiDAR-only seed.
   bool lidar_only_support_probe{};
   bool lidar_only_bootstrap{};
+  // Alternate A/B path: LiDAR relative motion predicts pose before EDT.
+  bool lidar_only_predict_first{};
 };
 std::size_t posint(std::string_view value,std::size_t max) {
   if(value.empty()||value.front()=='0'||
@@ -390,6 +392,8 @@ struct LidarMatchAudit {
   double seed_overlap{}, candidate_translation_m{};
   bool seed_full_rank{}, candidate_evaluated{}, accepted{}, has_obstacles{};
   std::string reason,registration_method{"none"};
+  bool used_scan_prediction{},edt_prediction_disagreed{};
+  double predicted_edt_translation_delta_m{},predicted_edt_yaw_delta_rad{};
   std::size_t registration_forward_inliers{},registration_reverse_inliers{};
   double registration_forward_overlap{},registration_reverse_overlap{};
   double registration_error_m{},registration_translation_m{},registration_yaw_rad{};
@@ -407,6 +411,7 @@ struct LidarOnly {
   std::size_t matching_input_hits_total{};
   std::size_t bootstrap_attempted{},bootstrap_accepted{},bootstrap_rejected{};
   std::size_t edt_accepted{},edt_refined_accepted{};
+  std::size_t predicted_edt_accepted{},edt_prediction_disagreements{};
   std::map<std::string,std::size_t> rejections;
 };
 LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
@@ -443,12 +448,36 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
       last_field_frame=i;
       ++out.field_rebuilds;
     }
-    // No wheel, gyro or ground-truth seed; only previous accepted laser pose.
-    const auto seed=slam::compose(out.poses.back(),kBaseFromLaser);
+    // All prediction data comes from accepted raw LiDAR scans alone.
+    const Pose2 previous_laser=slam::compose(out.poses.back(),kBaseFromLaser);
     const auto matching_hits=sample_matching_hits(
         p.raw_lidar[i],options.match_stride);
     out.matching_input_hits_total+=matching_hits.size();
-    const auto candidate=match(cached_field,matching_hits,seed,options);
+    std::optional<slam::matching::ScanToScanResult> scan_prediction;
+    if(options.lidar_only_predict_first) {
+      const auto previous_hits=sample_matching_hits(
+          p.raw_lidar[last_accepted_scan],options.match_stride);
+      auto predicted=slam::matching::register_consecutive_scans(
+          previous_hits,matching_hits,
+          has_relative_scan?last_relative_scan:Pose2{},
+          !has_relative_scan||i-last_accepted_scan>1);
+      if(!predicted.accepted&&has_relative_scan) {
+        const auto recovery=slam::matching::register_consecutive_scans(
+            previous_hits,matching_hits,Pose2{},true);
+        if(recovery.accepted)predicted=recovery;
+      }
+      scan_prediction=predicted;
+    }
+    const Pose2 seed=scan_prediction&&scan_prediction->accepted?
+        slam::compose(previous_laser,scan_prediction->previous_from_current):
+        previous_laser;
+    // With a failed LiDAR-only prediction, do not optimize around a stale
+    // previous pose: its Ceres correction box is much smaller than the scan
+    // displacement. A failed prediction is a rejected/unmapped scan.
+    const auto candidate=(!options.lidar_only_predict_first||
+                          (scan_prediction&&scan_prediction->accepted))?
+        match(cached_field,matching_hits,seed,options):
+        slam::matching::MatchResult{};
     LidarMatchAudit evidence;
     evidence.frame=i;
     evidence.input_beams=matching_hits.size();
@@ -501,27 +530,56 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     }
     evidence.accepted=qualified(candidate,*cached_snapshot,seed,.65);
     evidence.reason=evidence.accepted?"accepted":rejection_reason(candidate.status);
+    if(scan_prediction) {
+      evidence.used_scan_prediction=true;
+      if(!scan_prediction->accepted) {
+        evidence.accepted=false;
+        evidence.reason="scan_to_scan_rejected";
+      } else if(evidence.accepted) {
+        // EDT must agree with LiDAR-derived motion in the previous laser
+        // frame; a geometrically valid *local* map correction is not
+        // automatically an admissible new relative movement.
+        const auto refined_relative=slam::compose(
+            slam::inverse(previous_laser),candidate.map_from_laser);
+        evidence.predicted_edt_translation_delta_m=(
+            refined_relative.translation-
+            scan_prediction->previous_from_current.translation).norm();
+        evidence.predicted_edt_yaw_delta_rad=std::abs(slam::wrap_yaw(
+            refined_relative.yaw_rad-
+            scan_prediction->previous_from_current.yaw_rad));
+        if(evidence.predicted_edt_translation_delta_m>.12||
+           evidence.predicted_edt_yaw_delta_rad>.075) {
+          evidence.accepted=false;
+          evidence.edt_prediction_disagreed=true;
+          evidence.reason="edt_scan_disagreement";
+          ++out.edt_prediction_disagreements;
+        }
+      }
+    }
     Pose2 chosen_laser=candidate.map_from_laser;
     if(evidence.accepted) {
-      evidence.registration_method="edt";
+      evidence.registration_method=scan_prediction?"edt_predicted":"edt";
       ++out.edt_accepted;
+      if(scan_prediction)++out.predicted_edt_accepted;
     } else if(options.lidar_only_bootstrap) {
       ++out.bootstrap_attempted;
-      // Only the last accepted LiDAR scan and pose are used. There is no
-      // wheel/gyro or simulator-relative-motion input to registration.
-      const auto previous_scan=sample_matching_hits(
-          p.raw_lidar[last_accepted_scan],options.match_stride);
-      auto registered=slam::matching::register_consecutive_scans(
-          previous_scan,matching_hits,
-          has_relative_scan?last_relative_scan:Pose2{},
-          !has_relative_scan||i-last_accepted_scan>1);
-      if(!registered.accepted&&has_relative_scan) {
-        // A failed constant-relative-motion guess can be retried using a
-        // bounded wider LiDAR-only initialization; still no map insertion
-        // or state mutation without passing registration gates.
-        const auto recovery=slam::matching::register_consecutive_scans(
-            previous_scan,matching_hits,Pose2{},true);
-        if(recovery.accepted)registered=recovery;
+      // For predict-first, reuse the same independently gated registration
+      // that seeded Ceres. Otherwise preserve the previous Ceres-first
+      // experimental baseline exactly for A/B comparison.
+      auto registered=scan_prediction.value_or(
+          slam::matching::ScanToScanResult{});
+      if(!scan_prediction) {
+        const auto previous_scan=sample_matching_hits(
+            p.raw_lidar[last_accepted_scan],options.match_stride);
+        registered=slam::matching::register_consecutive_scans(
+            previous_scan,matching_hits,
+            has_relative_scan?last_relative_scan:Pose2{},
+            !has_relative_scan||i-last_accepted_scan>1);
+        if(!registered.accepted&&has_relative_scan) {
+          const auto recovery=slam::matching::register_consecutive_scans(
+              previous_scan,matching_hits,Pose2{},true);
+          if(recovery.accepted)registered=recovery;
+        }
       }
       evidence.registration_forward_inliers=registered.forward_inliers;
       evidence.registration_reverse_inliers=registered.reverse_inliers;
@@ -566,6 +624,8 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
         evidence.reason="accepted";
         ++out.bootstrap_accepted;
       } else {
+        evidence.reason=scan_prediction?
+            "scan_to_scan_rejected":evidence.reason;
         ++out.bootstrap_rejected;
       }
     }
@@ -772,6 +832,8 @@ void export_lidar_match_audit(const std::filesystem::path& output,
      <<(options.lidar_only_support_probe?"true":"false")
      <<",\"lidar_only_bootstrap\":"
      <<(options.lidar_only_bootstrap?"true":"false")
+     <<",\"lidar_only_predict_first\":"
+     <<(options.lidar_only_predict_first?"true":"false")
      <<",\"match_stride\":"<<options.match_stride
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
      <<",\"attempts\":"<<(lidar.accepted+lidar.rejected)
@@ -794,6 +856,10 @@ void export_lidar_match_audit(const std::filesystem::path& output,
        <<",\"candidate_translation_m\":"<<a.candidate_translation_m
        <<",\"solver_invalid_residual_evaluations\":"<<a.solver_invalid_residuals
        <<",\"registration_method\":\""<<a.registration_method<<"\""
+       <<",\"used_scan_prediction\":"<<(a.used_scan_prediction?"true":"false")
+       <<",\"edt_prediction_disagreed\":"<<(a.edt_prediction_disagreed?"true":"false")
+       <<",\"predicted_edt_translation_delta_m\":"<<a.predicted_edt_translation_delta_m
+       <<",\"predicted_edt_yaw_delta_rad\":"<<a.predicted_edt_yaw_delta_rad
        <<",\"registration_forward_inliers\":"<<a.registration_forward_inliers
        <<",\"registration_reverse_inliers\":"<<a.registration_reverse_inliers
        <<",\"registration_forward_overlap\":"<<a.registration_forward_overlap
@@ -980,6 +1046,9 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"lidar_only_field_rebuilds\":"<<lidar.field_rebuilds<<","
      <<"\n\"lidar_only_support_probe\":"<<(options.lidar_only_support_probe?"true":"false")<<","
      <<"\n\"lidar_only_bootstrap\":"<<(options.lidar_only_bootstrap?"true":"false")<<","
+     <<"\n\"lidar_only_predict_first\":"<<(options.lidar_only_predict_first?"true":"false")<<","
+     <<"\n\"lidar_only_predicted_edt_accepted\":"<<lidar.predicted_edt_accepted<<","
+     <<"\n\"lidar_only_edt_prediction_disagreements\":"<<lidar.edt_prediction_disagreements<<","
      <<"\n\"lidar_only_bootstrap_attempted\":"<<lidar.bootstrap_attempted<<","
      <<"\n\"lidar_only_bootstrap_accepted\":"<<lidar.bootstrap_accepted<<","
      <<"\n\"lidar_only_bootstrap_rejected\":"<<lidar.bootstrap_rejected<<","
@@ -1046,6 +1115,7 @@ int main(int argc,char** argv) {
       ("continuous-cost","Use experimental finite-cost Ceres for both matchers")
       ("lidar-only-support-probe","Read-only local support search on first 3 LiDAR-only attempts")
       ("lidar-only-bootstrap","Opt-in LiDAR scan-pair registration and strict EDT handover")
+      ("lidar-only-predict-first","LiDAR-only scan motion seeds Ceres before map registration (requires bootstrap)")
       ("h,help","Show help");
   cli.parse_positional({"scene","output"});
   cli.positional_help("<apartment|warehouse> <new-output-directory>");
@@ -1072,6 +1142,11 @@ int main(int argc,char** argv) {
         args["lidar-only-support-probe"].as<bool>();
     options.lidar_only_bootstrap=args.count("lidar-only-bootstrap")&&
         args["lidar-only-bootstrap"].as<bool>();
+    options.lidar_only_predict_first=args.count("lidar-only-predict-first")&&
+        args["lidar-only-predict-first"].as<bool>();
+    if(options.lidar_only_predict_first&&!options.lidar_only_bootstrap)
+      throw std::invalid_argument(
+          "--lidar-only-predict-first requires --lidar-only-bootstrap");
     if(args.count("distance-truncation")) {
       const auto value=args["distance-truncation"].as<std::string>();
       std::size_t parsed=0;
