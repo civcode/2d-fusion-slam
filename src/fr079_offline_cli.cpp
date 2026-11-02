@@ -145,6 +145,10 @@ void save_matches(const std::filesystem::path& file,
        <<",\"supported_hits\":"<<f.supported_hits
        <<",\"overlap\":"<<f.overlap
        <<",\"robust_cost\":"<<f.robust_cost
+       <<",\"ceres_invalid_residual_evaluations\":"<<f.ceres_invalid_residual_evaluations
+       <<",\"ceres_unsuccessful_steps\":"<<f.ceres_unsuccessful_steps
+       <<",\"ceres_successful_steps\":"<<f.ceres_successful_steps
+       <<",\"ceres_termination\":\""<<f.ceres_termination<<"\""
        <<",\"map_inserted\":"<<(f.map_inserted?"true":"false")
        <<",\"field_ms\":"<<f.field_ms
        <<",\"match_ms\":"<<f.match_ms
@@ -230,6 +234,9 @@ void save_report(const std::filesystem::path& file,
      <<",\"pose_graph_optimized\":false"
      <<",\"realtime_deadlines_verified\":false"
      <<",\"matcher\":\""<<(result.used_ceres?"ceres":"geometry_reference_fallback")<<"\""
+     <<",\"distance_truncation_m\":"<<options.distance_truncation_m
+     <<",\"ceres_invalid_residual_evaluations\":"<<result.total_invalid_residual_evaluations
+     <<",\"ceres_unsuccessful_steps\":"<<result.total_unsuccessful_steps
      <<",\"match_every\":"<<options.match_every
      <<",\"field_rebuild_every\":"<<options.rebuild_field_every
      <<",\"map_beam_stride\":"<<options.map_beam_stride
@@ -258,6 +265,13 @@ void save_report(const std::filesystem::path& file,
      <<"},\"note\":\"Offline timestamp-order replay; not a live streaming deadline benchmark\"}\n";
   if(!out)throw std::runtime_error("FR079 report write failed");
 }
+double positive_distance(const std::string& s) {
+  std::size_t used=0;
+  const double v=std::stod(s,&used);
+  ensure(used==s.size() && std::isfinite(v) && v>=0.20 && v<=3.0,
+         "distance truncation must be finite and within [0.20,3.0] m");
+  return v;
+}
 std::size_t positive_integer(const std::string& s){
   if(s.empty()||s.size()>4)throw std::invalid_argument("invalid positive integer option");
   for(char c:s)if(c<'0'||c>'9')throw std::invalid_argument("invalid integer option");
@@ -280,6 +294,8 @@ int run(int argc,char** argv){
     else if(arg=="--field-every"&&i+1<argc)options.rebuild_field_every=positive_integer(argv[++i]);
     else if(arg=="--map-stride"&&i+1<argc)options.map_beam_stride=positive_integer(argv[++i]);
     else if(arg=="--match-stride"&&i+1<argc)options.match_beam_stride=positive_integer(argv[++i]);
+    else if(arg=="--distance-truncation"&&i+1<argc)
+      options.distance_truncation_m=positive_distance(argv[++i]);
     else throw std::invalid_argument("unrecognized or incomplete FR079 option");
   }
   const std::filesystem::path prefix(argv[2]);
