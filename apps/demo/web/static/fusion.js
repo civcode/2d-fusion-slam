@@ -344,12 +344,18 @@
     // This is critical when reviewing corrected obstacle positions: a
     // graph-optimized occupancy map must not be overlaid with an
     // uncorrected fused-scan point trail by default.
-    if(poses && poses.paths[method] &&
-       ["graph_optimized","fused_scan_matched","gyro_wheel"].includes(method) &&
-       !lidarView()) {
-      $projection.value=method;
-      updateProjectionNote();
-      draw();
+    if(poses && poses.paths[method]) {
+      if(["graph_optimized","fused_scan_matched","gyro_wheel"].includes(method)) {
+        $projection.value=method;
+        // Graph and fused maps are built from deskewed sensor-frame hits;
+        // raw LiDAR on these maps would project the wrong geometry.
+        if(lidarView())setView("slam");
+        else {updateProjectionNote();draw();}
+      } else if(method==="lidar_only") {
+        // The LiDAR-only map is built from raw non-deskewed hits.
+        // Old traces have no raw export, so the note must disclose that.
+        if(!lidarView())setView("lidar");
+      }
     }
     try {
       const base=urlBase()+"/maps/"+encodeURIComponent(method);
@@ -371,7 +377,7 @@
         (method==="wheel_only"?
           " Wheel-deskewed hits are not exported for this run; scan points use the selected deskewed projection.":
          method==="lidar_only" && !lidarView()?
-          " Switch to LiDAR replay to visualize raw LiDAR hits on their LiDAR-only estimated poses.":
+          " LiDAR-only maps use raw scans; choose LiDAR replay to see their pose projection.":
          ""));
       draw();
     }catch(error){
