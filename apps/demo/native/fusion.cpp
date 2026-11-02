@@ -142,6 +142,28 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
        t.at("scan_frame").str()=="laser_midpoint_deskewed_full_se2"&&
        t.at("frame_count").uint()==n,
        "fusion replay does not match source report");
+  // Older fusion bundles omitted these knobs, meaning match every query.
+  const std::size_t match_every=r.has("match_every")?
+      static_cast<std::size_t>(r.at("match_every").uint()):1;
+  need(match_every>=1&&match_every<=200,
+       "invalid fusion matching cadence");
+  if(t.has("match_every"))
+    need(t.at("match_every").uint()==match_every,
+         "fusion replay matching cadence mismatch");
+  for(const auto key:{"field_every","map_stride","match_stride"}) {
+    if(r.has(key)) {
+      const auto value=r.at(key).uint();
+      need(value>=1&&value<=200,"fusion matching option out of range");
+      need(t.has(key)&&t.at(key).uint()==value,
+           "fusion report/replay matching option mismatch");
+    }
+  }
+  if(r.has("distance_truncation_m"))
+    need(t.has("distance_truncation_m")&&
+         finite(r.at("distance_truncation_m"),3.0)>=0.2&&
+         finite(t.at("distance_truncation_m"),3.0)==
+           finite(r.at("distance_truncation_m"),3.0),
+         "fusion truncation mismatch");
   const auto& result=r.at("results");
   const auto& paths=p.at("paths");
   need(result.kind==Json::Kind::object&&paths.kind==Json::Kind::object&&
@@ -177,7 +199,8 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
   for(const auto& value:lever.array)(void)finite(value,5.0);
   (void)finite(t.at("base_from_laser_yaw_rad"),10.0);
   std::int64_t prev=-1;
-  std::size_t accepted=0,rejected=0,accepted_loops=0;
+  std::size_t accepted=0,rejected=0,skipped=0,accepted_loops=0;
+  std::size_t matching_input_hits=0;
   for(std::size_t i=0;i<n;++i) {
     const std::int64_t now=nanosecond(stamps.at(i));
     need(now>prev,"nonmonotonic fusion timeline");prev=now;
@@ -198,18 +221,23 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
     }
     const auto& m=frame.at("matching");
     const bool attempted=m.at("attempted").flag(),approved=m.at("accepted").flag();
-    need(attempted==(i%2==1)&&(!approved||attempted),
-         "frozen-map source-excluded query partition mismatched");
+    const bool eligible=i%2==1;
+    const bool expected_attempt=eligible&&(((i-1)/2)%match_every==0);
+    need(attempted==expected_attempt&&(!approved||attempted),
+         "frozen-map query matching cadence mismatched");
     const auto state=m.at("status").str();
     const auto reason=m.at("reason").str();
-    need((!attempted&&state=="training"&&
+    need((!eligible&&!attempted&&state=="training"&&
           reason=="not_evaluated_training_scan")||
+         (eligible&&!attempted&&state=="skipped"&&
+          reason=="match_cadence_skip")||
          (attempted&&approved&&state=="accepted"&&reason=="accepted")||
          (attempted&&!approved&&state=="rejected"&&
           (reason=="insufficient_support"||reason=="degenerate"||
            reason=="no_improvement"||reason=="invalid_input"||
            reason=="qualification_gate")),
          "matcher gate reason/status/acceptance mismatch");
+    if(eligible&&!attempted)++skipped;
     if(attempted){if(approved)++accepted;else ++rejected;}
     need(m.at("cumulative_accepted").uint()==accepted &&
          m.at("cumulative_rejected").uint()==rejected,
@@ -218,6 +246,10 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
       const auto overlap=finite(m.at("overlap"),1.);
       need(overlap>=0&&m.at("supported_hits").uint()<=m.at("input_hits").uint()&&
            m.at("input_hits").uint()<=4096,"matcher geometry outside limits");
+      matching_input_hits+=static_cast<std::size_t>(m.at("input_hits").uint());
+      if(m.has("solver_residual_blocks"))
+        need(m.at("solver_residual_blocks").uint()<=m.at("input_hits").uint(),
+             "Ceres objective exceeds matched beam cohort");
       const auto fingerprint=m.at("training_map_fingerprint").str();
       need(!fingerprint.empty()&&fingerprint.size()<=20&&
            (fingerprint.size()==1||fingerprint.front()!='0'),
@@ -251,6 +283,12 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
   need(accepted==r.at("heldout_accepted").uint() &&
        rejected==r.at("heldout_rejected").uint() &&
        accepted+rejected==r.at("heldout_attempted").uint() &&
+       (!r.has("heldout_skipped")||skipped==r.at("heldout_skipped").uint()) &&
+       (!r.has("heldout_matching_input_hits_total")||
+        matching_input_hits==r.at("heldout_matching_input_hits_total").uint()) &&
+       (!r.has("lidar_only_skipped")||
+        r.at("lidar_only_skipped").uint()+r.at("lidar_only_accepted").uint()+
+        r.at("lidar_only_rejected").uint()==n-1) &&
        accepted_loops==r.at("graph_accepted_loops").uint() &&
        accepted_loops<=r.at("graph_loop_candidates").uint(),
        "replay events disagree with fusion report");
