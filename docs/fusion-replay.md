@@ -14,10 +14,32 @@ cmake --build build --target slam_offline_fusion fusion_slam_demo
 # http://127.0.0.1:8765/fusion
 ~~~
 
-The output directory must not already exist. The Docker Compose demo also
-mounts apps/demo/fusion:/fusion:ro and apps/demo/maps:/maps:ro; generate runs
-on the host, then refresh the browser. The original logged-LiDAR viewer
-remains available at /replay.
+The output directory must not already exist. The Docker Compose demo mounts
+apps/demo/fusion:/fusion:ro and apps/demo/maps:/maps:ro by default. The
+original logged-LiDAR viewer remains available at /replay.
+
+### Seven scenes from an existing benchmark
+
+No rerun or file copy is necessary. From the project root:
+
+~~~sh
+FUSION_DEMO_RUNS_DIR="$PWD/benchmarks/fusion-beams-diverse-001" \
+  docker compose up --build demo
+~~~
+
+Open http://127.0.0.1:8765/ to explore each saved method's map, or use
+http://127.0.0.1:8765/fusion to browse and play its run.
+The scene list includes apartment, warehouse, office, loft, atrium,
+industrial and warehouse_asymmetric (the last uses the warehouse robot
+route but different obstacle geometry). Direct links to
+`/fusion?run=office-continuous-s01&view=lidar` (LiDAR) and
+`/fusion?run=office-continuous-s01&view=slam` (SLAM) are available
+inside each Map Explorer run group.
+
+`FUSION_DEMO_RUNS_DIR` may instead point to
+`benchmarks/fusion-beams-diverse-phases-001`. Use one completed sweep
+at a time; the native server intentionally bounds the number of
+discoverable child directories. Run artifacts remain read-only.
 
 ## FUSFUSREPLAY1
 
@@ -28,7 +50,9 @@ the named FUSMAP2D snapshots.
 The new file includes the declared synthetic scene, source and matcher,
 laser extrinsics, exact-decimal-string nanosecond timestamps and a bounded
 array of frame events. Each frame contains its index, hits/beam counts,
-sampled deskewed laser-frame endpoints, matcher attempted/accepted/status,
+sampled deskewed laser-frame endpoints and, in newer runs, optional
+`raw_points_laser` (pre-deskew LiDAR-frame return endpoints), matcher
+attempted/accepted/status,
 gate rejection reason, optional matcher geometry and frozen-map fingerprint,
 cumulative accept/reject counts, map insertion flags, and optional
 source-to-target GTSAM loop decisions for an independently simulated
@@ -63,6 +87,23 @@ endpoints. FUSMAP2D's checksum is corruption detection, not authentication.
 
 ## Honest visualization
 
+The same native Fusion page offers two distinct read-only views:
+**LiDAR replay** draws pre-deskew scan hits at the *estimated LiDAR-only*
+midpoint pose, while **SLAM replay** draws gyro/wheel-deskewed hits at
+the *estimated fused scan-matched* pose with selectable trajectory and
+map overlays. Raw hits are still sensor-frame measurements; their
+world positioning during playback is a visualization using estimated
+poses, not a sensor-provided global coordinate or independent truth.
+For older native traces lacking raw scan samples, the LiDAR view
+still works but explicitly displays available **deskewed** samples on
+the fused estimated pose. It never labels those samples as raw; to
+obtain raw replay regenerate the native artifacts.
+
+The new optional `raw_points_laser` is subject to the same per-frame
+size, finite-coordinate, original-hit-count and source-consistency checks
+as deskewed samples. The server admits only the seven known scene
+identifiers and rejects unsupported synthetic data provenance.
+
 Use the timeline, play/pause, speed, previous/next, pan/zoom and layer
 toggles to inspect actual run events and compare trajectories. The optional
 synthetic ground-truth path is for *post-run scoring only*.
@@ -88,10 +129,11 @@ The fusion_replay_http CTest executes the actual native offline fusion CLI
 and native HTTP server, checks metadata and frame parity, validates PNG/map
 fingerprints, and tests corrupt/symlinked inputs and denied HTTP writes.
 
-**Status:** source and tests were committed directly to main, preserving
-the user's intervening build/test fixes. A full native CMake/CTest/Docker
-execution is not verified in this ChatGPT container because GitHub cannot
-be cloned to its local filesystem. No GitHub Actions were run.
+**Validation note:** the seven-scene UI extension is committed to
+`experiment/fr079-ceres-ablation-beam-sweep` for local Docker/CMake
+testing. Browser scripts pass syntax checks and in-memory interaction
+smoke tests; the native HTTP/C++ tests have not yet been run in this
+environment. No GitHub Actions were run.
 
 
 ## Fusion maps in the regular Map Explorer
