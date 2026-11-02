@@ -41,6 +41,8 @@ struct FusionMatchOptions {
   std::size_t match_stride{1};   // every Nth valid deskewed/raw hit
   double distance_truncation_m{0.7};
   bool continuous_cost{};
+  // Read-only bounded diagnostic around the stalled LiDAR-only seed.
+  bool lidar_only_support_probe{};
 };
 std::size_t posint(std::string_view value,std::size_t max) {
   if(value.empty()||value.front()=='0'||
@@ -379,7 +381,21 @@ Matched match_heldout(const Simulation& sim,const Prepared& p,
   }
   return result;
 }
+struct LidarMatchAudit {
+  std::size_t frame{}, input_beams{}, seed_supported_hits{};
+  std::size_t candidate_supported_hits{}, residual_blocks{}, map_revision{};
+  std::size_t solver_invalid_residuals{};
+  double seed_overlap{}, candidate_translation_m{};
+  bool seed_full_rank{}, candidate_evaluated{}, accepted{}, has_obstacles{};
+  std::string reason;
+  // All probe measurements are read-only against the historical map.
+  std::size_t probe_poses{}, probe_supported_poses{}, probe_ranked_poses{};
+  std::size_t probe_best_supported_hits{};
+  double probe_best_overlap{};
+  double probe_best_dx_m{},probe_best_dy_m{},probe_best_dyaw_rad{};
+};
 struct LidarOnly {
+  std::vector<LidarMatchAudit> audit;
   std::vector<Pose2> poses;
   Mask mapped;
   std::size_t accepted{},rejected{},skipped{},field_rebuilds{};
@@ -391,6 +407,7 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
                      const FusionMatchOptions& options) {
   LidarOnly out;
   out.poses.reserve(p.raw_lidar.size());
+  out.audit.reserve(p.raw_lidar.size()-1);
   out.mapped.assign(p.raw_lidar.size(),false);
   slam::mapping::OccupancyGrid rolling(sim.grid);
   out.poses.push_back(first_anchor);out.mapped[0]=true;
@@ -422,7 +439,58 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
         p.raw_lidar[i],options.match_stride);
     out.matching_input_hits_total+=matching_hits.size();
     const auto candidate=match(cached_field,matching_hits,seed,options);
-    if(qualified(candidate,*cached_snapshot,seed,.65)) {
+    LidarMatchAudit evidence;
+    evidence.frame=i;
+    evidence.input_beams=matching_hits.size();
+    evidence.seed_supported_hits=candidate.seed_supported_hits;
+    evidence.candidate_supported_hits=candidate.candidate_supported_hits;
+    evidence.residual_blocks=candidate.solver_residual_blocks;
+    evidence.map_revision=cached_snapshot->revision();
+    evidence.solver_invalid_residuals=candidate.ceres_invalid_residual_evaluations;
+    evidence.seed_overlap=candidate.diagnostics.overlap;
+    evidence.seed_full_rank=candidate.diagnostics.full_rank;
+    evidence.candidate_evaluated=candidate.candidate_evaluated;
+    evidence.candidate_translation_m=candidate.candidate_translation_m;
+    evidence.has_obstacles=cached_field->has_obstacles();
+    // Probe only the first 3 matching attempts; no candidate is selected,
+    // applied, inserted, or used to seed any later frame. This deliberately
+    // does not consult simulated truth, wheel or gyro estimates.
+    if(options.lidar_only_support_probe&&i<=3) {
+      slam::matching::MatchSettings probe_settings;
+      probe_settings.min_supported_hits=18;
+      probe_settings.minimum_overlap=.45;
+      const auto centre=seed;
+      for(int ix=-6;ix<=6;++ix)
+        for(int iy=-6;iy<=6;++iy)
+          for(int ia=-4;ia<=4;++ia) {
+            const double dx=double(ix)*.10,dy=double(iy)*.10;
+            const double da=double(ia)*.06;
+            const Pose2 trial{{centre.translation.x()+dx,
+                               centre.translation.y()+dy},
+                              slam::wrap_yaw(centre.yaw_rad+da)};
+            const auto d=slam::matching::evaluate_geometry(
+                *cached_field,matching_hits,trial,probe_settings);
+            ++evidence.probe_poses;
+            if(d.supported_hits>=probe_settings.min_supported_hits&&
+               d.overlap>=probe_settings.minimum_overlap) {
+              ++evidence.probe_supported_poses;
+              if(d.full_rank)++evidence.probe_ranked_poses;
+            }
+            // Select the most-supported probe strictly as a diagnostic,
+            // with no claim this candidate is a true motion estimate.
+            if(d.supported_hits>evidence.probe_best_supported_hits) {
+              evidence.probe_best_supported_hits=d.supported_hits;
+              evidence.probe_best_overlap=d.overlap;
+              evidence.probe_best_dx_m=dx;
+              evidence.probe_best_dy_m=dy;
+              evidence.probe_best_dyaw_rad=da;
+            }
+          }
+    }
+    evidence.accepted=qualified(candidate,*cached_snapshot,seed,.65);
+    evidence.reason=evidence.accepted?"accepted":rejection_reason(candidate.status);
+    out.audit.push_back(evidence);
+    if(evidence.accepted) {
       const auto base=slam::compose(candidate.map_from_laser,
                                    slam::inverse(kBaseFromLaser));
       out.poses.push_back(base);
@@ -814,6 +882,7 @@ int main(int argc,char** argv) {
       ("match-stride","Match every Nth valid LiDAR hit (default 1)",cxxopts::value<std::string>())
       ("distance-truncation","EDT cutoff in metres (default 0.7)",cxxopts::value<std::string>())
       ("continuous-cost","Use experimental finite-cost Ceres for both matchers")
+      ("lidar-only-support-probe","Read-only local support search on first 3 LiDAR-only attempts")
       ("h,help","Show help");
   cli.parse_positional({"scene","output"});
   cli.positional_help("<apartment|warehouse> <new-output-directory>");
@@ -836,6 +905,8 @@ int main(int argc,char** argv) {
     options.match_stride=positive("match-stride",options.match_stride,64);
     options.continuous_cost=args.count("continuous-cost")&&
         args["continuous-cost"].as<bool>();
+    options.lidar_only_support_probe=args.count("lidar-only-support-probe")&&
+        args["lidar-only-support-probe"].as<bool>();
     if(args.count("distance-truncation")) {
       const auto value=args["distance-truncation"].as<std::string>();
       std::size_t parsed=0;
