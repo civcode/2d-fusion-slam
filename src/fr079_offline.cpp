@@ -126,6 +126,8 @@ Fr079SlamResult run_fr079_offline_slam(
   mapping::OccupancyGrid grid(bounds_from_odom(odometry,opt));
   Fr079SlamResult result;
   result.used_ceres=opt.use_ceres;
+  require(!opt.support_aware_ceres||opt.use_ceres,"support-aware matching requires Ceres");
+  result.used_support_aware_ceres=opt.use_ceres&&opt.support_aware_ceres;
   result.frames.reserve(scans.size());
   Pose2 last_estimate=odometry.front(),last_odom=odometry.front();
   std::shared_ptr<const mapping::MapSnapshot> cached_snapshot;
@@ -181,8 +183,11 @@ Fr079SlamResult run_fr079_offline_slam(
         matching::MatchResult candidate;
 #ifdef SLAM_HAS_CERES
         if(opt.use_ceres)
-          candidate=matching::match_ceres(cached_field,scan_match_points,
-                                          frame.predicted,settings);
+          candidate=opt.support_aware_ceres?
+            matching::match_ceres_support_aware(
+              cached_field,scan_match_points,frame.predicted,settings):
+            matching::match_ceres(cached_field,scan_match_points,
+                                  frame.predicted,settings);
         else
 #endif
           candidate=matching::match_reference(cached_field,scan_match_points,
@@ -191,6 +196,14 @@ Fr079SlamResult run_fr079_offline_slam(
         result.total_match_ms+=frame.match_ms;
         const auto& d=candidate.diagnostics;
         frame.ceres_invalid_residual_evaluations=candidate.ceres_invalid_residual_evaluations;
+        frame.support_aware_selected_hits=candidate.support_aware_selected_hits;
+        frame.support_aware_skipped_hits=candidate.support_aware_skipped_hits;
+        frame.support_aware_stages=candidate.support_aware_stages;
+        frame.support_aware_accepted_stages=candidate.support_aware_accepted_stages;
+        result.total_support_aware_selected_hits+=candidate.support_aware_selected_hits;
+        result.total_support_aware_skipped_hits+=candidate.support_aware_skipped_hits;
+        result.total_support_aware_stages+=candidate.support_aware_stages;
+        result.total_support_aware_accepted_stages+=candidate.support_aware_accepted_stages;
         frame.ceres_invalid_unknown_cells=candidate.ceres_invalid_unknown_cells;
         frame.ceres_invalid_truncated=candidate.ceres_invalid_truncated;
         frame.ceres_invalid_outside_grid=candidate.ceres_invalid_outside_grid;
