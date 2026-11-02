@@ -188,6 +188,40 @@ DistanceSupport DistanceField::support_map(const Eigen::Vector2d& p) const noexc
   return DistanceSupport::supported;
 }
 
+bool DistanceField::supports_disk_map(const Eigen::Vector2d& point,
+                                      double radius_m) const noexcept {
+  if(!has_obstacles_||!point.allFinite()||!std::isfinite(radius_m)||
+     radius_m<0.0) return false;
+  const auto& c=source_->config();
+  const auto local=transform(grid_from_map_,point);
+  const double r=c.resolution_m;
+  const double max_x=(static_cast<double>(c.width)-0.5)*r;
+  const double max_y=(static_cast<double>(c.height)-0.5)*r;
+  // Every interpolated sample centre must remain in [0.5r,(N-0.5)r).
+  if(local.x()-radius_m<0.5*r||local.y()-radius_m<0.5*r||
+     local.x()+radius_m>=max_x||local.y()+radius_m>=max_y)
+    return false;
+  // An interpolation stencil can reach at most sqrt(2)*r from its
+  // sample point. Every cell centre in this enclosing square must be
+  // known and have an informative distance (< truncation).
+  const double extent=radius_m+1.4142135623730951*r;
+  const auto first_x=static_cast<std::size_t>(std::max(
+      0.0,std::floor((local.x()-extent)/r-0.5)));
+  const auto first_y=static_cast<std::size_t>(std::max(
+      0.0,std::floor((local.y()-extent)/r-0.5)));
+  const auto last_x=static_cast<std::size_t>(std::min(
+      static_cast<double>(c.width-1),std::ceil((local.x()+extent)/r-0.5)));
+  const auto last_y=static_cast<std::size_t>(std::min(
+      static_cast<double>(c.height-1),std::ceil((local.y()+extent)/r-0.5)));
+  for(std::size_t y=first_y;y<=last_y;++y)
+    for(std::size_t x=first_x;x<=last_x;++x) {
+      const auto k=y*c.width+x;
+      if(!source_->cells()[k].observed||values_[k]>=truncation_metres_)
+        return false;
+    }
+  return true;
+}
+
 std::optional<DistanceSample> DistanceField::sample_map(const Eigen::Vector2d& p) const noexcept {
   if (!has_obstacles_ || !p.allFinite()) return std::nullopt;
   const auto& c = source_->config();
