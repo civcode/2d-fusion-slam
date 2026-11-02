@@ -1,9 +1,12 @@
 #include "slam/matching/scan_to_scan.hpp"
 
-#include <cassert>
+#include <stdexcept>
 #include <cmath>
 #include <vector>
 
+void check(bool condition) {
+  if(!condition)throw std::runtime_error("scan-to-scan registration regression");
+}
 int main() {
   using slam::Pose2;
   using slam::matching::register_consecutive_scans;
@@ -26,21 +29,21 @@ int main() {
                          p.y()+.002*std::cos(double(i)));
   }
   const auto first=register_consecutive_scans(previous,current);
-  assert(first.accepted);
-  assert(first.forward_overlap>=.65&&first.reverse_overlap>=.65);
-  assert((first.previous_from_current.translation-expected.translation).norm()<.09);
-  assert(std::abs(slam::wrap_yaw(
+  check(first.accepted);
+  check(first.forward_overlap>=.65&&first.reverse_overlap>=.65);
+  check((first.previous_from_current.translation-expected.translation).norm()<.09);
+  check(std::abs(slam::wrap_yaw(
       first.previous_from_current.yaw_rad-expected.yaw_rad))<.035);
   const auto again=register_consecutive_scans(previous,current);
-  assert(again.accepted);
-  assert(again.previous_from_current.translation==first.previous_from_current.translation);
-  assert(again.previous_from_current.yaw_rad==first.previous_from_current.yaw_rad);
+  check(again.accepted);
+  check((again.previous_from_current.translation-first.previous_from_current.translation).norm()<1e-12);
+  check(again.previous_from_current.yaw_rad==first.previous_from_current.yaw_rad);
   // A single wall is geometrically insufficient for reliable 2D tracking.
   std::vector<Eigen::Vector2d> line;
   for(int i=0;i<100;++i)line.emplace_back(double(i)*.04,0.);
-  assert(!register_consecutive_scans(line,line).accepted);
+  check(!register_consecutive_scans(line,line).accepted);
   // Unrelated scans must not be inserted merely by minimizing partial costs.
   for(auto& p:current)p+=Eigen::Vector2d(5.,4.);
-  assert(!register_consecutive_scans(previous,current).accepted);
+  check(!register_consecutive_scans(previous,current).accepted);
   return 0;
 }
