@@ -101,6 +101,18 @@ int main() {
   require(mixed.metres>=0&&mixed.metres<=partial->truncation_metres() &&
           mixed.gradient_map.allFinite(),
           "unknown-adjacent wall is finitely interpolated");
+  const Eigen::Vector2d seam{1.87,2.08};
+  const double seam_step=1e-5;
+  const auto seam_value=partial->sample_matching_cost(seam);
+  const double seam_gx=(partial->sample_matching_cost({seam.x()+seam_step,seam.y()}).metres-
+                        partial->sample_matching_cost({seam.x()-seam_step,seam.y()}).metres)/
+                        (2*seam_step);
+  const double seam_gy=(partial->sample_matching_cost({seam.x(),seam.y()+seam_step}).metres-
+                        partial->sample_matching_cost({seam.x(),seam.y()-seam_step}).metres)/
+                        (2*seam_step);
+  require(close(seam_gx,seam_value.gradient_map.x(),1e-6) &&
+          close(seam_gy,seam_value.gradient_map.y(),1e-6),
+          "finite unknown/observed interpolation has correct analytic gradient");
 
   // Test rotated map gradient in the world frame and capped support.
   config.map_from_grid = {{10,-5}, std::numbers::pi/2};
