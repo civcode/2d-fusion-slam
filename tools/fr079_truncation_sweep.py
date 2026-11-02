@@ -128,7 +128,11 @@ def main():
     columns = [
         "truncation_m", "matcher", "map_beam_stride", "source_sha256", "map_fingerprint",
         "frames", "attempts", "accepted", "rejected",
-        "ceres_invalid_residual_evaluations", "ceres_unsuccessful_steps",
+        "ceres_invalid_residual_evaluations",
+        "ceres_continuous_unknown_evaluations",
+        "ceres_continuous_truncated_evaluations",
+        "ceres_continuous_outside_evaluations",
+        "ceres_unsuccessful_steps",
         "offline_fps", "frame_p95_ms", "match_p95_ms",
         "wall_f1_15cm", "symmetric_mean_wall_m", "generated_wall_p95_m",
         "occupied_iou", "reference_agreement_is_not_ground_truth",
@@ -192,6 +196,12 @@ def main():
             "rejected": report["rejected"],
             "ceres_invalid_residual_evaluations":
                 report["ceres_invalid_residual_evaluations"],
+            "ceres_continuous_unknown_evaluations":
+                report["ceres_continuous_unknown_evaluations"],
+            "ceres_continuous_truncated_evaluations":
+                report["ceres_continuous_truncated_evaluations"],
+            "ceres_continuous_outside_evaluations":
+                report["ceres_continuous_outside_evaluations"],
             "ceres_unsuccessful_steps": report["ceres_unsuccessful_steps"],
             "offline_fps": report["profiling"]["estimated_offline_fps"],
             "frame_p95_ms": report["profiling"]["frame_latency"]["p95_ms"],
