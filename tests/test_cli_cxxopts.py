@@ -34,6 +34,12 @@ def main() -> None:
     assert invalid.returncode != 0, (
         f"{binary.name} accepted an unrecognised command line option"
     )
+    if binary.name == "fusion_slam_demo":
+        # An explicitly false boolean must never authorize public binding.
+        denied = invoke(binary, "--data-dir", "/tmp/irrelevant-for-network-gate",
+                        "--host", "0.0.0.0", "--allow-network=false")
+        assert denied.returncode != 0
+        assert "explicit --allow-network" in denied.stderr, denied.stderr
     print(f"{binary.name}: cxxopts --help and unsupported-option checks passed")
 
 
