@@ -223,6 +223,9 @@ async function selectMap(id) {
   const version = ++requestVersion;
   selected = id;
   const identity=fusionIdentity(maps.find(m=>m.id===id)||{});
+  // Keep only the active scene expanded so large run directories remain
+  // easy to scan. Remember each run's last choice if the user returns.
+  expandedRuns.clear();
   if(identity){
     lastRunSelection.set(identity.run,id);
     expandedRuns.add(identity.run);
