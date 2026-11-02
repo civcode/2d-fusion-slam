@@ -2,6 +2,7 @@
 
 #include <ceres/ceres.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -135,4 +136,156 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
   result.status = MatchStatus::accepted;
   return result;
 }
+
+// Opt-in support-aware local refinement. The old match_ceres remains the
+// comparison baseline. For each stage, freeze a subset of observed LiDAR
+// endpoints whose EDT bilinear stencils are guaranteed valid throughout
+// *every* pose in the stage's Ceres parameter box. No residual disappears,
+// and unknown cells never supply an artificial zero-distance measurement.
+// Re-select after each validated stage to avoid permanently discarding beams.
+MatchResult match_ceres_support_aware(
+    std::shared_ptr<const mapping::DistanceField> field,
+    const std::vector<Eigen::Vector2d>& points,
+    Pose2 seed, const MatchSettings& settings) {
+  MatchResult result;
+  result.map_from_laser=seed;
+  if(!field||points.empty()||!seed.translation.allFinite()||
+     !std::isfinite(seed.yaw_rad))return result;
+  const auto initial=evaluate_geometry(*field,points,seed,settings);
+  result.diagnostics=initial;
+  if(initial.supported_hits<settings.min_supported_hits||
+     initial.overlap<settings.minimum_overlap) {
+    result.status=MatchStatus::insufficient_support;
+    return result;
+  }
+  if(!initial.full_rank) {
+    result.status=MatchStatus::degenerate;
+    return result;
+  }
+
+  Pose2 current=seed;
+  auto current_all=initial;
+  bool improved=false;
+  constexpr unsigned kMaxStages=12;
+  for(unsigned stage=0;stage<kMaxStages;++stage) {
+    const double remaining_x=settings.maximum_step_translation_m-
+        std::abs(current.translation.x()-seed.translation.x());
+    const double remaining_y=settings.maximum_step_translation_m-
+        std::abs(current.translation.y()-seed.translation.y());
+    const double remaining_yaw=settings.maximum_step_yaw_rad-
+        std::abs(wrap_yaw(current.yaw_rad-seed.yaw_rad));
+    if(remaining_x<0.002||remaining_y<0.002||remaining_yaw<0.0004)
+      break;
+
+    // Prefer the largest useful stage; adaptively shrink if it lacks a
+    // sufficiently informative set of *guaranteed supported* endpoints.
+    std::vector<Eigen::Vector2d> selected;
+    double xy=0.,yaw=0.;
+    constexpr double kNominalXY=0.03;
+    constexpr double kNominalYaw=0.006;
+    const std::size_t minimum_safe=std::max(
+        settings.min_supported_hits,
+        static_cast<std::size_t>(std::ceil(points.size()*0.20)));
+    for(double fraction: {1.0,0.5,0.25,0.125}) {
+      const double bx=std::min(kNominalXY*fraction,
+                               std::min(remaining_x,remaining_y));
+      const double byaw=std::min(kNominalYaw*fraction,remaining_yaw);
+      if(bx<0.001||byaw<0.0001)continue;
+      std::vector<Eigen::Vector2d> candidate;
+      candidate.reserve(points.size());
+      const double c=std::cos(current.yaw_rad);
+      const double sn=std::sin(current.yaw_rad);
+      for(const auto& p:points) {
+        if(!p.allFinite())continue;
+        const Eigen::Vector2d endpoint{
+          current.translation.x()+c*p.x()-sn*p.y(),
+          current.translation.y()+sn*p.x()+c*p.y()};
+        // Every pose in the bounded Ceres box moves this endpoint at
+        // most sqrt(2)*bx + 2*range*sin(byaw/2). Conservative, metric,
+        // and valid for any beam direction.
+        const double max_motion=std::sqrt(2.0)*bx+
+            2.0*p.norm()*std::sin(byaw*0.5)+1e-9;
+        if(field->supports_disk_map(endpoint,max_motion))
+          candidate.push_back(p);
+      }
+      if(candidate.size()<minimum_safe)continue;
+      const auto geometry=evaluate_geometry(*field,candidate,current,settings);
+      if(!geometry.full_rank||geometry.supported_hits!=candidate.size())
+        continue;
+      selected=std::move(candidate);
+      xy=bx;yaw=byaw;
+      break;
+    }
+    if(selected.empty())break;
+
+    result.support_aware_selected_hits+=selected.size();
+    result.support_aware_skipped_hits+=points.size()-selected.size();
+    ++result.support_aware_stages;
+    double pose[3]{current.translation.x(),current.translation.y(),
+                   current.yaw_rad};
+    std::atomic<std::size_t> invalid{0};
+    std::array<std::atomic<std::size_t>,4> reasons{};
+    ceres::Problem problem;
+    for(const auto& point:selected)
+      problem.AddResidualBlock(
+          new EdfHitCost(*field,point,settings.sigma_metres,invalid,reasons),
+          new ceres::HuberLoss(settings.huber_delta),pose);
+    for(int axis=0;axis<2;++axis) {
+      problem.SetParameterLowerBound(pose,axis,pose[axis]-xy);
+      problem.SetParameterUpperBound(pose,axis,pose[axis]+xy);
+    }
+    problem.SetParameterLowerBound(pose,2,pose[2]-yaw);
+    problem.SetParameterUpperBound(pose,2,pose[2]+yaw);
+    ceres::Solver::Options options;
+    options.max_num_iterations=std::min(10u,settings.maximum_iterations);
+    options.linear_solver_type=ceres::DENSE_QR;
+    options.num_threads=1;
+    options.minimizer_progress_to_stdout=false;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options,&problem,&summary);
+
+    result.iterations+=static_cast<unsigned>(summary.iterations.size());
+    result.ceres_invalid_residual_evaluations+=invalid.load(std::memory_order_relaxed);
+    result.ceres_invalid_unknown_cells+=reasons[0].load(std::memory_order_relaxed);
+    result.ceres_invalid_truncated+=reasons[1].load(std::memory_order_relaxed);
+    result.ceres_invalid_outside_grid+=reasons[2].load(std::memory_order_relaxed);
+    result.ceres_invalid_other+=reasons[3].load(std::memory_order_relaxed);
+    result.ceres_unsuccessful_steps+=static_cast<std::size_t>(summary.num_unsuccessful_steps);
+    result.ceres_successful_steps+=static_cast<std::size_t>(summary.num_successful_steps);
+    switch(summary.termination_type) {
+      case ceres::CONVERGENCE:result.ceres_termination="convergence";break;
+      case ceres::NO_CONVERGENCE:result.ceres_termination="no_convergence";break;
+      case ceres::FAILURE:result.ceres_termination="failure";break;
+      case ceres::USER_SUCCESS:result.ceres_termination="user_success";break;
+      case ceres::USER_FAILURE:result.ceres_termination="user_failure";break;
+      default:result.ceres_termination="unknown";break;
+    }
+    if(summary.termination_type==ceres::FAILURE||
+       summary.termination_type==ceres::USER_FAILURE)break;
+    const Pose2 trial{{pose[0],pose[1]},wrap_yaw(pose[2])};
+    const auto candidate_all=evaluate_geometry(*field,points,trial,settings);
+    // The subset Ceres objective is not enough to accept a pose. Re-check
+    // ALL original beams against exactly the pinned prior map. A loss of
+    // support, rank, overlap or global robust-cost improvement is rejected.
+    if(candidate_all.supported_hits<current_all.supported_hits||
+       candidate_all.overlap<settings.minimum_overlap||
+       !candidate_all.full_rank||
+       candidate_all.robust_cost>=current_all.robust_cost-1e-10)
+      break;
+    const double transl=(trial.translation-current.translation).norm();
+    const double rot=std::abs(wrap_yaw(trial.yaw_rad-current.yaw_rad));
+    current=trial;
+    current_all=candidate_all;
+    improved=true;
+    ++result.support_aware_accepted_stages;
+    if(transl<0.0005&&rot<0.0001)break;
+  }
+  if(improved){
+    result.map_from_laser=current;
+    result.diagnostics=current_all;
+    result.status=MatchStatus::accepted;
+  }else result.status=MatchStatus::no_improvement;
+  return result;
+}
+
 } // namespace slam::matching
