@@ -2,6 +2,7 @@
 
 #include <ceres/ceres.h>
 
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -16,9 +17,10 @@ namespace {
 class EdfHitCost final : public ceres::SizedCostFunction<1,3> {
  public:
   EdfHitCost(const mapping::DistanceField& field, Eigen::Vector2d point, double sigma,
-             std::atomic<std::size_t>& invalid_evaluations)
+             std::atomic<std::size_t>& invalid_evaluations,
+             std::array<std::atomic<std::size_t>,4>& reasons)
       : field_(field), point_(std::move(point)), sigma_(sigma),
-        invalid_evaluations_(invalid_evaluations) {}
+        invalid_evaluations_(invalid_evaluations), reasons_(reasons) {}
   bool Evaluate(double const* const* params, double* residuals, double** jacobians) const override {
     const double* a = params[0];
     const double cosine = std::cos(a[2]);
@@ -26,7 +28,16 @@ class EdfHitCost final : public ceres::SizedCostFunction<1,3> {
     const Eigen::Vector2d world{a[0] + cosine*point_.x() - sine*point_.y(),
                                 a[1] + sine*point_.x() + cosine*point_.y()};
     const auto value = field_.sample_map(world);
-    if (!value) { invalid_evaluations_.fetch_add(1, std::memory_order_relaxed); return false; }
+    if (!value) {
+      invalid_evaluations_.fetch_add(1,std::memory_order_relaxed);
+      const auto reason=field_.support_map(world);
+      const std::size_t index=
+          reason==mapping::DistanceSupport::unknown_cells?0:
+          reason==mapping::DistanceSupport::truncated?1:
+          reason==mapping::DistanceSupport::outside_grid?2:3;
+      reasons_[index].fetch_add(1,std::memory_order_relaxed);
+      return false;
+    }
     residuals[0] = value->metres / sigma_;
     if (jacobians && jacobians[0]) {
       double* jac = jacobians[0];
@@ -42,6 +53,7 @@ class EdfHitCost final : public ceres::SizedCostFunction<1,3> {
   Eigen::Vector2d point_;
   double sigma_;
   std::atomic<std::size_t>& invalid_evaluations_;
+  std::array<std::atomic<std::size_t>,4>& reasons_;
 };
 } // namespace
 
@@ -62,13 +74,14 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
   if (!initial.full_rank) { result.status = MatchStatus::degenerate; return result; }
   double pose[3]{seed.translation.x(), seed.translation.y(), seed.yaw_rad};
   std::atomic<std::size_t> invalid_evaluations{0};
+  std::array<std::atomic<std::size_t>,4> unsupported_reasons{};
   ceres::Problem problem;
   const double c = std::cos(seed.yaw_rad), s = std::sin(seed.yaw_rad);
   for (const auto& p : points) {
     if (!p.allFinite()) continue;
     const Eigen::Vector2d at_seed{pose[0]+c*p.x()-s*p.y(),pose[1]+s*p.x()+c*p.y()};
     if (!field->sample_map(at_seed)) continue; // omitted, not zero weighted
-    problem.AddResidualBlock(new EdfHitCost(*field,p,settings.sigma_metres,invalid_evaluations),
+    problem.AddResidualBlock(new EdfHitCost(*field,p,settings.sigma_metres,invalid_evaluations,unsupported_reasons),
                              new ceres::HuberLoss(settings.huber_delta),pose);
   }
   for(int i=0;i<2;++i) {
@@ -86,6 +99,10 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
   ceres::Solve(options,&problem,&summary);
   result.iterations = static_cast<unsigned>(summary.iterations.size());
   result.ceres_invalid_residual_evaluations=invalid_evaluations.load(std::memory_order_relaxed);
+  result.ceres_invalid_unknown_cells=unsupported_reasons[0].load(std::memory_order_relaxed);
+  result.ceres_invalid_truncated=unsupported_reasons[1].load(std::memory_order_relaxed);
+  result.ceres_invalid_outside_grid=unsupported_reasons[2].load(std::memory_order_relaxed);
+  result.ceres_invalid_other=unsupported_reasons[3].load(std::memory_order_relaxed);
   result.ceres_unsuccessful_steps=static_cast<std::size_t>(summary.num_unsuccessful_steps);
   result.ceres_successful_steps=static_cast<std::size_t>(summary.num_successful_steps);
   switch(summary.termination_type) {
