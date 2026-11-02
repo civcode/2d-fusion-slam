@@ -20,7 +20,8 @@ def main():
             scenes=["apartment","warehouse"], matchers=["legacy","continuous"],
             match_strides=[1,2,4,8], map_stride=1,
             match_every=1, field_every=1, distance_truncation=.7,
-            lidar_only_bootstrap=False, lidar_only_predict_first=False)
+            lidar_only_bootstrap=False, lidar_only_predict_first=False,
+            match_offsets=[0,1,2,3])
         validate(options, parser())
         for scene in options.scenes:
             for mode in options.matchers:
@@ -28,6 +29,9 @@ def main():
                 assert cmd[:4]==["docker","compose","run","--rm"]
                 assert cmd[cmd.index("--map-stride")+1]=="1"
                 assert cmd[cmd.index("--match-stride")+1]=="4"
+                assert cmd[cmd.index("--match-offset")+1]=="0"
+                shifted=command(options,scene,mode,4,scene+"-"+mode,2)
+                assert shifted[shifted.index("--match-offset")+1]=="2"
                 assert cmd[cmd.index("--field-every")+1]=="1"
                 assert cmd[cmd.index("--match-every")+1]=="1"
                 assert cmd[-1]=="--continuous-cost" if mode=="continuous" else (
@@ -43,6 +47,19 @@ def main():
                 options.lidar_only_predict_first=False
                 options.lidar_only_bootstrap=False
                 assert scene in cmd
+        # Duplicate effective phases must be skipped by the sweep:
+        # stride=1 has one, stride=2 has two, stride=4 has four.
+        from fusion_match_beam_sweep import SCENES
+        assert {"office","loft","atrium","industrial",
+                "warehouse_asymmetric"} <= set(SCENES)
+        options.match_offsets=[0,1,1]
+        try:
+            validate(options,parser())
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("duplicate match phase accepted")
+        options.match_offsets=[0,1,2,3]
         options.lidar_only_predict_first=True
         try:
             validate(options,parser())
