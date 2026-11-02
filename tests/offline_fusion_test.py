@@ -233,6 +233,7 @@ class OfflineFusionExperiment(unittest.TestCase):
                 self.assertEqual(report["field_every"], 7)
                 self.assertEqual(report["map_stride"], 2)
                 self.assertEqual(report["match_stride"], 2)
+                self.assertEqual(report["match_offset"], 0)
                 self.assertEqual(report["distance_truncation_m"], 0.5)
                 self.assertEqual(trace["match_every"], 3)
                 self.assertEqual(trace["field_every"], 7)
@@ -449,6 +450,8 @@ class OfflineFusionExperiment(unittest.TestCase):
         bad = (("--lidar-only-predict-first",), ("--match-every", "0"), ("--match-every", "201"),
                ("--match-stride", "0"), ("--match-stride", "65"),
                ("--map-stride", "-1"), ("--field-every", "0"),
+               ("--match-offset", "-1"), ("--match-offset", "64"),
+               ("--match-offset", "00"),
                ("--distance-truncation", "nan"),
                ("--distance-truncation", "3.1"))
         with tempfile.TemporaryDirectory() as root:
