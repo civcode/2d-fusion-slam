@@ -191,6 +191,14 @@ Fr079SlamResult run_fr079_offline_slam(
         result.total_match_ms+=frame.match_ms;
         const auto& d=candidate.diagnostics;
         frame.ceres_invalid_residual_evaluations=candidate.ceres_invalid_residual_evaluations;
+        frame.ceres_invalid_unknown_cells=candidate.ceres_invalid_unknown_cells;
+        frame.ceres_invalid_truncated=candidate.ceres_invalid_truncated;
+        frame.ceres_invalid_outside_grid=candidate.ceres_invalid_outside_grid;
+        frame.ceres_invalid_other=candidate.ceres_invalid_other;
+        result.total_invalid_unknown_cells+=candidate.ceres_invalid_unknown_cells;
+        result.total_invalid_truncated+=candidate.ceres_invalid_truncated;
+        result.total_invalid_outside_grid+=candidate.ceres_invalid_outside_grid;
+        result.total_invalid_other+=candidate.ceres_invalid_other;
         frame.ceres_unsuccessful_steps=candidate.ceres_unsuccessful_steps;
         frame.ceres_successful_steps=candidate.ceres_successful_steps;
         frame.ceres_termination=candidate.ceres_termination;
