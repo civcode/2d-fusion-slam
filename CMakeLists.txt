@@ -731,5 +731,13 @@ foreach(_slam_cli IN ITEMS
   slam_offline_fusion)
   if(TARGET ${_slam_cli})
     target_link_libraries(${_slam_cli} PRIVATE cxxopts::cxxopts)
+    if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+      add_test(NAME "cli_cxxopts_${_slam_cli}"
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_cxxopts.py"
+          "$<TARGET_FILE:${_slam_cli}>")
+      set_tests_properties("cli_cxxopts_${_slam_cli}"
+        PROPERTIES TIMEOUT 30)
+    endif()
   endif()
 endforeach()
