@@ -31,7 +31,7 @@ int main(int argc,char** argv){
   cxxopts::ParseResult args;
   try { args=cli.parse(argc,argv); }
   catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
-  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(args.count("help")&&args["help"].as<bool>()){std::cout<<cli.help();return 0;}
   if(!args.count("input")){std::cerr<<cli.help();return 2;}
 
   try {
@@ -40,7 +40,7 @@ int main(int argc,char** argv){
   slam::datasets::CarmenReader reader;std::string line;
   while(std::getline(in,line))if(auto scan=reader.parse_laser(line))scans.push_back(std::move(*scan));
   slam::datasets::TrainOnlyOptions options;
-  options.use_ceres=!args.count("reference");
+  options.use_ceres=!(args.count("reference")&&args["reference"].as<bool>());
   const auto map=slam::datasets::build_fr079_training_map(scans,options);
   const auto r=slam::datasets::evaluate_fr079_holdout(scans,map,options);
   std::cout<<"{\"type\":\"fr079_train_only_proxy\",\"dataset_scans\":"<<r.input_scans
