@@ -27,7 +27,8 @@ function dataset(withRaw=true) {
       wheel_only:[[2,2,0],[2.2,2,0]],
       lidar_only:[[2,2,0],[2.3,2,0]],
       gyro_wheel:[[2,2,0],[2.4,2,0]],
-      fused_scan_matched:[[2,2,0],[2.5,2,0]]
+      fused_scan_matched:[[2,2,0],[2.5,2,0]],
+      graph_optimized:[[2,2,0],[2.7,2,0]]
     },
     synthetic_truth_for_scoring:[[2,2,0],[2.3,2,0]],
     timestamps_ns:["1000000000","1300000000"]
@@ -56,9 +57,9 @@ function dom() {
     if(!nodes.has(id)){
       const obj={id,hidden:false,disabled:false,textContent:"",value:"",
         checked:id==="fusion-hits"||id==="fusion-history",
-        width:0,height:0,style:{},handlers:{},children:[],
+        width:0,height:0,style:{},handlers:{},children:[],options:[],
         append(...v){this.children.push(...v);},
-        add(o){this.children.push(o);},
+        add(o){this.children.push(o);this.options.push(o);},
         replaceChildren(...v){this.children=v;},
         addEventListener(type,cb){this.handlers[type]=cb;},
         getBoundingClientRect(){return {width:900,height:500,left:0,top:0};},
@@ -82,6 +83,12 @@ function dom() {
     addEventListener(type,cb){this.handlers[type]=cb;}
   }));
   element("fusion-view").value="slam";
+  element("fusion-projection").value="fused_scan_matched";
+  element("fusion-projection").options=[
+    {value:"fused_scan_matched",disabled:false},
+    {value:"graph_optimized",disabled:false},
+    {value:"gyro_wheel",disabled:false}
+  ];
   const document={
     getElementById:element,
     querySelector(query) {
@@ -145,6 +152,15 @@ async function main() {
   assert.equal(raw.scanPoints(raw.trace.frames[0])[0][0],2);
   assert.equal(raw.scanPose()[1][0],2.5);
   assert.equal(raw.element("fusion-scan-kind").textContent,"Gyro/wheel deskewed");
+  raw.element("fusion-projection").value="graph_optimized";
+  raw.element("fusion-projection").handlers.change();
+  assert.equal(raw.scanPose()[1][0],2.7,
+    "graph reprojected hit trail must use optimized pose, not the fused path");
+  assert.match(raw.element("fusion-view-note").textContent,/Graph optimized/);
+  assert.match(raw.element("fusion-pose-shift").textContent,/0.200 m/);
+  raw.setView("lidar");
+  assert.equal(raw.scanPose()[1][0],2.3,
+    "raw LiDAR always uses LiDAR-only poses, independent of SLAM projection");
 
   const legacy=await launch(false,"?run=office-continuous-s01&view=lidar");
   assert.equal(legacy.element("fusion-view").value,"lidar");
