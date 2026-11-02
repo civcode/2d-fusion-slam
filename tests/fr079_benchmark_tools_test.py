@@ -53,6 +53,16 @@ def main():
                          "--support-aware", "--dry-run")
         assert guarded.stdout.count("--support-aware") == 2
         assert guarded.stdout.count("--map-stride 1") == 2
+        smooth = invoke(sweep, "--repo", root, "--log", log, "--out-dir", out,
+                        "--binary", sys.executable,
+                        "--truncations", "0.7", "1.0",
+                        "--continuous-cost", "--dry-run")
+        assert smooth.stdout.count("--continuous-cost") == 2
+        assert "--match-every 1 --field-every 15" in smooth.stdout
+        invoke(sweep, "--repo", root, "--log", log, "--out-dir", out,
+               "--binary", sys.executable, "--truncations", "0.7",
+               "--continuous-cost", "--support-aware", "--dry-run",
+               success=False)
 
         capture = folder / "capture.csv"
         records = []
