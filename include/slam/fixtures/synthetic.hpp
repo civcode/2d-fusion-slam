@@ -32,6 +32,16 @@ struct Scan {
 
 [[nodiscard]] Scene apartment();
 [[nodiscard]] Scene warehouse();
+[[nodiscard]] Scene office();
+[[nodiscard]] Scene loft();
+[[nodiscard]] Scene atrium();
+[[nodiscard]] Scene industrial();
+[[nodiscard]] Scene warehouse_asymmetric();
+
+// All fixture reference geometries. Synthetic truth is used only to
+// simulate observations and independently score generated maps.
+[[nodiscard]] Scene named_scene(const std::string& name);
+
 
 // Sample a moving synthetic robot with exact per-beam acquisition time.
 // Throws std::invalid_argument on bad config, std::overflow_error on time overflow.
