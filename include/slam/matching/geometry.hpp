@@ -56,6 +56,8 @@ struct MatchResult {
   std::size_t solver_residual_blocks{};
   bool candidate_evaluated{};
   std::size_t seed_supported_hits{}, candidate_supported_hits{};
+  double seed_overlap{};
+  bool seed_full_rank{};
   double seed_strict_cost{}, candidate_strict_cost{};
   double seed_finite_cost{}, candidate_finite_cost{};
   double candidate_translation_m{}, candidate_rotation_rad{};
