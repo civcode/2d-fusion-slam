@@ -237,6 +237,10 @@ Fr079SlamResult run_fr079_offline_slam(
     result.total_insertion_ms+=frame.insertion_ms;
     last_estimate=frame.estimated;
     frame.frame_ms=milliseconds(begin,Clock::now());
+    if(opt.capture_probe && frame.accepted && cached_snapshot) {
+      opt.capture_probe(i,frame.estimated,cached_snapshot,
+                        points(scan,opt.match_beam_stride,opt.max_hit_range_m));
+    }
     result.frames.push_back(std::move(frame));
   }
   result.map={mapping::MapSnapshot::capture(grid),
