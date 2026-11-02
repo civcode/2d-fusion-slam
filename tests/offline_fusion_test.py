@@ -321,6 +321,13 @@ class OfflineFusionExperiment(unittest.TestCase):
                 self.assertGreater(
                     new["results"]["lidar_only"]["map"]["counts"]["known"],
                     old["results"]["lidar_only"]["map"]["counts"]["known"])
+                # Independent simulator reference is used only for scoring,
+                # not registration. The prior baseline is frozen at its first
+                # pose, so any bootstrapping that worsens that trajectory
+                # materially must fail regression rather than count as fixed.
+                self.assertLess(
+                    new["results"]["lidar_only"]["translation_rmse_m"],
+                    .9 * old["results"]["lidar_only"]["translation_rmse_m"])
                 for name in ("wheel_only", "gyro_wheel", "fused_scan_matched"):
                     self.assertEqual(
                         old["results"][name]["map"]["map_fingerprint"],
