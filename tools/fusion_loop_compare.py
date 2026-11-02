@@ -99,7 +99,7 @@ def compare(baseline: Path, with_loops: Path):
     if late_loops:
         last = late_loops[-1]
         if first < last:
-            windows.append(("Before final closure", first, last+1))
+            windows.append(("Up to final closure", first, last+1))
         if last+1 < n:
             windows.append(("After final closure", last+1, n))
     print("\nGraph corrections and synthetic pose errors by frame window:")
