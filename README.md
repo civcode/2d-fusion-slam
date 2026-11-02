@@ -132,6 +132,39 @@ docker compose up -d demo
 See the full [FR079 offline SLAM protocol](docs/fr079-offline-slam.md)
 for artifact formats, provenance and limitations.
 
+## Map Explorer — scene-first selection
+
+The Web UI Map Explorer now groups completed fusion output by **scene/run**
+rather than showing every method as an unrelated map. Open **Apartment**,
+**Warehouse**, or another scene, then choose the available method with
+a descriptive radio button. Methods are ordered **Graph optimized**
+(default when present), **Scan-matched fusion**, **Gyro + wheel**,
+**LiDAR only**, **Wheel odometry**. The exact run ID remains visible
+to distinguish repeat runs of the same scene.
+
+Other standalone maps, including FR079 and the synthetic workshop
+sample, remain available in **Other maps**. Prior deep links such as
+/?map=fusion%40warehouse-001%40graph_optimized continue to work and
+a valid published active map retains priority over the default
+selection. This changes only navigation; existing mapping artifacts,
+accuracy reports, and occupancy APIs remain unchanged.
+
+Manual Docker update with 28 build jobs:
+
+~~~sh
+git pull --ff-only
+export BUILD_JOBS=28 SLAM_DOCKER_JOBS=28
+docker compose build demo test
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker -R 'map_selector_browser|fusion_replay_http|native_web_api' \
+  --output-on-failure
+docker compose up -d --force-recreate demo
+~~~
+
+The scene/method browser test is registered when Node is installed;
+native fusion and viewer tests remain available without Node.
+No GitHub Actions are required.
+
 ## Apartment/warehouse maps and native SLAM performance
 
 The main **Map Explorer** at http://127.0.0.1:8765/ now discovers
