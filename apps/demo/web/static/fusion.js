@@ -389,8 +389,10 @@
       for(const item of found.runs)$run.add(new Option(item.name,item.id));
       if(!found.runs.length)showMessage("No fusion runs found. Pass --fusion-dir pointing to a directory containing slam_offline_fusion output directories.");
       else {
-        $run.value=found.runs.some(x=>x.id===requestedRun)?
-          requestedRun:found.runs[0].id;
+        const preferred=found.runs.some(x=>x.id===previouslySelected)?
+          previouslySelected:requestedRun;
+        $run.value=found.runs.some(x=>x.id===preferred)?
+          preferred:found.runs[0].id;
         await loadRun($run.value);
       }
     }catch(error){$run.replaceChildren(new Option("Unable to list runs",""));
