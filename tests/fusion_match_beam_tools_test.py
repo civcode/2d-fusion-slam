@@ -155,6 +155,10 @@ def main():
         assert ("warehouse","continuous",1) in result
         assert "scene-level 1/1 improved" in output
         assert "stride  4 ->  1: 0/1 worse" in output
+        # All sparse phases can be compared with a single full-resolution
+        # reference because stride=1 has no effective decimation phase.
+        assert "60 -> 240 beams: 2/2 sparse phases improved" in output
+        assert "warehouse: 2/2 phases improved" in output
         options.map_stride=0
         try:
             validate(options,parser())
