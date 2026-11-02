@@ -84,3 +84,75 @@ The support classification prioritizes unknown interpolation cells, then truncat
 - Compare the *full-run* wall F1, mean wall distance, IoU, and p95 wall error separately. Frozen-map proxy recovery cannot guarantee a better whole-run map.
 
 This is still an offline benchmark with assumed identity laser extrinsics and no independent global trajectory ground truth. It does not introduce loop closure, submaps, coarse-to-fine matching or real-time paced input. A future benchmark should use more perturbation directions, independently known poses if available, and held-out map regions.
+
+
+## Opt-in support-aware Ceres matcher (experimental)
+
+The current legacy matcher remains the default so previous FR079 scores remain
+comparable. The new **--support-aware** flag enables a staged Ceres matcher that:
+
+1. Examines the pinned, strictly prior-scan EDT and conservatively certifies
+   every bilinear interpolation stencil reachable by a small bounded pose
+   step. It never interprets unknown cells as empty or occupied evidence.
+2. Selects only beams that are supported throughout that pose box, adapting
+   the size of the box when support is sparse.
+3. Runs a bounded Ceres refinement using only those certified real EDT
+   measurements. Re-selects on the next stage rather than permanently
+   discarding observations.
+4. Validates the proposed pose on **all original matching beams**: rank,
+   overlap, supported-hit count, total robust geometric cost, and preservation
+   of every previously supported endpoint. It also retains the frontend's
+   existing innovation and map-fingerprint gates.
+
+It does *not* fabricate zero residuals, force unknown occupancy cells to be
+known, change map insertion, or introduce loop closure. Conservative support
+certification can reduce match acceptance in sparse regions; **fewer Ceres
+warnings alone is not success**. The new path must also preserve map quality
+and recovery.
+
+To A/B test against existing mapping, use separate output prefixes:
+
+~~~sh
+# Legacy baseline: match every scan, 90-beam matching, map all valid beams
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-map-all-match90-legacy \
+  --match-every 1 --field-every 15 --map-stride 1 --match-stride 4 \
+  --distance-truncation 0.7
+
+# Experimental matcher: identical input, map settings and EDT cutoff
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-map-all-match90-support-aware \
+  --match-every 1 --field-every 15 --map-stride 1 --match-stride 4 \
+  --distance-truncation 0.7 --support-aware
+~~~
+
+Use tools/fr079_map_compare.py on **both** outputs and compare wall F1 at
+15 cm, mean/p95 wall distance, occupied IoU, full-run accepted matches,
+processing FPS, and invalid EDT evaluations. The report field matcher is
+either "ceres" or "ceres_support_aware". Per-frame .matches.json now
+includes support_aware_stages, support_aware_accepted_stages, and cumulative
+selected/skipped beam counts across internal solver stages.
+
+The existing sweep script also accepts --support-aware and --map-stride 1
+for controlled one-variable-at-a-time runs. New runs must use a unique
+--out-dir and the same dataset/reference files. Optional --capture applies
+the selected matcher to frozen-map perturbations too. Keep in mind the
+capture study is a same-run pose proxy, not independent ground truth.
+
+Local tests after rebuilding the Docker image:
+
+~~~sh
+docker compose build test
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R 'distance_field|match_ceres|fr079_support_aware|fr079_offline_slam|fr079_capture_benchmark'
+~~~
+
+This first step is support-aware local refinement only. Coarse-to-fine
+relocalization, local submaps and loop closure remain separate future work.
