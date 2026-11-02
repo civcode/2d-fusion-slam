@@ -493,6 +493,10 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     }
     // All prediction data comes from accepted raw LiDAR scans alone.
     const Pose2 previous_laser=slam::compose(out.poses.back(),kBaseFromLaser);
+    // Preserve the bootstrap motion seed for the Ceres-first path. A stale
+    // stationary seed can let the growing EDT accept near-zero motion.
+    const Pose2 bootstrap_seed=options.lidar_only_bootstrap&&has_relative_scan?
+        slam::compose(previous_laser,last_relative_scan):previous_laser;
     const auto matching_hits=sample_matching_hits(
         p.raw_lidar[i],options.match_stride,options.match_offset);
     out.matching_input_hits_total+=matching_hits.size();
@@ -513,7 +517,7 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     }
     const Pose2 seed=scan_prediction&&scan_prediction->accepted?
         slam::compose(previous_laser,scan_prediction->previous_from_current):
-        previous_laser;
+        bootstrap_seed;
     // With a failed LiDAR-only prediction, do not optimize around a stale
     // previous pose: its Ceres correction box is much smaller than the scan
     // displacement. A failed prediction is a rejected/unmapped scan.
@@ -618,8 +622,8 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
     } else if(options.lidar_only_bootstrap) {
       ++out.bootstrap_attempted;
       // For predict-first, reuse the same independently gated registration
-      // that seeded Ceres. Otherwise preserve the previous Ceres-first
-      // experimental baseline exactly for A/B comparison.
+      // that seeded Ceres. Otherwise use the motion-seeded Ceres-first
+      // bootstrap path for A/B comparison.
       auto registered=scan_prediction.value_or(
           slam::matching::ScanToScanResult{});
       if(!scan_prediction) {

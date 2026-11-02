@@ -153,8 +153,11 @@ gate would not solve this initial-map geometry problem responsibly.
 `--lidar-only-bootstrap` provides a separate, experimental LiDAR-only
 bootstrap that uses neither wheel/gyro odometry nor simulator truth:
 
-1. Preserve the existing EDT/Ceres matcher as first choice at the
-   previously accepted pose; no changes occur without the new flag.
+1. Preserve the existing EDT/Ceres matcher as first choice. With bootstrap
+   enabled and an accepted LiDAR displacement available, seed it by composing
+   that displacement with the previous accepted laser pose. Reusing a
+   stationary seed after bootstrap can let the growing map accept near-zero
+   motion and stall the trajectory. No changes occur without the new flag.
 2. If that match fails, register the **current raw LiDAR hit cloud**
    against the **last accepted raw LiDAR scan**, using deterministic
    trimmed nearest-neighbor rigid SE(2) registration. Three yaw seeds
@@ -193,8 +196,9 @@ more beams guarantee lower error; it is evidence of a density-dependent
 local registration failure in the synthetic fixture.
 
 New option: `--lidar-only-predict-first` **requires**
-`--lidar-only-bootstrap`. It is deliberately separate from the old
-Ceres-first bootstrap so both implementations remain reproducible.
+`--lidar-only-bootstrap`. It is deliberately separate from the Ceres-first bootstrap, which uses
+the previous accepted relative displacement as its EDT seed. Predict-first
+instead registers the current scan before attempting EDT refinement.
 
 With both flags, each LiDAR-only query follows this order:
 
@@ -257,6 +261,18 @@ prints trajectory RMSE/IoU and acceptance statistics, and counts
 adjacent beam-count increases that **worsen** RMSE. It does not impose
 monotonicity, hide regressions, or use simulator reference as a
 motion predictor.
+
+### Ceres-first motion-seed regression
+
+The stationary-seed regression is guarded by the existing requirement that
+bootstrap translation RMSE beat the frozen baseline by at least 10% in both
+scenes. With the LiDAR-motion EDT seed, Docker/Ceres RMSE changed from
+2.129 to 0.241 m (apartment) and 10.773 to 3.852 m (warehouse). These are
+synthetic measurements, not hardware accuracy claims. Warehouse occupied
+IoU remains poor and decreased from 0.0344 to 0.0296 versus the broken
+bootstrap run; trajectory improvement is not proof of map improvement.
+Initialization matters for local registration; see the
+[Open3D ICP tutorial](https://www.open3d.org/docs/release/tutorial/pipelines/icp_registration.html).
 
 ### Run one controlled experiment
 

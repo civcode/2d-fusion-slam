@@ -2,6 +2,7 @@
 """Fusion sweep command construction and argument-validation regression."""
 from __future__ import annotations
 
+import csv
 from argparse import Namespace
 from pathlib import Path
 import sys
@@ -9,7 +10,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from fusion_match_beam_sweep import command, validate, parser
-from fusion_bootstrap_compare import compare
+from fusion_bootstrap_compare import compare, read
 from fusion_beam_generalization import summarize
 from contextlib import redirect_stdout
 from io import StringIO
@@ -76,11 +77,12 @@ def main():
         new={}
         for method in ("wheel_only","gyro_wheel","fused_scan_matched","lidar_only"):
             for stride in (1,2):
-                key=("apartment","continuous",stride,method)
+                key=("apartment","continuous",stride,method,0)
                 row={
                     "scene":"apartment","matcher":"continuous",
                     "nominal_beams":str(240//stride),
                     "match_stride":str(stride),
+                    "match_offset":"0", "map_method":method,
                     "map_fingerprint":f"fixed-{method}",
                     "translation_rmse_m":"0.2",
                     "occupied_iou":"0.3",
@@ -88,9 +90,44 @@ def main():
                 }
                 old[key]=row.copy()
                 new[key]=row.copy()
-        compare(old,new)
+        with StringIO() as out, redirect_stdout(out):
+            compare(old,new)
+            assert "(same phase): 0/1" in out.getvalue()
+        # CSVs predating phase sweeps remain phase-zero inputs. Exercise
+        # the real reader so the fixture cannot drift from its key schema.
+        legacy_path=Path(tmp)/"legacy.csv"
+        columns=[name for name in next(iter(old.values()))
+                 if name != "match_offset"]
+        with legacy_path.open("w",newline="") as handle:
+            writer=csv.DictWriter(handle,fieldnames=columns,extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(old.values())
+        legacy=read(legacy_path)
+        assert legacy.keys()==old.keys()
+        with StringIO() as out, redirect_stdout(out):
+            compare(legacy,new)
+            assert "(same phase): 0/1" in out.getvalue()
+        # A high-error second phase must not create a cross-phase
+        # more-beams-worse transition or an extra comparison.
+        phased_old={key:row.copy() for key,row in old.items()}
+        phased_new={key:row.copy() for key,row in new.items()}
+        for method in ("wheel_only","gyro_wheel","fused_scan_matched","lidar_only"):
+            key=("apartment","continuous",2,method,1)
+            row=new[("apartment","continuous",2,method,0)].copy()
+            row.update(match_offset="1",translation_rmse_m="10.0")
+            phased_old[key]=row.copy()
+            phased_new[key]=row.copy()
+        phase_path=Path(tmp)/"phases.csv"
+        with phase_path.open("w",newline="") as handle:
+            writer=csv.DictWriter(handle,fieldnames=list(next(iter(new.values()))))
+            writer.writeheader()
+            writer.writerows(phased_new.values())
+        assert read(phase_path)==phased_new
+        with StringIO() as out, redirect_stdout(out):
+            compare(phased_old,read(phase_path))
+            assert "(same phase): 0/1" in out.getvalue()
         broken={key:value.copy() for key,value in new.items()}
-        bad=("apartment","continuous",1,"wheel_only")
+        bad=("apartment","continuous",1,"wheel_only",0)
         broken[bad]["map_fingerprint"]="unexpected"
         try:
             compare(old,broken)
