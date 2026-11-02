@@ -134,6 +134,15 @@ class FusionHTTP(unittest.TestCase):
         self.assertEqual({x["id"] for x in fusion_rows},
                          {"fusion@apartment_001@" + method
                           for method in report["results"]})
+        for row in fusion_rows:
+            self.assertEqual(row["run_id"], "apartment_001")
+            self.assertEqual(row["scene"], report["scene"])
+            self.assertIn(row["method"], report["results"])
+            self.assertEqual(
+                row["id"], "fusion@" + row["run_id"] + "@" + row["method"])
+        # Browser grouping is a view of these IDs, not a new map artifact.
+        self.assertEqual(
+            len({row["run_id"] for row in fusion_rows}), 1)
         for method in report["results"]:
             metadata = self.get_json(base + f"/maps/{method}")
             map_id = "fusion@apartment_001@" + method
