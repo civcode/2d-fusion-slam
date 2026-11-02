@@ -1287,6 +1287,7 @@ int main(int argc,char** argv) {
       ("scene","Synthetic scene",cxxopts::value<std::string>())
       ("output","New output directory",cxxopts::value<std::string>())
       ("synthetic-independent-loops","Enable synthetic independent loop constraints")
+      ("lidar-loop-closure","Opt-in LiDAR scan-pair factors in fused GTSAM graph (correlated evidence)")
       ("match-every","Match every N eligible scans (default 1)",cxxopts::value<std::string>())
       ("field-every","Refresh incremental LiDAR-only EDT every N frames (default 1)",cxxopts::value<std::string>())
       ("map-stride","Insert every Nth valid LiDAR hit into all maps (default 1)",cxxopts::value<std::string>())
@@ -1330,6 +1331,11 @@ int main(int argc,char** argv) {
         args["lidar-only-bootstrap"].as<bool>();
     options.lidar_only_predict_first=args.count("lidar-only-predict-first")&&
         args["lidar-only-predict-first"].as<bool>();
+    options.lidar_loop_closure=args.count("lidar-loop-closure")&&
+        args["lidar-loop-closure"].as<bool>();
+    if(loops&&options.lidar_loop_closure)
+      throw std::invalid_argument(
+          "choose either --synthetic-independent-loops or --lidar-loop-closure");
     if(options.lidar_only_predict_first&&!options.lidar_only_bootstrap)
       throw std::invalid_argument(
           "--lidar-only-predict-first requires --lidar-only-bootstrap");
@@ -1346,8 +1352,8 @@ int main(int argc,char** argv) {
         "--continuous-cost requires a Ceres-enabled fusion build");
 #endif
 #ifndef SLAM_FUSION_WITH_GTSAM
-    if(loops)throw std::invalid_argument(
-      "independent synthetic loop demonstration requires a GTSAM-enabled build");
+    if(loops||options.lidar_loop_closure)throw std::invalid_argument(
+      "loop closure requires a GTSAM-enabled build");
 #endif
     slam::fusion::PipelineProfiler profiler;
     const auto simulation=[&]{
