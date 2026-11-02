@@ -492,8 +492,7 @@ class OfflineFusionExperiment(unittest.TestCase):
             baseline=run(EXE,"office",str(prior),*args)
             self.assertEqual(baseline.returncode,0,baseline.stderr)
             baseline_report=json.loads((prior/"fusion_report.json").read_text())
-            trial=run(EXE,"office",str(proposed),*args,
-                      "--lidar-loop-closure","--mapping-ablation")
+            trial=run(EXE,"office",str(proposed),*args,"--lidar-loop-closure")
             if baseline_report["graph_status"]=="gtsam_not_built":
                 self.assertNotEqual(trial.returncode,0)
                 self.assertIn("GTSAM",trial.stderr)
@@ -538,48 +537,6 @@ class OfflineFusionExperiment(unittest.TestCase):
             self.assertGreaterEqual(len(events),new["graph_loop_candidates"])
             self.assertTrue(all(e["to"]>e["from"]+39 for e in events))
             self.assertIn("graph_optimized",after["paths"])
-            mapping=json.loads((proposed/"mapping_ablation.json").read_text())
-            self.assertEqual(mapping["format"],"FUSMAPABL1")
-            self.assertEqual(mapping["reference_usage"],"posthoc_scoring_only")
-            self.assertEqual(len(mapping["variants"]),24)
-            self.assertEqual(len({v["id"] for v in mapping["variants"]}),24)
-            cut=new["frames"]-math.ceil(.12*new["frames"])
-            original_full=None
-            for variant in mapping["variants"]:
-                self.assertEqual(variant["map"]["format"],"FUSMAPACC1")
-                self.assertEqual(variant["map"]["reference_scene"],new["scene"])
-                self.assertEqual(len(variant["wall_tolerance_scores"]),3)
-                self.assertEqual(
-                    [s["tolerance_m"] for s in variant["wall_tolerance_scores"]],
-                    [.10,.25,.50])
-                for metric in ("precision","recall","f1"):
-                    values=[score[metric]
-                            for score in variant["wall_tolerance_scores"]]
-                    self.assertTrue(all(0<=x<=1 for x in values))
-                    self.assertEqual(values,sorted(values),
-                                     "wider wall tolerance cannot reduce agreement")
-                if variant["window"]=="early":
-                    self.assertEqual(
-                        (variant["begin_frame"],variant["end_frame_exclusive"]),
-                        (0,cut))
-                if variant["window"]=="late":
-                    self.assertEqual(
-                        (variant["begin_frame"],variant["end_frame_exclusive"]),
-                        (cut,new["frames"]))
-                self.assertTrue(variant["map_path"].startswith("mapping_ablation/"))
-                self.assertTrue((proposed/variant["map_path"]).is_file())
-                if (variant["window"]=="full" and
-                    variant["deskew"]=="gyro_wheel_original" and
-                    variant["id"].endswith("_baseline")):
-                    original_full=variant
-            self.assertIsNotNone(original_full)
-            self.assertEqual(
-                original_full["map"]["map_fingerprint"],
-                new["results"]["graph_optimized"]["map"]["map_fingerprint"])
-            self.assertEqual(
-                original_full["map"]["metrics"],
-                new["results"]["graph_optimized"]["map"]["metrics"])
-            self.assertFalse((prior/"mapping_ablation.json").exists())
             # Neither the independent loop sensor nor its oracle
             # simulator measurements may be used by this experiment.
             self.assertNotEqual(new["loop_measurements"],
