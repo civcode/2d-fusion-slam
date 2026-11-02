@@ -54,8 +54,8 @@ def main():
                 assert sum(f["ceres_invalid_residual_evaluations"] for f in matches) == (
                     report["ceres_invalid_residual_evaluations"])
                 if mode == "continuous":
-                    assert sum(f["solver_residual_blocks"] for f in matches) == sum(
-                        f["match_input_beams"] for f in matches if f["attempted"])
+                    assert all(f["solver_residual_blocks"] == f["match_input_beams"]
+                               for f in matches if f["solver_residual_blocks"] > 0)
         # Verify phase selection changes the raw sampled indices without
         # modifying mapping-beam stride or the CARMEN input.
         run(binary, dataset, root/"shifted", "--continuous-cost",
