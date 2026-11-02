@@ -248,17 +248,32 @@ target_link_libraries(slam_fr079_slam_frontend PUBLIC
 if(TARGET slam_match_ceres)
   target_link_libraries(slam_fr079_slam_frontend PUBLIC slam::match_ceres)
 endif()
+add_library(slam_fr079_capture_benchmark STATIC src/fr079_capture_benchmark.cpp)
+add_library(slam::fr079_capture_benchmark ALIAS slam_fr079_capture_benchmark)
+target_compile_features(slam_fr079_capture_benchmark PUBLIC cxx_std_20)
+target_include_directories(slam_fr079_capture_benchmark PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_fr079_capture_benchmark PUBLIC
+  slam::fr079_offline slam::match_geometry)
+if(TARGET slam_match_ceres)
+  target_link_libraries(slam_fr079_capture_benchmark PUBLIC slam::match_ceres)
+endif()
 if(ZLIB_FOUND AND OpenSSL_FOUND)
   add_executable(slam_fr079_offline src/fr079_offline_cli.cpp)
   target_compile_features(slam_fr079_offline PRIVATE cxx_std_20)
   target_link_libraries(slam_fr079_offline PRIVATE
-    slam::fr079_offline ZLIB::ZLIB OpenSSL::Crypto)
+    slam::fr079_offline slam::fr079_capture_benchmark ZLIB::ZLIB OpenSSL::Crypto)
   if(BUILD_TESTING AND Python3_Interpreter_FOUND)
     add_test(NAME fr079_offline_slam
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_offline_test.py"
         "$<TARGET_FILE:slam_fr079_offline>")
     set_tests_properties(fr079_offline_slam PROPERTIES TIMEOUT 240)
+    add_test(NAME fr079_capture_benchmark
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_capture_test.py"
+        "$<TARGET_FILE:slam_fr079_offline>")
+    set_tests_properties(fr079_capture_benchmark PROPERTIES TIMEOUT 240)
     if(SLAM_FR079_LOG)
       if(TARGET slam_match_ceres)
         add_test(NAME fr079_offline_real_data
