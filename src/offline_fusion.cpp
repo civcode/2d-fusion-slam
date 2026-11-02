@@ -1130,7 +1130,10 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
       first=false;
       if(event.decision=="accepted")++accepted_loops;
       out<<"{\"from\":"<<event.from<<",\"to\":"<<event.to
-         <<",\"decision\":\""<<event.decision<<"\"}";
+         <<",\"decision\":\""<<event.decision<<"\""
+         <<",\"source\":\""<<event.source<<"\""
+         <<",\"overlap\":"<<event.overlap
+         <<",\"registration_error_m\":"<<event.registration_error_m<<"}";
     }
     out<<"],\"cumulative_accepted_loops\":"<<accepted_loops<<"}";
   }
@@ -1242,7 +1245,11 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   write_rejections(out,"lidar_only_rejection_reasons",lidar.rejections);
   out<<"\n\"graph_status\":\""<<graph.status<<"\","
      <<"\n\"loop_measurements\":\""<<(synthetic_loops?
-          "independently_simulated_relative_pose":"none")<<"\","
+          "independently_simulated_relative_pose":options.lidar_loop_closure?
+          "lidar_scan_registration_correlated":"none")<<"\","
+     <<"\n\"lidar_loop_closure\":"<<(options.lidar_loop_closure?"true":"false")<<","
+     <<"\n\"graph_lidar_loop_registration_attempted\":"<<graph.lidar_registration_attempted<<","
+     <<"\n\"graph_lidar_loop_registration_verified\":"<<graph.lidar_registration_verified<<","
      <<"\n\"graph_loop_candidates\":"<<graph.loop_candidates<<","
      <<"\n\"graph_accepted_loops\":"<<graph.accepted_loops<<","
      <<"\n\"results\":{\n";
