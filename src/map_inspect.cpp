@@ -1,3 +1,4 @@
+#include "slam/cli/parse.hpp"
 #include "slam/mapping/map_bundle.hpp"
 
 #include <fstream>
@@ -5,9 +6,17 @@
 #include <stdexcept>
 
 int main(int argc,char** argv){
- if(argc!=2){std::cerr<<"Usage: slam_map_inspect <map.slammap>\n";return 2;}
- try{
-  std::ifstream in(argv[1],std::ios::binary);
+  slam::cli::Positionals parsed;
+  try {
+    parsed=slam::cli::parse_positionals(argc,argv,"slam_map_inspect",
+        "<map.slammap>",1,1);
+  }catch(const std::exception& e) {
+    std::cerr<<e.what()<<'\n';return 2;
+  }
+  if(parsed.help){std::cout<<parsed.usage;return 0;}
+  const auto& cli_args=parsed.values;
+  try{
+  std::ifstream in(cli_args[0],std::ios::binary);
   if(!in)throw std::runtime_error("cannot open binary map bundle");
   const auto map=slam::mapping::read_map_bundle(in);
   const auto& cells=map.snapshot->cells();
