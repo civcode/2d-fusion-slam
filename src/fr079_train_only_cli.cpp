@@ -1,3 +1,4 @@
+#include <cxxopts.hpp>
 #include "slam/datasets/fr079_train_only.hpp"
 #include <zlib.h>
 #include <fstream>
@@ -19,14 +20,27 @@ std::string load(const std::string& path){
 }
 }
 int main(int argc,char** argv){
- if((argc!=2&&argc!=3)||(argc==3&&std::string(argv[2])!="--reference")){std::cerr<<"Usage: slam_fr079_train_only_benchmark <fr079.log.gz> [--reference]\n";return 2;}
- try {
-  const auto data=load(argv[1]);
+  cxxopts::Options cli("slam_fr079_train_only_benchmark",
+      "FR079 train-only held-out map-quality proxy");
+  cli.add_options()
+      ("input","FR079 CARMEN log",cxxopts::value<std::string>())
+      ("reference","Use reference geometry matcher instead of Ceres")
+      ("h,help","Show help");
+  cli.parse_positional({"input"});
+  cli.positional_help("<fr079.log.gz> [--reference]");
+  cxxopts::ParseResult args;
+  try { args=cli.parse(argc,argv); }
+  catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
+  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(!args.count("input")){std::cerr<<cli.help();return 2;}
+
+  try {
+  const auto data=load(args["input"].as<std::string>());
   std::istringstream in(data);std::vector<slam::datasets::CarmenLaser> scans;
   slam::datasets::CarmenReader reader;std::string line;
   while(std::getline(in,line))if(auto scan=reader.parse_laser(line))scans.push_back(std::move(*scan));
   slam::datasets::TrainOnlyOptions options;
-  options.use_ceres=(argc==2);
+  options.use_ceres=!args.count("reference");
   const auto map=slam::datasets::build_fr079_training_map(scans,options);
   const auto r=slam::datasets::evaluate_fr079_holdout(scans,map,options);
   std::cout<<"{\"type\":\"fr079_train_only_proxy\",\"dataset_scans\":"<<r.input_scans
