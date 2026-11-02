@@ -69,6 +69,27 @@ class LoopCompareTest(unittest.TestCase):
             self.assertIn("Frame  19", output)
             self.assertIn("0->18", output)
 
+    def test_explicit_old_loop_version_comparison(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = pathlib.Path(work)
+            old = root / "old-loop"
+            new = root / "multi-loop"
+            self.fixture(old, False)
+            self.fixture(new, True)
+            report_file = old / "fusion_report.json"
+            report = json.loads(report_file.read_text())
+            report["lidar_loop_closure"] = True
+            report["graph_accepted_loops"] = 1
+            report_file.write_text(json.dumps(report))
+            with self.assertRaisesRegex(ValueError, "allow-loop-baseline"):
+                fusion_loop_compare.compare(old, new)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                fusion_loop_compare.compare(
+                    old, new, allow_loop_baseline=True)
+            self.assertIn("algorithm-version comparison", output.getvalue())
+            self.assertIn("Earlier loop mode", output.getvalue())
+
     def test_source_method_not_allowed_to_change(self):
         with tempfile.TemporaryDirectory() as work:
             root = pathlib.Path(work)
