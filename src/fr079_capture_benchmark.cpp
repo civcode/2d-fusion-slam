@@ -46,6 +46,8 @@ Fr079CaptureBenchmark::Fr079CaptureBenchmark(
          <<"support_fraction_0_3m,support_fraction_3_7m,"
          <<"support_fraction_7_12m,support_fraction_12_18m,"
          <<"match_status,ceres_termination,ceres_invalid_residual_evaluations,"
+         <<"ceres_invalid_unknown_cells,ceres_invalid_truncated,"
+         <<"ceres_invalid_outside_grid,ceres_invalid_other,"
          <<"ceres_unsuccessful_steps,ceres_successful_steps,"
          <<"final_xy_error_to_proxy_m,final_yaw_error_to_proxy_deg,"
          <<"recovered_proxy,accepted_but_far_from_proxy,trial_ms\n";
@@ -122,6 +124,10 @@ void Fr079CaptureBenchmark::probe(
         output_<<","<<status_text(fit.status)
                <<","<<fit.ceres_termination
                <<","<<fit.ceres_invalid_residual_evaluations
+               <<","<<fit.ceres_invalid_unknown_cells
+               <<","<<fit.ceres_invalid_truncated
+               <<","<<fit.ceres_invalid_outside_grid
+               <<","<<fit.ceres_invalid_other
                <<","<<fit.ceres_unsuccessful_steps
                <<","<<fit.ceres_successful_steps
                <<","<<xy_error<<","<<yaw_error
