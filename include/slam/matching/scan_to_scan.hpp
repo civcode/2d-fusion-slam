@@ -12,6 +12,9 @@ namespace slam::matching {
 // coordinates. No odometry, simulator reference, map, or range raster needed.
 struct ScanToScanResult {
   bool accepted{};
+  // Independent of the full-cloud check: covariance of the *selected*
+  // point correspondences at the final pose (not a calibrated covariance).
+  bool correspondence_rank{};
   Pose2 previous_from_current{};
   std::size_t forward_inliers{}, reverse_inliers{};
   std::size_t iterations{};
