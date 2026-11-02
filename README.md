@@ -96,6 +96,25 @@ derive scan-matching quality, deskew scans, verify map registration or
 produce ground truth. All recorded poses remain explicitly labeled
 **logged estimates**.
 
+## Experimental support-aware Ceres matching
+
+Use --support-aware with slam_fr079_offline to select a conservative
+multi-stage Ceres optimizer that certifies known EDT support for each
+active beam across every bounded trial pose. After each stage, the
+candidate must improve the **full-scan** geometric objective and
+preserve previously supported beams. Unknown cells never become fake
+zero-cost LiDAR evidence. The original matcher remains the default
+for comparison. Per-frame and aggregate diagnostics now distinguish
+invalid EDT evaluations, selected/skipped beams, optimization stages,
+and insufficient safe support.
+
+The support-aware option is deliberately **not** enabled by default
+until its FR079 geometric agreement and capture-range benchmarks
+prove it improves or maintains the existing results. To compare it
+with legacy and map-all-beam modes, follow the
+[FR079 benchmark instructions](docs/fr079-truncation-benchmark.md).
+No loop closure, submaps, or independent ground truth is claimed.
+
 ## FR079 EDT truncation: controlled accuracy and capture-range benchmark
 
 To study the 0.7 m distance-field cutoff instead of guessing a larger
