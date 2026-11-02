@@ -15,6 +15,7 @@ change the independent simulator reference used only for scoring.
 | `--distance-truncation METRES` | 0.7 | EDT truncation in both frozen and incremental matchers (0.2–3.0 m). |
 | `--continuous-cost` | off | Use `match_ceres_continuous` for **both** matchers; requires Ceres, and fails instead of silently selecting the reference implementation if unavailable. |
 | `--lidar-only-bootstrap` | off | Enable conservative scan-to-scan registration for the LiDAR-only baseline, with strict EDT refinement when real map support becomes available; other map variants remain unchanged. |
+| `--lidar-only-predict-first` | off | Require a LiDAR-derived relative pose prediction before Ceres/EDT; preserve separate Ceres-first bootstrap for A/B. Requires `--lidar-only-bootstrap`. |
 
 Cadences are integers 1–200 and strides are integers 1–64. Invalid
 values fail before an output directory is created. Without flags,
@@ -178,6 +179,82 @@ can still cause drift. **Independent synthetic map/trajectory scores
 must improve before considering any default change.** The existing
 `wheel_only`, `gyro_wheel`, `fused_scan_matched`, and optional
 graph maps must remain invariant to toggling LiDAR-only bootstrap.
+
+### Experimental LiDAR-first prediction and EDT consistency gate
+
+The first bootstrap benchmark restored LiDAR-only tracking, but its
+60-beam warehouse continuous-cost run drifted badly: ground-truth
+displacement was ~0.303 m per scan while the scan-pair registration
+reported only ~0.123–0.142 m in the first eight frames. The 240-beam
+run estimated ~0.30 m in those frames. This is **not** evidence that
+more beams guarantee lower error; it is evidence of a density-dependent
+local registration failure in the synthetic fixture.
+
+New option: `--lidar-only-predict-first` **requires**
+`--lidar-only-bootstrap`. It is deliberately separate from the old
+Ceres-first bootstrap so both implementations remain reproducible.
+
+With both flags, each LiDAR-only query follows this order:
+
+1. Register current scan to last accepted scan using only sampled
+   LiDAR hit points and last accepted LiDAR-derived relative motion.
+   Retry a bounded zero-motion multi-start if needed.
+2. **Reject without insertion** when scan-pair geometry fails the
+   reciprocal registration gates. Do **not** allow Ceres around the
+   previous accepted *stale* pose to override that rejection.
+3. Use the accepted scan-pair relative SE(2) pose to predict where
+   the new laser pose is in the incremental occupancy map.
+4. Attempt the existing strict EDT/Ceres scan matcher **at that
+   predicted pose**, not at the previous accepted pose.
+5. Apply the EDT correction only when all existing geometric/source/
+   rank/improvement gates pass **and** its proposed relative motion
+   differs by no more than **0.12 m** and **0.075 rad** from the LiDAR
+   scan-pair prediction. If EDT is unsupported, rejected, or disagrees,
+   retain the qualified scan-pair pose instead.
+6. Insert the LiDAR scan only after the chosen relative motion has
+   passed those checks. No simulator truth or wheel/gyro motion is used
+   for localization in this path.
+
+Per-frame audit now records `used_scan_prediction`,
+`edt_prediction_disagreed`,
+`predicted_edt_translation_delta_m`,
+`predicted_edt_yaw_delta_rad`, and `registration_method`
+(`edt_predicted`, `scan_to_scan`, or `none`).
+Fusion report and sweep scorecards include
+`lidar_only_predicted_edt_accepted` and
+`lidar_only_edt_prediction_disagreements`.
+
+This is an **experiment**, not a default. Motion estimates can still
+be wrong when the raw scan-pair match is ambiguous. In particular,
+the sparse 60-beam underestimation may persist even if Ceres no
+longer reinforces a stale seed. The experiment measures whether
+prediction-first reduces such drift; it does not manufacture a
+monotonic improvement curve.
+
+### Controlled A/B: original bootstrap versus LiDAR-first
+
+Use a new output directory:
+
+~~~bash
+python tools/fusion_match_beam_sweep.py \
+  --repo "$PWD" \
+  --out-dir benchmarks/fusion-beams-predict-first-001 \
+  --docker --scenes apartment warehouse \
+  --matchers legacy continuous \
+  --map-stride 1 --match-every 1 --field-every 1 \
+  --distance-truncation 0.7 --match-strides 1 2 3 4 6 8 \
+  --lidar-only-bootstrap --lidar-only-predict-first
+
+python tools/fusion_bootstrap_compare.py \
+  --old benchmarks/fusion-beams-bootstrap-001/scorecard.csv \
+  --new benchmarks/fusion-beams-predict-first-001/scorecard.csv
+~~~
+
+The comparator checks all three non-LiDAR-only control fingerprints,
+prints trajectory RMSE/IoU and acceptance statistics, and counts
+adjacent beam-count increases that **worsen** RMSE. It does not impose
+monotonicity, hide regressions, or use simulator reference as a
+motion predictor.
 
 ### Run one controlled experiment
 
