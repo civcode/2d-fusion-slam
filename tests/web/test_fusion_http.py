@@ -109,6 +109,10 @@ class FusionHTTP(unittest.TestCase):
             self.assertGreater(frame["hits"], 0)
             self.assertGreater(len(frame["points_laser"]), 0)
             self.assertLessEqual(len(frame["points_laser"]), frame["hits"])
+            self.assertIn("raw_points_laser", frame)
+            self.assertGreater(len(frame["raw_points_laser"]), 0)
+            self.assertLessEqual(len(frame["raw_points_laser"]), frame["hits"])
+            self.assertTrue(all(len(p) == 2 for p in frame["raw_points_laser"]))
             self.assertEqual(frame["matching"]["attempted"], i % 2 == 1)
             self.assertTrue(frame["mapping"]["fused_scan_matched_inserted"])
             if i % 2 == 1:
@@ -124,6 +128,66 @@ class FusionHTTP(unittest.TestCase):
         last = report["frames"] - 1
         self.assertEqual(self.get_json(base + f"/frame/{last}"),
                          replay["frames"][last])
+
+    def test_new_scene_replays_and_maps(self):
+        # Representative short/large new fixtures reach the same endpoint
+        # contract as apartment, including independently checked map metadata.
+        for scene in ("office", "warehouse_asymmetric"):
+            run_id = "web_" + scene
+            folder = self.root / run_id
+            try:
+                generated = subprocess.run(
+                    [self.cli, scene, str(folder), "--match-stride", "4",
+                     "--match-offset", "1", "--lidar-only-bootstrap",
+                     "--lidar-only-predict-first"],
+                    capture_output=True, text=True, timeout=180)
+                self.assertEqual(generated.returncode, 0, generated.stderr)
+                base = "/api/fusion/runs/" + run_id
+                report = self.get_json(base)
+                poses = self.get_json(base + "/trajectories")
+                replay = self.get_json(base + "/replay")
+                self.assertEqual(report["scene"], "synthetic-" + scene + "-v1")
+                self.assertEqual(replay["scene"], report["scene"])
+                self.assertEqual(report["match_offset"], 1)
+                self.assertEqual(replay["match_offset"], 1)
+                self.assertEqual(len(replay["frames"]), report["frames"])
+                self.assertEqual(len(poses["paths"]["lidar_only"]), report["frames"])
+                self.assertTrue(all("raw_points_laser" in f
+                                    for f in replay["frames"]))
+                listing = self.get_json("/api/maps")["maps"]
+                self.assertTrue(any(item["id"] == "fusion@" + run_id + "@lidar_only"
+                                    and item["scene"] == report["scene"]
+                                    for item in listing))
+                metadata = self.get_json(base + "/maps/lidar_only")
+                self.assertEqual(metadata["source_id"], report["scene"])
+                with request.urlopen(self.base + base + "/maps/lidar_only/image.png") as img:
+                    self.assertEqual(img.read(8), b"\\x89PNG\\r\\n\\x1a\\n")
+            finally:
+                if folder.exists():
+                    shutil.rmtree(folder)
+
+    def test_reject_corrupted_raw_scan_and_phase_mismatch(self):
+        base = "/api/fusion/runs/apartment_001"
+        path = self.run_dir / "fusion_replay.json"
+        before = path.read_bytes()
+        try:
+            trace = json.loads(before)
+            trace["frames"][0]["raw_points_laser"] = [[999999, 0]]
+            path.write_text(json.dumps(trace))
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + base + "/replay")
+            self.assertEqual(raised.exception.code, 422)
+            path.write_bytes(before)
+            trace = json.loads(before)
+            trace["match_offset"] = 63
+            path.write_text(json.dumps(trace))
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + base + "/replay")
+            self.assertEqual(raised.exception.code, 422)
+        finally:
+            path.write_bytes(before)
+        self.assertEqual(self.get_json(base + "/replay")["format"],
+                         "FUSFUSREPLAY1")
 
     def test_tuned_matching_cadence_replay_is_readable(self):
         # The viewer must distinguish skipped odd-index matching queries
