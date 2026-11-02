@@ -1,3 +1,4 @@
+#include "slam/cli/parse.hpp"
 #include "slam/datasets/fr079_alignment.hpp"
 
 #include <zlib.h>
@@ -22,17 +23,18 @@ std::string gzip_read(const char* path, std::size_t limit) {
 }
 }
 int main(int argc,char** argv) {
-  if(argc==2 && std::string(argv[1])=="--help") {
-    std::cout<<"Usage: slam_fr079_alignment_inspect <fr079-sm.log.gz> <fr079-05cm.carmen.map>\n";
-    return 0;
-  }
-  if(argc!=3) {
-    std::cerr<<"Usage: slam_fr079_alignment_inspect <fr079-sm.log.gz> <fr079-05cm.carmen.map>\n";
-    return 2;
-  }
+  slam::cli::Positionals parsed;
   try {
-    const auto log=gzip_read(argv[1],128*1024*1024);
-    const auto mapfile=gzip_read(argv[2],128*1024*1024);
+    parsed=slam::cli::parse_positionals(argc,argv,"slam_fr079_alignment_inspect",
+        "<fr079-sm.log.gz> <fr079-05cm.carmen.map>",2,2);
+  }catch(const std::exception& e) {
+    std::cerr<<e.what()<<'\n';return 2;
+  }
+  if(parsed.help){std::cout<<parsed.usage;return 0;}
+  const auto& cli_args=parsed.values;
+  try {
+    const auto log=gzip_read(cli_args[0],128*1024*1024);
+    const auto mapfile=gzip_read(cli_args[1],128*1024*1024);
     const std::vector<std::uint8_t> binary(mapfile.begin(),mapfile.end());
     const auto map=slam::datasets::parse_carmen_map(binary);
     slam::datasets::CarmenReader reader;
