@@ -20,6 +20,7 @@ struct Fr079SlamOptions {
   std::size_t match_beam_stride{4};
   std::size_t match_every{5};
   std::size_t rebuild_field_every{15};
+  double distance_truncation_m{0.70};
   double max_correction_m{0.40};
   double max_correction_yaw_rad{0.17};
   bool use_ceres{true};
@@ -33,6 +34,9 @@ struct Fr079SlamFrame {
   bool matched{}, accepted{}, map_inserted{};
   std::string match_status{"not_attempted"};
   std::size_t supported_hits{};
+  std::size_t ceres_invalid_residual_evaluations{};
+  std::size_t ceres_unsuccessful_steps{}, ceres_successful_steps{};
+  std::string ceres_termination{"not_run"};
   double overlap{}, robust_cost{};
   double field_ms{}, match_ms{}, insertion_ms{}, frame_ms{};
 };
@@ -41,6 +45,8 @@ struct Fr079SlamResult {
   std::vector<Fr079SlamFrame> frames;
   std::size_t attempts{}, accepted{}, rejected{}, inserted_scans{};
   double total_field_ms{}, total_match_ms{}, total_insertion_ms{};
+  std::size_t total_invalid_residual_evaluations{};
+  std::size_t total_unsuccessful_steps{};
   bool used_ceres{};
   // No graph constraints from correlated scan-to-map results or logged poses.
   bool graph_optimized{false};
