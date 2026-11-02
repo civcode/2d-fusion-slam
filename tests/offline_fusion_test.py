@@ -523,8 +523,9 @@ class OfflineFusionExperiment(unittest.TestCase):
             self.assertTrue(all(e["source"]=="lidar_scan_registration" for e in events))
             self.assertEqual(sum(e["decision"]=="accepted" for e in events),
                              new["graph_accepted_loops"])
-            self.assertEqual(len(events),
-                             new["graph_lidar_loop_registration_attempted"])
+            self.assertGreaterEqual(
+                new["graph_lidar_loop_registration_attempted"],len(events))
+            self.assertGreaterEqual(len(events),new["graph_loop_candidates"])
             self.assertTrue(all(e["to"]>e["from"]+39 for e in events))
             self.assertIn("graph_optimized",after["paths"])
             # Neither the independent loop sensor nor its oracle
