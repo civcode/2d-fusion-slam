@@ -40,6 +40,7 @@ struct FusionMatchOptions {
   std::size_t field_every{1};     // incremental LiDAR-only EDT refresh
   std::size_t map_stride{1};     // occupancy insertion in every map
   std::size_t match_stride{1};   // every Nth valid deskewed/raw hit
+  std::size_t match_offset{0};   // start offset modulo stride (0 preserves baseline)
   double distance_truncation_m{0.7};
   bool continuous_cost{};
   // Read-only bounded diagnostic around the stalled LiDAR-only seed.
@@ -81,40 +82,55 @@ struct Motion {
   Pose2 pose;
   double forward{}, yaw_rate{};
 };
-Motion at_time(bool warehouse,double seconds_after_start) {
+struct RouteConfig {
+  double cx{},cy{},rx{},ry{},period{};
+  std::size_t scans{};
+  bool large{};
+};
+// The original two routes remain bit-for-bit unchanged. New routes provide
+// different speeds, curvature, observed spaces, and trajectory lengths; the
+// corresponding exact poses never enter any matcher, only the simulator and
+// final independent scoring.
+RouteConfig route_config(const std::string& name) {
+  if(name=="apartment")return {2.5,3.0,1.35,1.35,20.0,130,false};
+  if(name=="warehouse")return {15.0,10.0,14.0,9.0,56.0,195,true};
+  if(name=="office")return {3.1,3.0,1.6,1.0,24.0,150,false};
+  if(name=="loft")return {7.5,6.0,3.5,2.5,34.0,168,false};
+  if(name=="atrium")return {15.0,10.0,10.6,6.4,60.0,200,true};
+  if(name=="industrial")return {15.0,10.0,13.2,8.2,57.0,195,true};
+  if(name=="warehouse_asymmetric")return {15.0,10.0,14.0,9.0,56.0,195,true};
+  throw std::invalid_argument("unknown fusion synthetic scene: "+name);
+}
+Motion at_time(const RouteConfig& route,double seconds_after_start) {
   const double active=std::max(0.0,seconds_after_start-.30);
-  const double period=warehouse?56.0:20.0;
-  // Keep the warehouse ellipse outside the shelf solids (y=4..16).
-  // The old 13x8 m radii cut through the outer shelves near the corners.
-  const double rx=warehouse?14.0:1.35,ry=warehouse?9.0:1.35;
-  const double cx=warehouse?15.0:2.5,cy=warehouse?10.0:3.0;
-  const double w=2*kPi/period,phase=w*active;
-  const double s=std::sin(phase),c=std::cos(phase);
-  const double length=std::hypot(rx*s,ry*c);
+  const double w=2*kPi/route.period,phase=w*active;
+  const double sn=std::sin(phase),cs=std::cos(phase);
+  const double length=std::hypot(route.rx*sn,route.ry*cs);
   Motion m;
-  m.pose={{cx+rx*c,cy+ry*s},std::atan2(ry*c,-rx*s)};
+  m.pose={{route.cx+route.rx*cs,route.cy+route.ry*sn},
+          std::atan2(route.ry*cs,-route.rx*sn)};
   m.forward=seconds_after_start>=.30?w*length:0.0;
   m.yaw_rate=seconds_after_start>=.30?
-    w*rx*ry/(rx*rx*s*s+ry*ry*c*c):0.0;
+    w*route.rx*route.ry/(route.rx*route.rx*sn*sn+
+                         route.ry*route.ry*cs*cs):0.0;
   return m;
 }
 Simulation generate(const std::string& label) {
-  if(label!="apartment"&&label!="warehouse")
-    throw std::invalid_argument("expected apartment or warehouse");
+  const auto route=route_config(label);
   Simulation d;
-  d.warehouse=label=="warehouse";
-  d.scene=d.warehouse?slam::fixtures::warehouse():slam::fixtures::apartment();
-  d.grid.width=d.warehouse?621:321;
-  d.grid.height=d.warehouse?421:261;
+  d.warehouse=route.large;
+  d.scene=slam::fixtures::named_scene(label);
+  d.grid.width=route.large?621:321;
+  d.grid.height=route.large?421:261;
   d.grid.resolution_m=.05;
   d.grid.map_from_grid={{-.5,-.5},0};
-  d.initial_anchor=at_time(d.warehouse,0).pose;
-  const std::size_t scans=d.warehouse?195:130;
+  d.initial_anchor=at_time(route,0).pose;
+  const std::size_t scans=route.scans;
   const std::size_t ticks=12*(scans+4)+32;
   d.sensors.ticks.reserve(ticks);
   for(std::size_t i=0;i<ticks;++i) {
     const double t=double(i)*.025;
-    const Motion exact=at_time(d.warehouse,t);
+    const Motion exact=at_time(route,t);
     slam::fusion::SensorTick sample;
     sample.time={kInitialNs+static_cast<slam::TimeNs>(i)*kTickNs,101,1};
     sample.gyro_valid=true;sample.wheel_valid=true;
@@ -133,7 +149,7 @@ Simulation generate(const std::string& label) {
     const auto ns=kInitialNs+600'000'000LL+
       static_cast<slam::TimeNs>(i)*kScanNs;
     const double seconds_after_start=double(ns-kInitialNs)*1e-9;
-    const Motion exact=at_time(d.warehouse,seconds_after_start);
+    const Motion exact=at_time(route,seconds_after_start);
     const Timestamp stamp{ns,101,1};
     const auto simulated=slam::fixtures::simulate_scan(
       d.scene,exact.pose,{exact.forward,0,exact.yaw_rate},
