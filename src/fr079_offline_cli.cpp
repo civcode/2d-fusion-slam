@@ -324,14 +324,14 @@ int run(int argc,char** argv){
   cxxopts::ParseResult args;
   try{args=cli.parse(argc,argv);}
   catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
-  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(args.count("help")&&args["help"].as<bool>()){std::cout<<cli.help();return 0;}
   if(!args.count("log")||!args.count("prefix")){
     std::cerr<<cli.help();return 2;
   }
   slam::datasets::Fr079SlamOptions options;
-  options.use_ceres=args.count("reference")==0;
-  options.support_aware_ceres=args.count("support-aware")!=0;
-  const bool capture=args.count("capture")!=0;
+  options.use_ceres=!(args.count("reference")&&args["reference"].as<bool>());
+  options.support_aware_ceres=args.count("support-aware")&&args["support-aware"].as<bool>();
+  const bool capture=args.count("capture")&&args["capture"].as<bool>();
   const auto positive=[&](const char* key,std::size_t fallback) {
     return args.count(key)?positive_integer(args[key].as<std::string>()):fallback;
   };
