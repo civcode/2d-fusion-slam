@@ -90,7 +90,7 @@ export SLAM_DOCKER_JOBS=28
 docker compose build test
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R 'distance_field|match_ceres|fr079_support_aware|fr079_matcher_ablation|fr079_offline_slam'
+  -R 'distance_field|match_ceres|fr079_support_aware|fr079_matcher_ablation|fr079_matcher_beam_tools|fr079_offline_slam'
 ~~~
 
 The deterministic 55-frame fixture test checks all five modes at three
@@ -160,6 +160,8 @@ prefix is unique; existing results are never overwritten.
   of subsequent closed-loop divergence.
 - `manifest.json`: source identity, fixed parameters, exact commands,
   run names and limitations.
+- `<tag>.run.log`: complete stdout/stderr for the Ceres run, including
+  legacy invalid-step warnings. The runner prints the last 30 lines on failure.
 - Per-run `.report.json`, `.matches.json`, `.trajectory.json`,
   `.slammap` and the map/reference comparison JSON/PNG if requested.
 
