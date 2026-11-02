@@ -799,6 +799,12 @@ int main(int argc,char** argv) {
       ("scene","Synthetic scene",cxxopts::value<std::string>())
       ("output","New output directory",cxxopts::value<std::string>())
       ("synthetic-independent-loops","Enable synthetic independent loop constraints")
+      ("match-every","Match every N eligible scans (default 1)",cxxopts::value<std::string>())
+      ("field-every","Refresh incremental LiDAR-only EDT every N frames (default 1)",cxxopts::value<std::string>())
+      ("map-stride","Insert every Nth valid LiDAR hit into all maps (default 1)",cxxopts::value<std::string>())
+      ("match-stride","Match every Nth valid LiDAR hit (default 1)",cxxopts::value<std::string>())
+      ("distance-truncation","EDT cutoff in metres (default 0.7)",cxxopts::value<std::string>())
+      ("continuous-cost","Use experimental finite-cost Ceres for both matchers")
       ("h,help","Show help");
   cli.parse_positional({"scene","output"});
   cli.positional_help("<apartment|warehouse> <new-output-directory>");
@@ -811,7 +817,28 @@ int main(int argc,char** argv) {
   try{
     const bool loops=args.count("synthetic-independent-loops")&&
         args["synthetic-independent-loops"].as<bool>();
-
+    FusionMatchOptions options;
+    const auto positive=[&](const char* name,std::size_t fallback,std::size_t max) {
+      return args.count(name)?posint(args[name].as<std::string>(),max):fallback;
+    };
+    options.match_every=positive("match-every",options.match_every,200);
+    options.field_every=positive("field-every",options.field_every,200);
+    options.map_stride=positive("map-stride",options.map_stride,64);
+    options.match_stride=positive("match-stride",options.match_stride,64);
+    options.continuous_cost=args.count("continuous-cost")&&
+        args["continuous-cost"].as<bool>();
+    if(args.count("distance-truncation")) {
+      const auto value=args["distance-truncation"].as<std::string>();
+      std::size_t parsed=0;
+      const double cutoff=std::stod(value,&parsed);
+      if(parsed!=value.size()||!std::isfinite(cutoff)||cutoff<0.2||cutoff>3.0)
+        throw std::invalid_argument("distance-truncation must be finite within [0.2,3.0]");
+      options.distance_truncation_m=cutoff;
+    }
+#ifndef SLAM_FUSION_WITH_CERES
+    if(options.continuous_cost)throw std::invalid_argument(
+        "--continuous-cost requires a Ceres-enabled fusion build");
+#endif
 #ifndef SLAM_FUSION_WITH_GTSAM
     if(loops)throw std::invalid_argument(
       "independent synthetic loop demonstration requires a GTSAM-enabled build");
@@ -821,7 +848,7 @@ int main(int argc,char** argv) {
       slam::fusion::PipelineProfiler::Scope timing(profiler,"synthetic_generation");
       return generate(args["scene"].as<std::string>());
     }();
-    execute(simulation,args["output"].as<std::string>(),loops,profiler);
+    execute(simulation,args["output"].as<std::string>(),loops,profiler,options);
     return 0;
   }catch(const std::exception& e){
     std::cerr<<"offline fusion failed: "<<e.what()<<'\n';
