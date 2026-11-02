@@ -200,6 +200,8 @@ Fr079SlamResult run_fr079_offline_slam(
         frame.support_aware_skipped_hits=candidate.support_aware_skipped_hits;
         frame.support_aware_stages=candidate.support_aware_stages;
         frame.support_aware_accepted_stages=candidate.support_aware_accepted_stages;
+        frame.support_aware_no_safe_stage=candidate.support_aware_no_safe_stage;
+        result.total_support_aware_no_safe_stages+=candidate.support_aware_no_safe_stage?1:0;
         result.total_support_aware_selected_hits+=candidate.support_aware_selected_hits;
         result.total_support_aware_skipped_hits+=candidate.support_aware_skipped_hits;
         result.total_support_aware_stages+=candidate.support_aware_stages;
