@@ -16,6 +16,27 @@ int main() {
   const auto wh = warehouse();
   require(ap.id == "synthetic-apartment-v1" && wh.id == "synthetic-warehouse-v1", "scene names");
   require(wh.walls.size() > ap.walls.size(), "repeat shelving exists");
+  for(const char* name:{"office","loft","atrium",
+                        "industrial","warehouse_asymmetric"}) {
+    const auto sample=named_scene(name);
+    require(sample.id == std::string("synthetic-")+name+"-v1",
+            "exact stable named-scene identifier");
+    require(sample.walls.size() >= 10, "scene has nontrivial wall geometry");
+    bool angled=false;
+    for(const auto& wall:sample.walls) {
+      const auto dx=wall.end.x()-wall.start.x();
+      const auto dy=wall.end.y()-wall.start.y();
+      if(std::abs(dx)>1e-6&&std::abs(dy)>1e-6)angled=true;
+    }
+    require(angled, "new scenes contain non-axis-aligned structure");
+    const auto first=simulate_scan(sample,{{2.0,2.0},0.}, {}, {},
+                                   {2'000'000'000,1,1}, 240);
+    const auto again=simulate_scan(sample,{{2.0,2.0},0.}, {}, {},
+                                   {2'000'000'000,1,1}, 240);
+    for(std::size_t i=0;i<first.beams.size();++i)
+      require(first.beams[i].range_m==again.beams[i].range_m,
+              "new synthetic beam geometry is deterministic");
+  }
   const Timestamp ref{2'000'000'000, 1, 1};
   const Pose2 robot{{2.0, 2.0}, 0.0};
   const auto a = simulate_scan(ap, robot, {}, {}, ref, 360);
