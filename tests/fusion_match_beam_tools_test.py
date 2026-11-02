@@ -19,7 +19,7 @@ def main():
             scenes=["apartment","warehouse"], matchers=["legacy","continuous"],
             match_strides=[1,2,4,8], map_stride=1,
             match_every=1, field_every=1, distance_truncation=.7,
-            lidar_only_bootstrap=False)
+            lidar_only_bootstrap=False, lidar_only_predict_first=False)
         validate(options, parser())
         for scene in options.scenes:
             for mode in options.matchers:
@@ -35,8 +35,21 @@ def main():
                 options.lidar_only_bootstrap=True
                 boot=command(options,scene,mode,4,scene+"-"+mode)
                 assert "--lidar-only-bootstrap" in boot
+                options.lidar_only_predict_first=True
+                predicted=command(options,scene,mode,4,scene+"-"+mode)
+                assert predicted[-2:]==[
+                    "--lidar-only-bootstrap","--lidar-only-predict-first"]
+                options.lidar_only_predict_first=False
                 options.lidar_only_bootstrap=False
                 assert scene in cmd
+        options.lidar_only_predict_first=True
+        try:
+            validate(options,parser())
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("predict-first without bootstrap accepted")
+        options.lidar_only_predict_first=False
         options.map_stride=0
         try:
             validate(options,parser())
