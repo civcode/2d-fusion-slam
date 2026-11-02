@@ -72,6 +72,29 @@ int main() {
   require((ceres_found.map_from_laser.translation-correct.translation).norm()<0.025 &&
           std::abs(ceres_found.map_from_laser.yaw_rad)<0.008,
           "Ceres converges near synthetic truth");
+  const auto continuous=match_ceres_continuous(field,points,seed);
+  require(continuous.status==MatchStatus::accepted,
+          "finite-cost Ceres refines an observable synthetic map");
+  require(continuous.ceres_invalid_residual_evaluations==0,
+          "finite-cost Ceres does not reject unknown EDT samples");
+  require(continuous.diagnostics.source_fingerprint==snap->fingerprint() &&
+          continuous.diagnostics.full_rank&&continuous.diagnostics.overlap>=0.65,
+          "strict observed-only support and rank still gate finite-cost matches");
+  require((continuous.map_from_laser.translation-correct.translation).norm()<0.025 &&
+          std::abs(continuous.map_from_laser.yaw_rad)<0.008,
+          "finite-cost objective preserves correct alignment in known geometry");
+  auto with_unknown=points;
+  with_unknown.emplace_back(50.0,60.0);
+  with_unknown.emplace_back(60.0,50.0);
+  const auto finite_unknown=match_ceres_continuous(field,with_unknown,seed);
+  require(finite_unknown.status==MatchStatus::accepted,
+          "unknown endpoints do not prevent observed geometry alignment");
+  require(finite_unknown.ceres_invalid_residual_evaluations==0 &&
+          finite_unknown.ceres_continuous_outside_evaluations>0,
+          "unknown/off-grid endpoints are counted as finite, not invalid");
+  require((finite_unknown.map_from_laser.translation-correct.translation).norm()<0.03 &&
+          std::abs(finite_unknown.map_from_laser.yaw_rad)<0.01,
+          "unknown endpoints do not bias the synthetic known-region optimum");
   const auto guarded=match_ceres_support_aware(field,points,seed);
   require(guarded.status==MatchStatus::accepted,
           "support-aware Ceres improves supported synthetic geometry");
