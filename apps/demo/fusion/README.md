@@ -34,8 +34,10 @@ scan-matched trajectories) from the run's links. Or open
 Choose `benchmarks/fusion-beams-diverse-phases-001` instead to inspect
 sampling-phase variations. A single sweep fits the existing bounded run
 discovery; do not concatenate multiple large sweeps into one root.
-Older fusion runs without `raw_points_laser` still support SLAM
-replay; regenerate those artifacts to enable the raw view. For non-Docker use, start
+Older fusion runs without `raw_points_laser` can still show a
+**legacy LiDAR view** using available *deskewed* hit samples on their
+scan-matched estimated poses (clearly labeled). Regenerate such runs
+only if raw, non-deskewed sensor hits are needed. For non-Docker use, start
 `fusion_slam_demo --data-dir apps/demo/maps --fusion-dir apps/demo/fusion`.
 The server reads artifacts only; all source files remain outside the
 container image and are mounted read-only.
