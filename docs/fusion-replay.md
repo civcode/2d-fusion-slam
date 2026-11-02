@@ -191,8 +191,11 @@ deskewed hit samples using the `fused_scan_matched` path even when a
 `graph_optimized` map overlay was chosen. The updated browser
 automatically changes **Scan-point trajectory** to **Graph optimized**
 when that occupancy overlay is selected. It also exposes an explicit
-trajectory projection selector for comparisons. Current and cumulative
-hits are then drawn at the graph poses (not the fused poses).
+trajectory projection selector for comparisons. The viewer switches to
+SLAM (deskewed) replay for the graph/gyro/fused map and to raw LiDAR
+replay for the LiDAR-only map, avoiding silent sensor-provenance mismatch.
+Current and cumulative hits are then drawn at the graph poses (not
+the fused poses).
 This changes **visualization only**; it does not modify a saved
 map artifact. `wheel_only` cannot project a fully consistent
 wheel-deskewed scan because only gyro/wheel-deskewed and raw hit samples
