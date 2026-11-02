@@ -308,6 +308,17 @@ run discovery, replay/timeline parity, map fingerprints, corruption and
 symlink refusal. Full workstation verification remains required;
 see [Fusion Replay protocol](docs/fusion-replay.md).
 
+## Tunable synthetic fusion matching
+
+The `slam_offline_fusion` command supports `--match-every`,
+`--field-every`, `--map-stride`, `--match-stride`,
+`--distance-truncation` and `--continuous-cost` in both the apartment
+and warehouse scenes. These options apply to the held-out and LiDAR-only
+matching paths, and map insertion across all generated map variants.
+The [synthetic fusion beam sweep](docs/fusion-matching-options.md) uses
+independently simulated poses and walls for scoring and keeps matching-beam
+selection separate from map-beam insertion. No default is changed.
+
 ## Moving-scan offline gyro/wheel SLAM experiment
 
 The new **C++20 `slam_offline_fusion`** executable connects verified
