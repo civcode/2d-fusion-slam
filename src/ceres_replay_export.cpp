@@ -1,3 +1,4 @@
+#include <cxxopts.hpp>
 // Offline Ceres scan-to-frozen-map diagnostics for the read-only replay.
 // No graph factor, map update, ground truth, or frame calibration is inferred.
 #include "slam/datasets/carmen.hpp"
@@ -123,30 +124,36 @@ void emit(const std::vector<slam::datasets::CarmenLaser>& scans,
 }
 } // namespace
 int main(int argc,char** argv) {
-  if(argc<4 || argc>9) {
-    std::cerr<<"Usage: slam_ceres_replay_export <map.slammap> <log(.gz)> <scan-stride> [--beam-stride N] [--max-scans N] [--verified-fr079-holdout]\n";
-    return 2;
+  cxxopts::Options cli("slam_ceres_replay_export","Frozen-map Ceres replay diagnostics");
+  cli.add_options()
+      ("map","Existing immutable map bundle",cxxopts::value<std::string>())
+      ("log","CARMEN recording",cxxopts::value<std::string>())
+      ("scan-stride","Scan stride",cxxopts::value<std::string>())
+      ("beam-stride","Matching beam stride",cxxopts::value<std::string>())
+      ("max-scans","Maximum scans",cxxopts::value<std::string>())
+      ("verified-fr079-holdout","Require train-only FR079 provenance verification")
+      ("h,help","Print help");
+  cli.parse_positional({"map","log","scan-stride"});
+  cli.positional_help("<map.slammap> <log(.gz)> <scan-stride>");
+  cxxopts::ParseResult args;
+  try{args=cli.parse(argc,argv);}
+  catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
+  if(args.count("help")){std::cout<<cli.help();return 0;}
+  if(!args.count("map")||!args.count("log")||!args.count("scan-stride")) {
+    std::cerr<<cli.help();return 2;
   }
   try {
-    const std::size_t stride=posint(argv[3],128);
-    std::size_t beam_stride=4, max_scans=6000;
-    bool heldout_only=false;
-    for(int arg=4;arg<argc;){
-      if(std::string_view(argv[arg])=="--verified-fr079-holdout") {
-        if(heldout_only)throw std::invalid_argument("duplicate heldout option");
-        heldout_only=true; ++arg; continue;
-      }
-      if(arg+1>=argc)throw std::invalid_argument("missing option value");
-      if(std::string_view(argv[arg])=="--beam-stride")beam_stride=posint(argv[arg+1],64);
-      else if(std::string_view(argv[arg])=="--max-scans")max_scans=posint(argv[arg+1],6000);
-      else throw std::invalid_argument("unknown CLI option");
-      arg+=2;
-    }
-    std::ifstream binary(argv[1],std::ios::binary);
+    const std::size_t stride=posint(args["scan-stride"].as<std::string>(),128);
+    const std::size_t beam_stride=args.count("beam-stride")?
+        posint(args["beam-stride"].as<std::string>(),64):4;
+    const std::size_t max_scans=args.count("max-scans")?
+        posint(args["max-scans"].as<std::string>(),6000):6000;
+    const bool heldout_only=args.count("verified-fr079-holdout")!=0;
+    std::ifstream binary(args["map"].as<std::string>(),std::ios::binary);
     if(!binary)throw std::runtime_error("cannot open frozen map bundle");
     const auto map=slam::mapping::read_map_bundle(binary);
     const auto field=slam::mapping::DistanceField::build(map.snapshot,0.70);
-    const auto raw=source_text(argv[2]);
+    const auto raw=source_text(args["log"].as<std::string>());
     std::istringstream stream(raw);
     std::vector<slam::datasets::CarmenLaser> scans;
     slam::datasets::CarmenReader reader;
