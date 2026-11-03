@@ -7,6 +7,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 export BUILD_JOBS := env_var_or_default("BUILD_JOBS", "28")
 export TEST_JOBS := env_var_or_default("TEST_JOBS", "16")
 export SLAM_DOCKER_JOBS := BUILD_JOBS
+export SLAM_CTEST_JOBS := TEST_JOBS
 
 # Show available commands
 default:
@@ -24,7 +25,7 @@ test: build
 ctest: build
     docker compose run --rm --entrypoint ctest test \
         --test-dir build-docker \
-        --parallel "$BUILD_JOBS" \
+        --parallel "$TEST_JOBS" \
         -R 'offline_fusion|fusion_replay_http|native_web_api' \
         --output-on-failure
 
