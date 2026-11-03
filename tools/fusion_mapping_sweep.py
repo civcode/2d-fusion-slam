@@ -252,7 +252,7 @@ def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
     print("Loop counts can differ across scenes. No simulator truth entered mapping.")
     print("Full-run 5cm exact occupied IoU; original deskew, fixed hit/free evidence.")
     print(f"Evidence levels: {len(rankings)} "
-          f"({'full 3x3' if len(rankings)==9 else 'legacy 2x2'})\\n")
+          f"({'full 3x3' if len(rankings)==9 else 'legacy 2x2'})\n")
     print(f"{'Scene':23} {'loops':>5} {'IoU base':>9} {'IoU comb':>9} "
           f"{'P base':>8} {'P comb':>8} {'mean wall base':>14} {'mean wall comb':>14}")
     for scene in SCENES:
@@ -265,7 +265,7 @@ def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
               f"{fmt(b['precision']):>8} {fmt(a['mean_wall_m']):>14} "
               f"{fmt(b['mean_wall_m']):>14}")
 
-    print("\\nCross-scene macro averages (unweighted; ranked by mean occupied IoU):")
+    print("\nCross-scene macro averages (unweighted; ranked by mean occupied IoU):")
     print(f"{'Rank':>4} {'Evidence':16} {'hit':>5} {'free':>6} "
           f"{'mean IoU':>9} {'mean P':>8} {'worst ΔP':>9} "
           f"{'P loss>5%':>9} {'P loss>10%':>10} "
@@ -281,7 +281,7 @@ def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
               f"{r['iou_regression_scenes']:8} "
               f"{r['wall_distance_regression_scenes']:9} "
               f"{r['precision_guardrail_5pct']:>9}")
-    print("\\nPrecision penalties are relative percentages against each scene's "
+    print("\nPrecision penalties are relative percentages against each scene's "
           "+0.85/-0.40 baseline, not percentage points.")
     print("5% gate = no scene loses more than 5% precision; it is a "
           "diagnostic criterion, NOT automatic promotion.")
