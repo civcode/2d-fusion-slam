@@ -89,6 +89,17 @@ are used and the sweep never overwrites existing runs.
 
 ## Build and test
 
+**Docker builds default to 28 parallel CMake/Ninja compilation jobs** in
+both `docker compose build test demo` and direct `docker build` targets.
+This is stored in `compose.yaml` and both Dockerfile build stages, so no
+shell export is required for future builds. To limit compilation parallelism
+on a smaller machine, use `SLAM_DOCKER_JOBS=8 docker compose build test`.
+
+Build concurrency is separate from CTest execution: Compose defaults
+to two concurrent tests, controlled by `SLAM_CTEST_JOBS`.
+The `Justfile` independently defaults to `BUILD_JOBS=28` and
+`TEST_JOBS=16`. See [Docker development](docs/docker-development.md).
+
 Install CMake 3.25+, C++20 compiler, Eigen3 (3.3+), Ninja (recommended). Network-free smoke tests:
 
 ~~~sh
