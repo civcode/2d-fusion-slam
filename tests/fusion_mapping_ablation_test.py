@@ -89,6 +89,7 @@ class MappingAblationIntegrationTest(unittest.TestCase):
                 self.assertEqual(footprint["source"],"original_baseline_rays")
                 self.assertEqual(footprint["padding_m"],.25)
                 self.assertGreater(footprint["cells"],0)
+                self.assertRegex(footprint["fingerprint"],r"^[0-9]+$")
                 self.assertLessEqual(footprint["cells"],
                                      footprint["total_grid_cells"])
                 self.assertEqual(masks_by_window.setdefault(v["window"],footprint),
