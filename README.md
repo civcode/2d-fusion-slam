@@ -43,6 +43,41 @@ LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not ver
 - **slam_fr079_map_export** (zlib required) builds a map from the training-only FR079 split and writes a verified .slammap bundle plus visualization-only .pgm and .yaml files. The original logged-laser map frame is explicitly **unverified**, not calibrated ground truth.
 - See [map bundle format and usage](docs/map-bundle-v1.md) and [FR079 reproduction](datasets/fr079/README.md).
 
+## Python virtual environment and local analysis
+
+Python analysis scripts should run in a project-local virtual environment.
+From the repository root:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+On Debian/Ubuntu, if Python reports that `ensurepip` is unavailable, install
+the matching `python3-venv` OS package first. The pip upgrade is optional and
+requires package-index access; **`tools/fusion_mapping_ablation.py` uses only
+the Python standard library**, so it needs no `requirements.txt` or third-party
+pip installation. The `.venv/` directory is ignored by Git. When finished,
+run `deactivate`.
+
+To analyze an existing completed synthetic warehouse mapping experiment:
+
+```sh
+mkdir -p reports
+python tools/fusion_mapping_ablation.py \
+  --run apps/demo/fusion/warehouse_asymmetric-map-ablation-001 \
+  --csv reports/warehouse_asymmetric_mapping_ablation_summary.csv
+```
+
+The Docker test container often writes generated fusion run directories
+as `root` on the host. Treat those run folders as **read-only inputs** and
+save analysis CSVs to a host-user-owned directory such as `reports/`, not
+inside `apps/demo/fusion/<run>/`, to avoid `PermissionError`. The CSV is
+an optional output; the summary prints to the terminal even without it.
+See [fixed-graph mapping ablation](docs/fusion-mapping-ablation.md) for
+the full run and scoring protocol.
+
 ## Build and test
 
 Install CMake 3.25+, C++20 compiler, Eigen3 (3.3+), Ninja (recommended). Network-free smoke tests:
