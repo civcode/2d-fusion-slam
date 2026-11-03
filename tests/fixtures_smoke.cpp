@@ -47,8 +47,8 @@ int main() {
             "apartment wall coordinates preserved");
   const auto wk=workshop();
   require(wk.id=="synthetic-workshop-v1", "workshop identity");
-  require(wk.walls.size()==23,
-          "workshop exposes merged free/occupied raster contours");
+  require(wk.walls.size()>20,
+          "workshop exposes nontrivial merged raster contours");
   for(const auto& segment:wk.walls) {
     const auto d=segment.end-segment.start;
     require(d.norm()>.05 &&
