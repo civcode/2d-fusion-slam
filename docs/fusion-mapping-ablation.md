@@ -141,8 +141,10 @@ Unknown truth-wall cells **inside** the footprint continue to count as
 misses. Region known coverage divides by footprint cells, not full-grid
 cells. Region tolerance F1 at 10/25/50 cm is likewise computed on
 the same masked truth and prediction, not globally. The `region_footprint`
-object in every variant records the mask definition, radius and number
-of eligible cells; `region_map.counts.truth_wall` records the relevant
+object in every variant records the mask definition, radius, number
+of eligible cells and deterministic decimal FNV-1a mask fingerprint
+(for repeatability checks, not cryptographic authentication);
+`region_map.counts.truth_wall` records the relevant
 reference-wall denominator.
 
 Because the robot may revisit the same space, early and late
@@ -227,7 +229,20 @@ The lightweight checks run without the heavy 24-map integration:
 ```sh
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R '^(map_accuracy|fusion_mapping_ablation_tools)$'
+  -R '^(map_accuracy|fusion_mapping_ablation_tools|fusion_mapping_sweep_tools)
+```
+
+The separate native test builds and scores all 24 maps:
+
+```sh
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R '^fusion_mapping_ablation$'
+```
+
+No GitHub Actions are configured or dispatched by this experiment.
+Recorded FR079 inputs are outside the provenance scope of these scores.
+
 ```
 
 The separate native test builds and scores all 24 maps:
