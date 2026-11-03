@@ -64,6 +64,11 @@ class MappingAblationIntegrationTest(unittest.TestCase):
             self.assertTrue(
                 {v["evidence"] for v in data["variants"]} ==
                 {"baseline","stronger_hit","gentler_free","combined"})
+            masks_by_window={}
+            self.assertEqual(data["region_padding_m"],.25)
+            self.assertEqual(
+                data["region_mask_source"],
+                "original_deskew_baseline_ray_observation_padded")
             for v in data["variants"]:
                 self.assertEqual(v["map"]["format"],"FUSMAPACC1")
                 self.assertEqual(v["map"]["reference_scene"],new_report["scene"])
@@ -80,6 +85,33 @@ class MappingAblationIntegrationTest(unittest.TestCase):
                     values=[s[field] for s in v["wall_tolerance_scores"]]
                     self.assertTrue(all(0<=x<=1 for x in values))
                     self.assertEqual(values,sorted(values))
+                footprint=v["region_footprint"]
+                self.assertEqual(footprint["source"],"original_baseline_rays")
+                self.assertEqual(footprint["padding_m"],.25)
+                self.assertGreater(footprint["cells"],0)
+                self.assertLessEqual(footprint["cells"],
+                                     footprint["total_grid_cells"])
+                self.assertEqual(masks_by_window.setdefault(v["window"],footprint),
+                                 footprint,
+                                 "evidence/deskew changes must use same spatial mask")
+                local=v["region_map"]
+                self.assertEqual(local["format"],"FUSMAPACC1")
+                self.assertEqual(local["reference_scene"],new_report["scene"])
+                self.assertEqual(local["map_fingerprint"],
+                                 v["map"]["map_fingerprint"])
+                self.assertEqual(
+                    local["counts"]["known"]+local["counts"]["unknown"],
+                    footprint["cells"])
+                self.assertGreater(local["counts"]["truth_wall"],0)
+                self.assertLessEqual(local["counts"]["truth_wall"],
+                                     footprint["cells"])
+                for value in ("precision","recall","f1"):
+                    scores=[t[value] for t in v["region_wall_tolerance_scores"]]
+                    self.assertEqual(scores,sorted(scores))
+                self.assertEqual(
+                    [round(t["tolerance_m"],2)
+                     for t in v["region_wall_tolerance_scores"]],
+                    [.10,.25,.50])
                 artifact=experiment/v["map_path"]
                 self.assertTrue(artifact.is_file(),str(artifact))
                 self.assertGreater(artifact.stat().st_size,100)
