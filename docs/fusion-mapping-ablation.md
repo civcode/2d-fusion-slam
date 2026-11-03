@@ -29,7 +29,7 @@ trajectory. The native experiment checks that corrected trajectory samples
 still agree with the GTSAM pose at every scan midpoint and refuses missing or
 untrusted beam timing.
 
-All 24 reconstructions use exactly the same graph poses. No mapping variant
+All 54 reconstructions use exactly the same graph poses. No mapping variant
 can update the pose graph. The reference truth is accessed only **after**
 each map is fully constructed, by the scoring API.
 
