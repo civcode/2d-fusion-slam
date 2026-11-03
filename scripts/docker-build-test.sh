@@ -45,7 +45,7 @@ cmake -S /workspace -B /build -G Ninja \
   -DSLAM_ENABLE_CATCH2=ON -DSLAM_REQUIRE_SYSTEM_CATCH2=ON \
   -DSLAM_BUILD_NATIVE_DEMO=ON -DSLAM_REQUIRE_NATIVE_DEMO=ON \
   -DFETCHCONTENT_FULLY_DISCONNECTED=ON
-cmake --build /build --parallel "${SLAM_DOCKER_JOBS:-2}"
+cmake --build /build --parallel "${SLAM_DOCKER_JOBS:-28}"
 '
 if [[ "$action" == test ]]; then
   script+='for test in match_ceres core_catch2 pose_graph offline_map_promotion map_registry map_bundle web_ui_unit ceres_replay_native ceres_heldout_native demo_fixture_native native_web_api native_viewer_json offline_fusion; do
@@ -54,7 +54,7 @@ if [[ "$action" == test ]]; then
     exit 1
   fi
 done
-ctest --test-dir /build --output-on-failure --parallel "${SLAM_DOCKER_JOBS:-2}" --timeout 120
+ctest --test-dir /build --output-on-failure --parallel "${SLAM_CTEST_JOBS:-2}" --timeout 120
 '
 fi
-exec docker "${args[@]}" --env "SLAM_DOCKER_JOBS=${SLAM_DOCKER_JOBS:-2}" "$image" bash -c "$script"
+exec docker "${args[@]}" --env "SLAM_DOCKER_JOBS=${SLAM_DOCKER_JOBS:-28}" --env "SLAM_CTEST_JOBS=${SLAM_CTEST_JOBS:-2}" "$image" bash -c "$script"
