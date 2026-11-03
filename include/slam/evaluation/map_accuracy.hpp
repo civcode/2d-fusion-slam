@@ -67,6 +67,28 @@ struct WallToleranceScore {
     const mapping::MapBundle& generated, const fixtures::Scene& scene,
     const MapAccuracyOptions& options = {});
 
+// Spatial comparison footprint derived only from an earlier reconstructed
+// baseline map's ray-observed cells, padded by a fixed metric margin. No
+// ground-truth geometry is used to select cells. The same footprint must
+// be reused for every mapping variant within a frame window.
+[[nodiscard]] std::vector<std::uint8_t> observed_footprint_mask(
+    const mapping::MapBundle& baseline, double padding_m = 0.25);
+
+// Compute exactly the usual occupancy metrics and wall-distance statistics,
+// but restrict BOTH prediction and reference to the same externally supplied
+// evaluation region. An unknown reference wall inside the footprint is still
+// a missed wall. Coverage is relative to region cells, not the whole grid.
+// Existing whole-scene scoring is intentionally unchanged.
+[[nodiscard]] MapAccuracyReport evaluate_map_accuracy_region(
+    const mapping::MapBundle& generated, const fixtures::Scene& scene,
+    const std::vector<std::uint8_t>& region,
+    const MapAccuracyOptions& options = {});
+
+[[nodiscard]] std::vector<WallToleranceScore> evaluate_wall_tolerances_region(
+    const mapping::MapBundle& generated, const fixtures::Scene& scene,
+    const std::vector<std::uint8_t>& region,
+    const std::vector<double>& tolerances_m = {0.10, 0.25, 0.50});
+
 // Stable JSON stdout/report format FUSMAPACC1; missing metrics serialize as
 // null, not zero/infinity. The scene ID is emitted as exact source provenance.
 void write_map_accuracy_json(std::ostream& out, const MapAccuracyReport& report,
