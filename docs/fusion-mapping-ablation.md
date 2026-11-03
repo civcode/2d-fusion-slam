@@ -72,10 +72,18 @@ Every run with `--mapping-ablation` produces:
   **not** included in the regular Map Explorer's method allowlist.
 
 ```sh
+# With the project virtual environment activated (see the root README):
+mkdir -p reports
 python tools/fusion_mapping_ablation.py \
   --run apps/demo/fusion/warehouse_asymmetric-map-ablation-001 \
-  --csv apps/demo/fusion/warehouse_asymmetric-map-ablation-001/mapping_ablation_summary.csv
+  --csv reports/warehouse_asymmetric_mapping_ablation_summary.csv
 ```
+
+The Docker container may create run directories owned by root on the host.
+Use the run directory only as input and write CSV exports into a
+host-user-writable directory (such as `reports/`), avoiding permission
+errors. The report uses only Python's standard library; no pip dependencies
+are needed for this analysis.
 
 The reader verifies the original graph map fingerprint equals the full-run
 original-deskew, baseline-odds reconstruction. Its local checks reject
@@ -123,25 +131,20 @@ of occupied cells is not automatically better reconstruction.
 
 ### Local checks
 
+The lightweight checks run without the heavy 24-map integration:
+
 ```sh
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R '^(map_accuracy|fusion_mapping_ablation_tools)
+  -R '^(map_accuracy|fusion_mapping_ablation_tools)$'
 ```
 
-No GitHub Actions are configured or dispatched by this experiment.
-Recorded FR079 inputs are outside the provenance scope of these scores.
+The separate native test builds and scores all 24 maps:
 
-
-# Separate, longer native experiment (24 maps, possibly several minutes):
+```sh
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R '^fusion_mapping_ablation
-```
-
-No GitHub Actions are configured or dispatched by this experiment.
-Recorded FR079 inputs are outside the provenance scope of these scores.
-
+  -R '^fusion_mapping_ablation$'
 ```
 
 No GitHub Actions are configured or dispatched by this experiment.
