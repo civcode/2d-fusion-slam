@@ -78,14 +78,22 @@ an optional output; the summary prints to the terminal even without it.
 See [fixed-graph mapping ablation](docs/fusion-mapping-ablation.md) for
 the full run and scoring protocol.
 
-The same documentation now includes an **opt-in seven-scene mapping sweep**:
-`tools/fusion_mapping_sweep.py run` executes the fixed LiDAR-loop/Ceres
-configuration locally for apartment, warehouse, asymmetric warehouse,
-office, loft, atrium, and industrial scenes, while
-`tools/fusion_mapping_sweep.py summarize` writes separate full-scene and
-early/late **observation-footprint region-masked** CSV comparisons.
-The original occupancy settings remain the default; no GitHub Actions
-are used and the sweep never overwrites existing runs.
+The same documentation now includes an **opt-in seven-scene 3×3 mapping
+evidence sweep**: `tools/fusion_mapping_sweep.py run` uses the same
+LiDAR-loop/Ceres configuration for apartment, warehouse, asymmetric
+warehouse, office, loft, atrium and industrial scenes. Each scene's
+fixed graph poses are tested with all nine combinations of hit
+log-odds **+0.85/+1.00/+1.20** and free log-odds
+**−0.40/−0.30/−0.20**. The `summarize` command writes 63 full-scene
+rows, 189 early/late observation-footprint-masked rows and a
+**nine-setting cross-scene IoU ranking** with explicit worst-scene
+precision penalties (`--ranking-csv`). Old four-setting reports remain
+readable. No production mapping defaults are changed, no runs are
+overwritten, and no GitHub Actions are used.
+
+Run the sweep with a **new prefix** (`mapping-grid-001`) to avoid
+reusing the earlier four-setting experiment; see
+[the full Docker, venv and analysis commands](docs/fusion-mapping-ablation.md#seven-scene-generalization-sweep-same-detector-fixed-poses-per-scene).
 
 ## Build and test
 
