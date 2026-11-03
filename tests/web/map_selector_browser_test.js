@@ -145,7 +145,8 @@ async function main(){
   const newScenes=[
     ["office","Office"],["loft","Loft"],["atrium","Atrium"],
     ["industrial","Industrial"],
-    ["warehouse_asymmetric","Asymmetric warehouse"]
+    ["warehouse_asymmetric","Asymmetric warehouse"],
+    ["apartment_explore","Apartment Explore"],["workshop","Workshop"]
   ];
   const extras=newScenes.map(([scene])=>({
     id:"fusion@"+scene+"-continuous-s01@lidar_only",
@@ -154,7 +155,7 @@ async function main(){
     run_id:scene+"-continuous-s01",method:"lidar_only"
   }));
   const expanded=a.groupMaps([...a.listed,...extras]);
-  assert.equal(expanded.groups.length,8);
+  assert.equal(expanded.groups.length,10);
   for(const [scene,label] of newScenes){
     const run=expanded.groups.find(g=>g.run===scene+"-continuous-s01");
     assert.equal(run.title,label);

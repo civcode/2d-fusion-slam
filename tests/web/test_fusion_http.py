@@ -130,9 +130,12 @@ class FusionHTTP(unittest.TestCase):
                          replay["frames"][last])
 
     def test_new_scene_replays_and_maps(self):
-        # Representative short/large new fixtures reach the same endpoint
-        # contract as apartment, including independently checked map metadata.
-        for scene in ("office", "warehouse_asymmetric"):
+        # Check historical scenes AND the two diverse_v2 additions. A stale
+        # viewer allowlist previously admitted these into run discovery but
+        # rejected GET /api/fusion/runs/<id> with HTTP 422, also silently
+        # omitting their maps from Map Explorer.
+        for scene in ("office", "warehouse_asymmetric",
+                      "apartment_explore", "workshop"):
             run_id = "web_" + scene
             folder = self.root / run_id
             try:
@@ -140,7 +143,7 @@ class FusionHTTP(unittest.TestCase):
                     [self.cli, scene, str(folder), "--match-stride", "4",
                      "--match-offset", "1", "--lidar-only-bootstrap",
                      "--lidar-only-predict-first"],
-                    capture_output=True, text=True, timeout=180)
+                    capture_output=True, text=True, timeout=360)
                 self.assertEqual(generated.returncode, 0, generated.stderr)
                 base = "/api/fusion/runs/" + run_id
                 report = self.get_json(base)
@@ -160,6 +163,12 @@ class FusionHTTP(unittest.TestCase):
                                     for item in listing))
                 metadata = self.get_json(base + "/maps/lidar_only")
                 self.assertEqual(metadata["source_id"], report["scene"])
+                self.assertEqual(metadata["fingerprint"],
+                                 str(report["results"]["lidar_only"]["map"]["map_fingerprint"]))
+                # Explorer and replay must resolve to the same verified map.
+                explorer = "/api/maps/" + quote(
+                    "fusion@" + run_id + "@lidar_only", safe="")
+                self.assertEqual(self.get_json(explorer), metadata)
                 with request.urlopen(self.base + base + "/maps/lidar_only/image.png") as img:
                     self.assertEqual(img.read(8), b"\x89PNG\r\n\x1a\n")
             finally:

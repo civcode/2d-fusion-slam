@@ -71,9 +71,10 @@ bool is_plain_directory(const std::filesystem::path& path) {
 bool valid_scene(const std::string& scene) {
   // Explicitly recognized synthetic fixtures only. Never trust arbitrary
   // scene IDs from untrusted run directories.
-  static constexpr std::array<std::string_view,7> scenes{
-    "synthetic-apartment-v1", "synthetic-warehouse-v1",
-    "synthetic-office-v1", "synthetic-loft-v1",
+  static constexpr std::array<std::string_view,9> scenes{
+    "synthetic-apartment-v1", "synthetic-apartment_explore-v1",
+    "synthetic-warehouse-v1", "synthetic-office-v1",
+    "synthetic-workshop-v1", "synthetic-loft-v1",
     "synthetic-atrium-v1", "synthetic-industrial-v1",
     "synthetic-warehouse_asymmetric-v1"};
   return std::find(scenes.begin(),scenes.end(),std::string_view{scene})!=scenes.end();

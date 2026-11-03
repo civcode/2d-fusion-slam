@@ -75,7 +75,8 @@ function fusionIdentity(item) {
 function sceneTitle(scene,run) {
   const id=/^synthetic-([a-z_]+)-v1$/.exec(String(scene||""));
   const known={
-    apartment:"Apartment",warehouse:"Warehouse",office:"Office",
+    apartment:"Apartment",apartment_explore:"Apartment Explore",
+    warehouse:"Warehouse",office:"Office",workshop:"Workshop",
     loft:"Loft",atrium:"Atrium",industrial:"Industrial",
     warehouse_asymmetric:"Asymmetric warehouse"
   };
