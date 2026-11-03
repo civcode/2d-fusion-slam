@@ -21,7 +21,7 @@ def run(scene, output, *flags):
 
 class MappingAblationIntegrationTest(unittest.TestCase):
     @unittest.skipIf(EXE is None, "provide slam_offline_fusion executable")
-    def test_fixed_graph_24_map_reconstructions(self):
+    def test_fixed_graph_54_map_reconstructions(self):
         with tempfile.TemporaryDirectory() as work:
             root=pathlib.Path(work)
             baseline=root/"baseline"
