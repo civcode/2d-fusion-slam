@@ -1113,27 +1113,52 @@ void export_mapping_ablation(const std::filesystem::path& directory,
   const std::array<Window,3> windows{{
       {"full",0,n},{"early",0,cut},{"late",cut,n}
   }};
+  // A single visibility footprint per frame-window is derived from the
+  // ORIGINAL scan rays, independently of hit/free odds and corrected
+  // re-deskew. All eight mapping variants in a window share this same
+  // padded spatial mask. Ground-truth walls play no part in its selection.
+  constexpr double kRegionPaddingM=.25;
+  std::array<slam::mapping::MapBundle,3> baseline_maps;
+  std::array<std::vector<std::uint8_t>,3> footprints;
+  std::array<std::size_t,3> footprint_counts{};
+  for(std::size_t w=0;w<windows.size();++w) {
+    Mask included(n,false);
+    for(std::size_t i=windows[w].begin;i<windows[w].end;++i)
+      included[i]=true;
+    baseline_maps[w]=make_map(sim,graph.poses,p.gyro_deskewed,
+                              included,options);
+    footprints[w]=slam::evaluation::observed_footprint_mask(
+        baseline_maps[w],kRegionPaddingM);
+    footprint_counts[w]=std::count(footprints[w].begin(),
+                                   footprints[w].end(),std::uint8_t{1});
+  }
   out<<"{\n\"format\":\"FUSMAPABL1\","
+     <<"\n\"region_mask_source\":\"original_deskew_baseline_ray_observation_padded\","
+     <<"\n\"region_padding_m\":"<<kRegionPaddingM<<","
      <<"\n\"source\":\"graph_optimized_fixed_estimated_poses\","
      <<"\n\"scene\":\""<<sim.scene.id<<"\","
      <<"\n\"reference_usage\":\"posthoc_scoring_only\","
      <<"\n\"original_trajectory_and_maps_unchanged\":true,"
      <<"\n\"redeskew_model\":\"interpolated_graph_to_gyro_wheel_map_frame_corrections_over_high_rate_fused_track\","
-     <<"\n\"region_note\":\"early_and_late_maps_are_scored_against_full_scene_truth_not_region_specific_truth\","
+     <<"\n\"region_note\":\"full_scene_metrics_retained;_region_map_metrics_are_spatially_masked_to_fixed_observation_footprint\","
      <<"\n\"variants\":[";
   bool first=true;
   for(std::size_t method=0;method<2;++method) {
     const Points& scans=method==0?p.gyro_deskewed:redeskewed;
     const char* deskew=method==0?"gyro_wheel_original":"graph_corrected_motion_model";
-    for(const auto& window:windows) {
+    for(std::size_t w=0;w<windows.size();++w) {
+      const auto& window=windows[w];
       Mask included(n,false);
       for(std::size_t i=window.begin;i<window.end;++i)included[i]=true;
       for(const auto& odds:evidence) {
         auto grid=sim.grid;
         grid.hit_log_odds=odds.hit;
         grid.free_log_odds=odds.free;
-        const auto map=make_map(sim,graph.poses,scans,included,options,
-                                nullptr,&grid);
+        // Reuse the authoritative original-deskew baseline map for the
+        // exact-fingerprint regression as well as the region footprint.
+        const auto map=(method==0&&odds.hit==.85&&odds.free==-.4)?
+            baseline_maps[w]:
+            make_map(sim,graph.poses,scans,included,options,nullptr,&grid);
         const std::string id=std::string(window.id)+"_"+deskew+"_"+odds.id;
         // Export each reconstructed occupancy map independently for
         // inspection with existing FUSMAP2D-compatible tooling.
@@ -1142,6 +1167,11 @@ void export_mapping_ablation(const std::filesystem::path& directory,
         const auto score=slam::evaluation::evaluate_map_accuracy(map,sim.scene);
         const auto tolerant=slam::evaluation::evaluate_wall_tolerances(
             map,sim.scene);
+        const auto region_score=slam::evaluation::evaluate_map_accuracy_region(
+            map,sim.scene,footprints[w]);
+        const auto region_tolerant=
+            slam::evaluation::evaluate_wall_tolerances_region(
+                map,sim.scene,footprints[w]);
         if(!first)out<<",";
         first=false;
         out<<"\n{\"id\":\""<<id<<"\","
@@ -1160,6 +1190,23 @@ void export_mapping_ablation(const std::filesystem::path& directory,
         for(const auto& m:tolerant) {
           if(!first_distance)out<<",";
           first_distance=false;
+          out<<"{\"tolerance_m\":"<<m.tolerance_m
+             <<",\"precision\":"<<m.predicted_near_reference
+             <<",\"recall\":"<<m.reference_near_predicted
+             <<",\"f1\":"<<m.symmetric_f1<<"}";
+        }
+        out<<"],\"region_footprint\":{\"source\":\"original_baseline_rays\","
+           <<"\"padding_m\":"<<kRegionPaddingM<<","
+           <<"\"cells\":"<<footprint_counts[w]<<","
+           <<"\"total_grid_cells\":"<<footprints[w].size()<<"},"
+           <<"\"region_map\":";
+        slam::evaluation::write_map_accuracy_json(
+            out,region_score,sim.scene);
+        out<<",\"region_wall_tolerance_scores\":[";
+        bool first_region_distance=true;
+        for(const auto& m:region_tolerant) {
+          if(!first_region_distance)out<<",";
+          first_region_distance=false;
           out<<"{\"tolerance_m\":"<<m.tolerance_m
              <<",\"precision\":"<<m.predicted_near_reference
              <<",\"recall\":"<<m.reference_near_predicted
