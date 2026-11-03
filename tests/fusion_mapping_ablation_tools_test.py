@@ -80,6 +80,7 @@ class MappingAblationToolsTest(unittest.TestCase):
                             "padding_m": .25,
                             "cells": covered,
                             "total_grid_cells": 5000,
+                            "fingerprint": str(covered * 789 + 123),
                         }
                         variant["region_map"] = {
                             **variant["map"],
@@ -134,6 +135,12 @@ class MappingAblationToolsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "footprint changed"):
                 fusion_mapping_ablation.load(run)
             payload["variants"][1]["region_footprint"]["cells"] = 2400
+            payload["variants"][1]["region_footprint"]["fingerprint"] = "987654321"
+            (run / "mapping_ablation.json").write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "footprint changed"):
+                fusion_mapping_ablation.load(run)
+            payload["variants"][1]["region_footprint"]["fingerprint"] = str(
+                2400 * 789 + 123)
             payload["variants"][0]["region_map"]["counts"]["known"] = 100
             (run / "mapping_ablation.json").write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "mask cardinality"):
