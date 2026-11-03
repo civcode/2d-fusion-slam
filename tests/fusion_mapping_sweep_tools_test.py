@@ -57,7 +57,7 @@ class SevenSceneSweepTest(unittest.TestCase):
             report=json.loads(broken.read_text())
             report["match_stride"]=2
             broken.write_text(json.dumps(report))
-            with self.assertRaisesRegex(ValueError,"estimator settings changed"):
+            with self.assertRaisesRegex(ValueError,"unexpected sweep configuration"):
                 sweep.collect(root,prefix)
             report["match_stride"]=1
             report["lidar_loop_closure"]=False
