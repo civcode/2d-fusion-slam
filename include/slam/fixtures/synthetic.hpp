@@ -31,6 +31,10 @@ struct Scan {
 };
 
 [[nodiscard]] Scene apartment();
+// New suite alias: unchanged Apartment floorplan with a distinct route and identity.
+[[nodiscard]] Scene apartment_explore();
+// Native contour representation of the existing raster-based demo workshop.
+[[nodiscard]] Scene workshop();
 [[nodiscard]] Scene warehouse();
 [[nodiscard]] Scene office();
 [[nodiscard]] Scene loft();

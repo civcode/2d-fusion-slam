@@ -19,9 +19,9 @@ from fusion_mapping_ablation_tools_test import MappingAblationToolsTest
 
 class SevenSceneSweepTest(unittest.TestCase):
     def populated(self, root: Path, prefix="mapping-eval-001", *,
-                  grid=False):
+                  grid=False, suite="legacy_v1"):
         fixture = MappingAblationToolsTest()
-        for scene in sweep.SCENES:
+        for scene in sweep.suite_scenes(suite):
             fixture.fixture(root / f"{prefix}-{scene}",
                             scene=scene, region=True, grid=grid)
         return prefix
@@ -114,6 +114,68 @@ class SevenSceneSweepTest(unittest.TestCase):
                 target,scene="industrial",region=True,grid=False)
             with self.assertRaisesRegex(ValueError,"mixed legacy"):
                 sweep.collect(root,prefix)
+
+    def test_revised_suite_is_explicit_and_historic_suite_is_unchanged(self):
+        self.assertEqual(len(sweep.SCENES), 7)
+        self.assertIn("office", sweep.SCENES)
+        self.assertIn("apartment", sweep.SCENES)
+        revised = sweep.suite_scenes("diverse_v2")
+        self.assertEqual(len(revised), 7)
+        self.assertIn("workshop", revised)
+        self.assertIn("apartment_explore", revised)
+        self.assertNotIn("office", revised)
+        self.assertNotIn("apartment", revised)
+        with self.assertRaisesRegex(ValueError, "unknown benchmark suite"):
+            sweep.suite_scenes("future")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = self.populated(root, grid=True, suite="diverse_v2")
+            full = root/"diverse-full.csv"
+            regions = root/"diverse-regions.csv"
+            ranking = root/"diverse-ranking.csv"
+            with contextlib.redirect_stdout(io.StringIO()):
+                sweep.summarize(root, prefix, full, regions, ranking,
+                                suite="diverse_v2")
+            with full.open() as f:
+                rows = list(csv.DictReader(f))
+            with regions.open() as f:
+                masked = list(csv.DictReader(f))
+            with ranking.open() as f:
+                ranked = list(csv.DictReader(f))
+            self.assertEqual(len(rows), 63)
+            self.assertEqual(len(masked), 189)
+            self.assertEqual(len(ranked), 9)
+            self.assertEqual({row["scene"] for row in rows}, set(revised))
+            self.assertTrue(all(row["suite"] == "diverse_v2"
+                                for row in rows + masked + ranked))
+            with self.assertRaises((FileNotFoundError, ValueError)):
+                sweep.collect(root, prefix)  # legacy is the default
+            # A mislabeled scene must never silently enter the new ranking.
+            report_path = root/f"{prefix}-workshop"/"fusion_report.json"
+            report = json.loads(report_path.read_text())
+            report["scene"] = "synthetic-office-v1"
+            report_path.write_text(json.dumps(report))
+            with self.assertRaisesRegex(ValueError, "scene/run mismatch"):
+                sweep.collect(root, prefix, suite="diverse_v2")
+
+    def test_revised_run_commands_do_not_include_office(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            binary=root/"slam_offline_fusion"
+            binary.write_text("fake binary")
+            with mock.patch.object(sweep.subprocess, "run") as native:
+                sweep.run_all(binary, root, "mapping-grid-diverse-v2-001",
+                              suite="diverse_v2")
+            self.assertEqual(native.call_count, 7)
+            command_names = [Path(c.args[0][2]).name for c in
+                             native.call_args_list]
+            self.assertTrue(any("workshop" in name for name in command_names))
+            self.assertTrue(any("apartment_explore" in name
+                                for name in command_names))
+            self.assertFalse(any(name.endswith("-office")
+                                 for name in command_names))
+            self.assertTrue(all("--mapping-ablation" in c.args[0]
+                                for c in native.call_args_list))
 
     def test_refuse_partial_or_changed_detector(self):
         with tempfile.TemporaryDirectory() as tmp:

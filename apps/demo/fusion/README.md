@@ -44,13 +44,15 @@ container image and are mounted read-only.
 
 For the **fixed-graph occupancy mapping experiment**, generate a new
 warehouse-asymmetric run with `--lidar-loop-closure --mapping-ablation`.
-This produces 24 additional mapping-only FUSMAP2D files under
+This produces 54 additional mapping-only FUSMAP2D files (the complete 3×3 evidence grid) under
 `mapping_ablation/` and a `mapping_ablation.json` scorecard, while
 preserving the regular replay and graph map. The native web UI does not
 list the experimental subdirectory as ordinary map methods; use
 `python tools/fusion_mapping_ablation.py --run <run-folder>` to inspect
 the exact IoU, 10/25/50 cm wall-distance agreement and early-versus-late
-scan contribution comparisons. Full instructions:
+scan contribution comparisons. A revised `diverse_v2` suite additionally includes a native Workshop scene
+and an exploratory Apartment route; the old Office scene is retained as a
+legacy benchmark. Full instructions:
 [fixed-graph mapping ablation](../../../docs/fusion-mapping-ablation.md).
 
 Only direct child directories named with ASCII letters, digits, hyphens or

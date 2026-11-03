@@ -237,6 +237,103 @@ The sweep uses only Python's standard library and writes CSVs
 to the host-user-owned `reports/` directory, not into Docker-created
 root-owned run directories.
 
+### Revised trajectory-diverse suite (opt-in `diverse_v2`)
+
+The completed `mapping-grid-001` results belong to the historical
+`legacy_v1` seven-scene suite. The old `apartment` and `office`
+fixtures, old run IDs, and four-/nine-setting readers stay unchanged.
+The new `diverse_v2` suite replaces **Office** with **Workshop** and
+replaces the original confined Apartment trajectory with the versioned
+`apartment_explore` scene. The unchanged remaining five scenes are
+warehouse, warehouse_asymmetric, loft, atrium and industrial.
+
+The Apartment reference walls are bit-for-bit identical to the legacy
+layout. Its new periodic, arc-length-resampled cubic B-spline drives
+through **all three door openings**, tours the upper-left, central and
+right-side spaces, revisits observations and closes its path. This
+trajectory is deliberately assigned a new scene ID
+(`synthetic-apartment_explore-v1`) to prevent old/new mixing. The
+stationary calibration and biased gyro/wheel model remain unchanged.
+The generated path is checked against wall and laser clearances at
+20 ms intervals and must have bounded speed and yaw rate, visit four
+separate areas, and traverse all three doorways.
+
+The Workshop is derived from the **existing synthetic Web UI fixture**
+(`apps/demo/web/example.py` and `apps/demo/web/replay.py`), not from
+FR079 or another physical recording. It converts the fixture's 10 cm
+**known-free/occupied cell interfaces** to merged line segments at their
+actual grid boundaries; unknown cells are not treated as free.
+This is a geometric surface approximation of the displayed raster,
+not a claim that the original schematic replay contained laser timing
+or a Ceres pose graph. A smoothed, collision-tested version of the
+Workshop path is sampled as a native **240-beam, 100 ms moving scan**
+with exact synthetic acquisition timestamps and the same gyro/wheel
+biases, original and graph-corrected deskew options, GTSAM loop
+detector and **5 cm output/scoring grid** as other suite scenes.
+Workshop has scene ID `synthetic-workshop-v1`.
+
+To run the **revised** suite after native validation, use a new prefix
+and explicit `--suite diverse_v2`. The script still refuses existing
+output directories; the old suite is the default for backward
+compatibility:
+
+```sh
+git pull --ff-only
+docker compose build test
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R '^(fixtures_smoke|fusion_diverse_routes|fusion_mapping_sweep_tools|fusion_mapping_ablation)
+Docker builds default to **28 parallel compilation jobs**; CTest
+concurrency is configured separately. Python score readers use only
+the standard library and work in the repository's virtual environment.
+
+Fast Python report and C++ scoring regressions:
+
+```sh
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R '^(map_accuracy|fusion_mapping_ablation_tools|fusion_mapping_sweep_tools)$'
+```
+
+The heavier native integration test reconstructs all **54** maps and
+checks that the original GTSAM poses and map fingerprints are unchanged:
+
+```sh
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R '^fusion_mapping_ablation$'
+```
+
+No GitHub Actions are configured or dispatched by this experiment.
+Recorded FR079 inputs are outside the provenance scope of these scores.
+
+
+mkdir -p apps/demo/fusion reports
+docker compose run --rm \
+  -v "$PWD/apps/demo/fusion:/output" \
+  --entrypoint python3 test \
+  tools/fusion_mapping_sweep.py run \
+  --suite diverse_v2 \
+  --binary ./build-docker/slam_offline_fusion \
+  --runs-dir /output --prefix mapping-grid-diverse-v2-001
+
+python tools/fusion_mapping_sweep.py summarize \
+  --suite diverse_v2 \
+  --runs-dir apps/demo/fusion --prefix mapping-grid-diverse-v2-001 \
+  --csv reports/mapping-grid-diverse-v2-001-full.csv \
+  --region-csv reports/mapping-grid-diverse-v2-001-regions.csv \
+  --ranking-csv reports/mapping-grid-diverse-v2-001-ranking.csv
+```
+
+The revised outputs contain 63 full, 189 region and nine ranked
+evidence results, with `suite=diverse_v2` in their CSVs. The
+`legacy_v1` CSV columns and original 7-scene ranking are preserved.
+Compare settings **within the revised suite**, not per-row against
+`mapping-grid-001`: Apartment pose history and Workshop scene geometry
+are different, so changed IoU cannot be attributed to log-odds alone.
+No revised scores exist until this new native run is executed. No
+production setting is promoted by the suite or guardrails.
+
 ### Local checks
 
 Docker builds default to **28 parallel compilation jobs**; CTest

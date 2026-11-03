@@ -88,7 +88,11 @@ log-odds **+0.85/+1.00/+1.20** and free log-odds
 rows, 189 early/late observation-footprint-masked rows and a
 **nine-setting cross-scene IoU ranking** with explicit worst-scene
 precision penalties (`--ranking-csv`). Old four-setting reports remain
-readable. No production mapping defaults are changed, no runs are
+readable. The explicit `--suite diverse_v2` replaces Office with native
+Workshop and uses `apartment_explore` for a multi-room Apartment route,
+while `legacy_v1` (the default) preserves old IDs and results. See
+the trajectory-diverse suite section in the mapping ablation guide.
+No production mapping defaults are changed, no runs are
 overwritten, and no GitHub Actions are used.
 
 Run the sweep with a **new prefix** (`mapping-grid-001`) to avoid

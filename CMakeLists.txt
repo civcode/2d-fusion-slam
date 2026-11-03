@@ -562,6 +562,12 @@ if(BUILD_TESTING)
         "$<TARGET_FILE:slam_offline_fusion>"
         "$<TARGET_FILE:slam_map_accuracy_cli>")
     set_tests_properties(fusion_scene_diversity PROPERTIES TIMEOUT 480)
+    add_test(NAME fusion_diverse_routes
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_diverse_routes_test.py"
+        "$<TARGET_FILE:slam_offline_fusion>"
+        "$<TARGET_FILE:slam_map_accuracy_cli>")
+    set_tests_properties(fusion_diverse_routes PROPERTIES TIMEOUT 1200)
     if(TARGET fusion_slam_demo)
       add_test(NAME fusion_replay_http
         COMMAND "${Python3_EXECUTABLE}"
@@ -711,6 +717,16 @@ if(BUILD_TESTING)
   add_executable(slam_fixtures_smoke tests/fixtures_smoke.cpp)
   target_link_libraries(slam_fixtures_smoke PRIVATE slam_fixtures)
   add_test(NAME fixtures_smoke COMMAND slam_fixtures_smoke)
+
+  add_executable(slam_workshop_contour_dump tests/workshop_contour_dump.cpp)
+  target_link_libraries(slam_workshop_contour_dump PRIVATE slam_fixtures)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME workshop_contour_parity
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/workshop_contour_parity_test.py"
+        "$<TARGET_FILE:slam_workshop_contour_dump>")
+    set_tests_properties(workshop_contour_parity PROPERTIES TIMEOUT 30)
+  endif()
 
   add_executable(slam_core_smoke tests/core_smoke.cpp)
   target_link_libraries(slam_core_smoke PRIVATE slam::core)

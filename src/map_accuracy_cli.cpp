@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
   slam::cli::Positionals parsed;
   try {
     parsed=slam::cli::parse_positionals(argc,argv,"slam_map_accuracy",
-        "<apartment|warehouse|office|loft|atrium|industrial|warehouse_asymmetric> <generated.slammap>",2,2);
+        "<apartment|apartment_explore|warehouse|warehouse_asymmetric|office|workshop|loft|atrium|industrial> <generated.slammap>",2,2);
   }catch(const std::exception& e) {
     std::cerr<<e.what()<<'\n';return 2;
   }

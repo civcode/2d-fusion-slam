@@ -16,7 +16,7 @@ SCENES = ("office", "loft", "atrium", "industrial", "warehouse_asymmetric")
 
 
 def run(*args):
-    result = subprocess.run(args, text=True, capture_output=True, timeout=180)
+    result = subprocess.run(args, text=True, capture_output=True, timeout=600)
     if result.returncode:
         raise AssertionError(f"command failed {args}:\n{result.stderr}\n{result.stdout}")
     return result

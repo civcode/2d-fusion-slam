@@ -20,7 +20,18 @@ import fusion_mapping_ablation as ablation
 
 
 SCENES = ("apartment", "warehouse", "warehouse_asymmetric",
-          "office", "loft", "atrium", "industrial")
+          "office", "loft", "atrium", "industrial")  # immutable 2026 legacy suite
+DIVERSE_SCENES = ("apartment_explore", "warehouse", "warehouse_asymmetric",
+                  "workshop", "loft", "atrium", "industrial")
+SCENE_SUITES = {"legacy_v1": SCENES, "diverse_v2": DIVERSE_SCENES}
+
+
+def suite_scenes(suite: str) -> tuple[str, ...]:
+    try:
+        return SCENE_SUITES[suite]
+    except KeyError as exc:
+        raise ValueError(f"unknown benchmark suite: {suite}") from exc
+
 EVIDENCE = tuple(ablation.GRID_EVIDENCE)  # complete 3x3, not an estimator input
 WINDOWS = ("full", "early", "late")
 DESKEW = "gyro_wheel_original"
@@ -43,23 +54,25 @@ def checked_prefix(prefix: str) -> str:
     return prefix
 
 
-def run_all(binary: Path, runs_dir: Path, prefix: str) -> None:
+def run_all(binary: Path, runs_dir: Path, prefix: str,
+            suite: str = "legacy_v1") -> None:
     checked_prefix(prefix)
+    scenes = suite_scenes(suite)
     if not binary.is_file():
         raise FileNotFoundError(f"native fusion binary not found: {binary}")
     if not runs_dir.is_dir():
         raise FileNotFoundError(f"existing output root required: {runs_dir}")
-    destinations = [runs_dir / f"{prefix}-{scene}" for scene in SCENES]
+    destinations = [runs_dir / f"{prefix}-{scene}" for scene in scenes]
     occupied = [str(path) for path in destinations if path.exists()]
     if occupied:
         raise FileExistsError("refusing to overwrite existing runs: " +
                               ", ".join(occupied))
-    for scene, directory in zip(SCENES, destinations):
+    for scene, directory in zip(scenes, destinations):
         command = [str(binary.resolve()), scene, str(directory.resolve()),
                    *FUSION_FLAGS]
         print(f"\n[{scene}] {directory}", flush=True)
         subprocess.run(command, check=True)  # local native process, never Actions
-    print("\nCompleted seven fixed-detector scene runs.")
+    print(f"\nCompleted seven fixed-detector scene runs (suite={suite}).")
 
 
 def _finite(value, label: str) -> float:
@@ -75,12 +88,13 @@ def _value(row: dict, name: str) -> float | None:
     return None if value is None else _finite(value, name)
 
 
-def collect(runs_dir: Path, prefix: str):
+def collect(runs_dir: Path, prefix: str, suite: str = "legacy_v1"):
     checked_prefix(prefix)
+    scenes = suite_scenes(suite)
     rows, region_rows = [], []
     config = None
     expected_evidence = None
-    for scene in SCENES:
+    for scene in scenes:
         directory = runs_dir / f"{prefix}-{scene}"
         report, variants = ablation.load(directory)
         if report.get("scene") != f"synthetic-{scene}-v1":
@@ -167,6 +181,9 @@ def collect(runs_dir: Path, prefix: str):
                     "region_f1_25cm": variant["region_wall_tolerance_scores"][1]["f1"],
                     "region_f1_50cm": variant["region_wall_tolerance_scores"][2]["f1"],
                 })
+    if suite != "legacy_v1":
+        rows = [{"suite": suite, **row} for row in rows]
+        region_rows = [{"suite": suite, **row} for row in region_rows]
     return rows, region_rows
 
 
@@ -183,23 +200,24 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def rank_evidence(rows: list[dict]) -> list[dict]:
+def rank_evidence(rows: list[dict],
+                  scenes: tuple[str, ...] = SCENES) -> list[dict]:
     """Rank only complete comparable scene groups; never promote defaults."""
     by_scene = {(r["scene"], r["evidence"]): r for r in rows}
     if len(by_scene) != len(rows):
         raise ValueError("duplicate scene/evidence rows in ranking")
-    scenes = set(SCENES)
+    expected_scenes = set(scenes)
     present = {r["evidence"] for r in rows}
     if present not in (set(ablation.LEGACY_EVIDENCE), set(ablation.GRID_EVIDENCE)):
         raise ValueError("ranking requires all four legacy or all nine grid settings")
-    if {r["scene"] for r in rows} != scenes or len(rows) != len(scenes)*len(present):
+    if {r["scene"] for r in rows} != expected_scenes or len(rows) != len(scenes)*len(present):
         raise ValueError("ranking must include every scene and evidence setting")
     ranked = []
     for evidence in ablation.GRID_EVIDENCE:
         if evidence not in present:
             continue
-        group = [by_scene[scene, evidence] for scene in SCENES]
-        original = [by_scene[scene, "baseline"] for scene in SCENES]
+        group = [by_scene[scene, evidence] for scene in scenes]
+        original = [by_scene[scene, "baseline"] for scene in scenes]
         prec_changes = []
         unavailable = False
         for row, base in zip(group, original):
@@ -244,18 +262,22 @@ def rank_evidence(rows: list[dict]) -> list[dict]:
 
 def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
               region_csv_path: Path | None,
-              ranking_csv_path: Path | None = None) -> None:
-    rows, regions = collect(runs_dir, prefix)
-    rankings = rank_evidence(rows)
+              ranking_csv_path: Path | None = None,
+              suite: str = "legacy_v1") -> None:
+    scenes = suite_scenes(suite)
+    rows, regions = collect(runs_dir, prefix, suite)
+    rankings = rank_evidence(rows, scenes)
+    if suite != "legacy_v1":
+        rankings = [{"suite": suite, **row} for row in rankings]
     by_scene = {(r["scene"], r["evidence"]): r for r in rows}
-    print("Seven-scene LiDAR-loop detector; graph poses fixed within each scene.")
+    print(f"Seven-scene LiDAR-loop detector (suite={suite}); graph poses fixed within each scene.")
     print("Loop counts can differ across scenes. No simulator truth entered mapping.")
     print("Full-run 5cm exact occupied IoU; original deskew, fixed hit/free evidence.")
     print(f"Evidence levels: {len(rankings)} "
           f"({'full 3x3' if len(rankings)==9 else 'legacy 2x2'})\n")
     print(f"{'Scene':23} {'loops':>5} {'IoU base':>9} {'IoU comb':>9} "
           f"{'P base':>8} {'P comb':>8} {'mean wall base':>14} {'mean wall comb':>14}")
-    for scene in SCENES:
+    for scene in scenes:
         a = by_scene[scene, "baseline"]
         b = by_scene[scene, "combined"]
         def fmt(value):
@@ -309,19 +331,21 @@ def main() -> None:
     run.add_argument("--binary", required=True, type=Path)
     run.add_argument("--runs-dir", required=True, type=Path)
     run.add_argument("--prefix", required=True)
+    run.add_argument("--suite", choices=SCENE_SUITES, default="legacy_v1")
     analysis = sub.add_parser("summarize", help="read all 7 finished runs; never run SLAM")
     analysis.add_argument("--runs-dir", required=True, type=Path)
     analysis.add_argument("--prefix", required=True)
+    analysis.add_argument("--suite", choices=SCENE_SUITES, default="legacy_v1")
     analysis.add_argument("--csv", type=Path)
     analysis.add_argument("--region-csv", type=Path)
     analysis.add_argument("--ranking-csv", type=Path,
                           help="optional ranked nine-setting comparison export")
     args = parser.parse_args()
     if args.command == "run":
-        run_all(args.binary, args.runs_dir, args.prefix)
+        run_all(args.binary, args.runs_dir, args.prefix, args.suite)
     else:
         summarize(args.runs_dir, args.prefix, args.csv, args.region_csv,
-                  args.ranking_csv)
+                  args.ranking_csv, args.suite)
 
 
 if __name__ == "__main__":

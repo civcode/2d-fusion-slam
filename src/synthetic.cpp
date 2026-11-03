@@ -1,6 +1,7 @@
 #include "slam/fixtures/synthetic.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -142,8 +143,79 @@ Scene warehouse_asymmetric() {
   return scene;
 }
 
+
+Scene apartment_explore() {
+  Scene scene=apartment(); // identical reference walls; route differs in fusion.
+  scene.id="synthetic-apartment_explore-v1";
+  return scene;
+}
+
+// The C++ occupancy-scoring reference is the accessible surface of the
+// exact 10 cm synthetic workshop raster from apps/demo/web/example.py.
+// A free/occupied boundary is represented by one metric segment; unknown
+// cells are not assumed free or counted as newly observed obstacles.
+// Contiguous cell faces are merged to avoid thousands of tiny segments.
+Scene workshop() {
+  Scene scene{"synthetic-workshop-v1", {}};
+  constexpr int width=120,height=90;
+  constexpr double resolution=.1;
+  using Raster=std::array<std::array<bool,width>,height>;
+  Raster known_free{}, occupied{};
+  auto inside=[](double x,double y,double a,double b,double c,double d) {
+    return x>=a && x<=b && y>=c && y<=d;
+  };
+  for(int y=0;y<height;++y)for(int x=0;x<width;++x) {
+    const double px=(x+.5)*resolution, py=(y+.5)*resolution;
+    const bool known=inside(px,py,.5,11.5,.5,8.5) &&
+        !(px>10.1 && py>6.0) && !(px<1.8 && py>6.1);
+    if(!known)continue;
+    const bool outer=px<.7 || px>11.3 || py<.7 || py>8.3;
+    const bool furniture=
+        inside(px,py,3.05,4.25,1.85,4.4) ||
+        inside(px,py,6.65,8.15,4.0,5.35) ||
+        inside(px,py,8.9,10.15,1.85,3.7) ||
+        inside(px,py,5.5,6.0,6.6,8.1) ||
+        inside(px,py,1.25,2.15,6.55,7.8);
+    occupied[y][x]=outer || furniture;
+    known_free[y][x]=!occupied[y][x];
+  }
+  // Horizontal free/occupied transitions.
+  for(int y=1;y<height;++y) {
+    int first=-1;
+    for(int x=0;x<=width;++x) {
+      const bool edge=x<width &&
+          ((occupied[y-1][x] && known_free[y][x]) ||
+           (occupied[y][x] && known_free[y-1][x]));
+      if(edge && first<0)first=x;
+      if(!edge && first>=0) {
+        wall(scene,first*resolution,y*resolution,
+             x*resolution,y*resolution);
+        first=-1;
+      }
+    }
+  }
+  // Vertical free/occupied transitions.
+  for(int x=1;x<width;++x) {
+    int first=-1;
+    for(int y=0;y<=height;++y) {
+      const bool edge=y<height &&
+          ((occupied[y][x-1] && known_free[y][x]) ||
+           (occupied[y][x] && known_free[y][x-1]));
+      if(edge && first<0)first=y;
+      if(!edge && first>=0) {
+        wall(scene,x*resolution,first*resolution,
+             x*resolution,y*resolution);
+        first=-1;
+      }
+    }
+  }
+  return scene;
+}
+
 Scene named_scene(const std::string& name) {
   if(name=="apartment")return apartment();
+  if(name=="apartment_explore")return apartment_explore();
+  if(name=="workshop")return workshop();
   if(name=="warehouse")return warehouse();
   if(name=="office")return office();
   if(name=="loft")return loft();

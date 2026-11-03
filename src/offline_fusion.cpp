@@ -89,6 +89,7 @@ struct RouteConfig {
   double cx{},cy{},rx{},ry{},period{};
   std::size_t scans{};
   bool large{};
+  int spline{}; // 0: historical ellipse; 1: multiroom apartment; 2: workshop
 };
 // The original two routes remain bit-for-bit unchanged. New routes provide
 // different speeds, curvature, observed spaces, and trajectory lengths; the
@@ -102,10 +103,117 @@ RouteConfig route_config(const std::string& name) {
   if(name=="atrium")return {15.0,10.0,10.6,6.4,60.0,200,true};
   if(name=="industrial")return {15.0,10.0,13.2,8.2,57.0,195,true};
   if(name=="warehouse_asymmetric")return {15.0,10.0,14.0,9.0,56.0,195,true};
+  // Versioned routes: preserve the original apartment/office fixtures verbatim.
+  if(name=="apartment_explore")return {0,0,0,0,84.0,360,false,1};
+  if(name=="workshop")return {0,0,0,0,63.0,280,false,2};
   throw std::invalid_argument("unknown fusion synthetic scene: "+name);
+}
+
+struct SplineSample {
+  Eigen::Vector2d position=Eigen::Vector2d::Zero();
+  Eigen::Vector2d tangent=Eigen::Vector2d::Zero();
+  Eigen::Vector2d acceleration=Eigen::Vector2d::Zero();
+};
+struct ClosedSpline {
+  std::vector<Eigen::Vector2d> knots;
+  std::vector<double> distance; // cumulative, uniform 1/100 knot steps
+  double length{};
+};
+constexpr int kSplineStepsPerKnot=100;
+
+// Periodic cubic B-spline has continuous position, tangent and curvature,
+// including at the repeated start/end. Its evaluated points, not raw
+// control knots, are the collision-checked robot path.
+SplineSample spline_at(const std::vector<Eigen::Vector2d>& p,double phase) {
+  const auto n=p.size();
+  const double floor_phase=std::floor(phase);
+  const auto i=static_cast<std::size_t>(floor_phase)%n;
+  const double t=phase-floor_phase, t2=t*t,t3=t2*t;
+  const std::array<double,4> b{
+      (1-3*t+3*t2-t3)/6,
+      (4-6*t2+3*t3)/6,
+      (1+3*t+3*t2-3*t3)/6,
+      t3/6};
+  const std::array<double,4> d{
+      -.5*(1-t)*(1-t), 1.5*t2-2*t,
+      -1.5*t2+t+.5, .5*t2};
+  const std::array<double,4> dd{
+      1-t, 3*t-2, 1-3*t, t};
+  SplineSample out;
+  for(std::size_t j=0;j<4;++j) {
+    const auto& point=p[(i+j+n-1)%n];
+    out.position+=b[j]*point;
+    out.tangent+=d[j]*point;
+    out.acceleration+=dd[j]*point;
+  }
+  return out;
+}
+ClosedSpline make_spline(std::vector<Eigen::Vector2d> knots) {
+  if(knots.size()<4)throw std::invalid_argument("not enough spline knots");
+  ClosedSpline result{std::move(knots),{0.0},0.0};
+  auto previous=spline_at(result.knots,0.0).position;
+  const auto intervals=result.knots.size()*kSplineStepsPerKnot;
+  for(std::size_t k=1;k<=intervals;++k) {
+    const double phase=double(k)/kSplineStepsPerKnot;
+    const auto current=spline_at(result.knots,phase).position;
+    result.length+=(current-previous).norm();
+    result.distance.push_back(result.length);
+    previous=current;
+  }
+  if(!std::isfinite(result.length)||result.length<=1.)
+    throw std::invalid_argument("degenerate synthetic route");
+  return result;
+}
+const ClosedSpline& apartment_explore_path() {
+  static const auto path=make_spline({
+      {3.0,2.2},{4.0,3.4},{3.8,4.5},{3.7,6.1},{3.6,7.5},
+      {2.9,8.6},{1.5,8.8},{1.1,10.0},{2.0,10.9},{3.8,10.8},
+      {4.25,9.3},{4.0,8.2},{3.5,7.4},{3.1,6.0},
+      {3.9,4.75},{5.0,4.75},{6.3,4.6},{8.3,5.4},{9.0,6.6},
+      {9.4,7.7},{10.3,7.75},{11.7,8.1},{12.6,9.7},{13.9,9.2},
+      {13.9,7.5},{12.6,5.5},{11.0,6.8},{10.0,7.75},
+      {8.9,8.0},{7.5,7.0},{6.3,5.4},{5.0,4.7},
+      {3.7,4.9},{2.0,5.2},{1.0,4.3},{1.2,2.9},{2.1,1.9}});
+  return path;
+}
+const ClosedSpline& workshop_path() {
+  // Adapted from apps/demo/web/replay.py; smoothed and resampled with
+  // analytic derivatives rather than replaying scan-level exact poses.
+  static const auto path=make_spline({
+      {2.5,1.3},{5.3,1.2},{8.4,1.35},{8.6,2.6},
+      {8.45,5.7},{9.6,5.95},{9.5,7.6},{8.2,7.8},
+      {6.5,7.65},{6.45,5.9},{4.5,5.75},{2.5,5.65},
+      {1.1,4.9},{1.2,2.7}});
+  return path;
+}
+Motion spline_motion(const ClosedSpline& spline,double active,
+                     double period,bool moving) {
+  const double travel=std::fmod(active,period)/period*spline.length;
+  const auto upper=std::lower_bound(spline.distance.begin(),
+                                    spline.distance.end(),travel);
+  const auto idx=static_cast<std::size_t>(upper-spline.distance.begin());
+  double phase=0.0;
+  if(idx>0) {
+    const double low=spline.distance[idx-1],high=spline.distance[idx];
+    const double alpha=(travel-low)/(high-low);
+    phase=(double(idx-1)+alpha)/kSplineStepsPerKnot;
+  }
+  const auto sample=spline_at(spline.knots,phase);
+  const double tangent_norm=sample.tangent.norm();
+  if(tangent_norm<1e-6)throw std::invalid_argument("spline tangent too small");
+  const double yaw=std::atan2(sample.tangent.y(),sample.tangent.x());
+  const double speed=spline.length/period;
+  const double cross=sample.tangent.x()*sample.acceleration.y()-
+                     sample.tangent.y()*sample.acceleration.x();
+  const double rate=speed*cross/(tangent_norm*tangent_norm*tangent_norm);
+  return {{sample.position,yaw},moving?speed:0.0,moving?rate:0.0};
 }
 Motion at_time(const RouteConfig& route,double seconds_after_start) {
   const double active=std::max(0.0,seconds_after_start-.30);
+  if(route.spline) {
+    const auto& path=route.spline==1?apartment_explore_path():workshop_path();
+    return spline_motion(path,active,route.period,seconds_after_start>=.30);
+  }
   const double w=2*kPi/route.period,phase=w*active;
   const double sn=std::sin(phase),cs=std::cos(phase);
   const double length=std::hypot(route.rx*sn,route.ry*cs);
@@ -132,15 +240,54 @@ void validate_generated_route(const slam::fixtures::Scene& scene,
   // crossing walls or putting the laser origin into simulated obstacles.
   const double total_time=.6+.3*double(route.scans-1);
   const std::size_t steps=std::size_t(std::ceil(total_time/.02));
+  std::array<bool,3> apartment_doors{};
+  std::array<bool,4> coverage{};
+  Pose2 previous{};
+  bool has_previous=false;
+  auto crossed=[](const Eigen::Vector2d& a,const Eigen::Vector2d& b,
+                  int axis,double line,double minimum,double maximum) {
+    const double start=a[axis],end=b[axis];
+    if((start-line)*(end-line)>=0.0 || std::abs(end-start)<1e-12)
+      return false;
+    const double t=(line-start)/(end-start);
+    const double other=a[1-axis]+t*(b[1-axis]-a[1-axis]);
+    return other>minimum+.12 && other<maximum-.12;
+  };
   for(std::size_t i=0;i<=steps;++i) {
-    const auto pose=at_time(route,total_time*double(i)/double(steps)).pose;
+    const auto motion=at_time(route,total_time*double(i)/double(steps));
+    const auto pose=motion.pose;
+    if(route.spline &&
+       (motion.forward>.85 || std::abs(motion.yaw_rate)>1.25 ||
+        !std::isfinite(motion.yaw_rate)))
+      throw std::invalid_argument("synthetic spline exceeds motion limits");
+    if(route.spline==1) {
+      const auto& p=pose.translation;
+      coverage[0]|=p.x()<4.7 && p.y()<6.0;
+      coverage[1]|=p.x()<4.7 && p.y()>8.0;
+      coverage[2]|=p.x()>6.0 && p.x()<9.0;
+      coverage[3]|=p.x()>11.0;
+      if(has_previous) {
+        const auto& a=previous.translation;
+        apartment_doors[0]|=crossed(a,p,0,5.0,4.0,5.5);
+        apartment_doors[1]|=crossed(a,p,0,10.0,7.0,8.5);
+        apartment_doors[2]|=crossed(a,p,1,7.0,2.5,4.0);
+      }
+    }
     const auto laser=slam::compose(pose,kBaseFromLaser);
     for(const auto& wall:scene.walls)
       if(distance_to_wall(pose.translation,wall)<.20||
          distance_to_wall(laser.translation,wall)<.08)
         throw std::invalid_argument(
             "synthetic route intersects a scene wall: "+scene.id);
+    previous=pose;
+    has_previous=true;
   }
+  if(route.spline==1 &&
+     (!std::all_of(apartment_doors.begin(),apartment_doors.end(),
+                   [](bool value){return value;}) ||
+      !std::all_of(coverage.begin(),coverage.end(),
+                   [](bool value){return value;})))
+    throw std::invalid_argument("multi-room apartment route misses required rooms or doors");
 }
 Simulation generate(const std::string& label) {
   const auto route=route_config(label);
@@ -1609,7 +1756,7 @@ int main(int argc,char** argv) {
       ("lidar-only-predict-first","LiDAR-only scan motion seeds Ceres before map registration (requires bootstrap)")
       ("h,help","Show help");
   cli.parse_positional({"scene","output"});
-  cli.positional_help("<apartment|warehouse|office|loft|atrium|industrial|warehouse_asymmetric> <new-output-directory>");
+  cli.positional_help("<apartment|apartment_explore|warehouse|warehouse_asymmetric|office|workshop|loft|atrium|industrial> <new-output-directory>");
   cxxopts::ParseResult args;
   try { args=cli.parse(argc,argv); }
   catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
