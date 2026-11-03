@@ -78,6 +78,15 @@ an optional output; the summary prints to the terminal even without it.
 See [fixed-graph mapping ablation](docs/fusion-mapping-ablation.md) for
 the full run and scoring protocol.
 
+The same documentation now includes an **opt-in seven-scene mapping sweep**:
+`tools/fusion_mapping_sweep.py run` executes the fixed LiDAR-loop/Ceres
+configuration locally for apartment, warehouse, asymmetric warehouse,
+office, loft, atrium, and industrial scenes, while
+`tools/fusion_mapping_sweep.py summarize` writes separate full-scene and
+early/late **observation-footprint region-masked** CSV comparisons.
+The original occupancy settings remain the default; no GitHub Actions
+are used and the sweep never overwrites existing runs.
+
 ## Build and test
 
 Install CMake 3.25+, C++20 compiler, Eigen3 (3.3+), Ninja (recommended). Network-free smoke tests:
