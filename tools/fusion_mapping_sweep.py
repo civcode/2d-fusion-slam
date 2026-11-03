@@ -75,10 +75,6 @@ def _value(row: dict, name: str) -> float | None:
     return None if value is None else _finite(value, name)
 
 
-def _percent_change(a: float, b: float) -> float | None:
-    return (100 * (b / a - 1)) if a else None
-
-
 def collect(runs_dir: Path, prefix: str):
     checked_prefix(prefix)
     rows, region_rows = [], []
@@ -91,6 +87,16 @@ def collect(runs_dir: Path, prefix: str):
         if (report.get("graph_status") != "gtsam_with_lidar_scan_loop_closure" or
                 report.get("lidar_loop_closure") is not True):
             raise ValueError(f"{scene}: expected configured LiDAR-loop GTSAM run")
+        required = {
+            "matcher": "ceres_continuous_cost",
+            "match_every": 1, "match_stride": 1,
+            "field_every": 15, "map_stride": 1,
+            "lidar_only_bootstrap": True,
+            "lidar_only_predict_first": True,
+            "distance_truncation_m": .7,
+        }
+        if any(report.get(key) != value for key, value in required.items()):
+            raise ValueError(f"{scene}: unexpected sweep configuration")
         current = tuple(report.get(key) for key in CONTROL_KEYS)
         if config is None:
             config = current
@@ -105,7 +111,6 @@ def collect(runs_dir: Path, prefix: str):
             }
             if set(by_evidence) != set(EVIDENCE):
                 raise ValueError(f"{scene}: missing original-deskew evidence levels")
-            base = by_evidence["baseline"]
             for evidence in EVIDENCE:
                 variant = by_evidence[evidence]
                 m = variant["map"]["metrics"]
@@ -207,8 +212,9 @@ def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
         )
         avg_iou=average("iou")
         avg_p=average("precision")
+        p_label = f"{avg_p:.5f}" if avg_p is not None else "undefined"
         print(f"{evidence:16} {avg_iou:10.5f} "
-              f"{avg_p if avg_p is not None else float('nan'):15.5f} "
+              f"{p_label:>15} "
               f"{iou_bad:15} {precision_bad:16} {distance_bad:17}")
     print("\nRegional scores use the SAME original-ray +25cm footprint for all "
           "evidence variants in each scene/window.")
