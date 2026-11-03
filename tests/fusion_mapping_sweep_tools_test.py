@@ -155,6 +155,15 @@ class SevenSceneSweepTest(unittest.TestCase):
             report = json.loads(report_path.read_text())
             report["scene"] = "synthetic-office-v1"
             report_path.write_text(json.dumps(report))
+            with self.assertRaisesRegex(ValueError, "format/source/scene mismatch"):
+                sweep.collect(root, prefix, suite="diverse_v2")
+
+            # A self-consistent run for the wrong scene must also be rejected.
+            import shutil
+            target = root/f"{prefix}-workshop"
+            shutil.rmtree(target)
+            MappingAblationToolsTest().fixture(
+                target, scene="office", region=True, grid=True)
             with self.assertRaisesRegex(ValueError, "scene/run mismatch"):
                 sweep.collect(root, prefix, suite="diverse_v2")
 
