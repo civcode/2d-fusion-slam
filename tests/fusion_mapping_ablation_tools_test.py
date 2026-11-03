@@ -16,7 +16,8 @@ import fusion_mapping_ablation
 
 
 class MappingAblationToolsTest(unittest.TestCase):
-    def fixture(self, directory, *, scene="warehouse_asymmetric", region=False):
+    def fixture(self, directory, *, scene="warehouse_asymmetric",
+                region=False, grid=False):
         directory.mkdir()
         scene_id = f"synthetic-{scene}-v1"
         n = 195
@@ -40,9 +41,9 @@ class MappingAblationToolsTest(unittest.TestCase):
         for window, begin, end in (("full", 0, n), ("early", 0, cut),
                                    ("late", cut, n)):
             for deskew in ("gyro_wheel_original", "graph_corrected_motion_model"):
-                for evidence, hit, free in (
-                    ("baseline", .85, -.4), ("stronger_hit", 1.2, -.4),
-                    ("gentler_free", .85, -.2), ("combined", 1.2, -.2),
+                for evidence, (hit, free) in (
+                    fusion_mapping_ablation.GRID_EVIDENCE.items() if grid else
+                    fusion_mapping_ablation.LEGACY_EVIDENCE.items()
                 ):
                     identifier = f"{window}_{deskew}_{evidence}"
                     filename = f"mapping_ablation/{identifier}.slammap"
@@ -99,6 +100,12 @@ class MappingAblationToolsTest(unittest.TestCase):
             "region_padding_m": .25,
             "variants": rows
         }
+        if grid:
+            payload.update({
+                "evidence_grid": "three_by_three_v1",
+                "evidence_hit_levels": [.85, 1.0, 1.2],
+                "evidence_free_levels": [-.4, -.3, -.2],
+            })
         (directory / "mapping_ablation.json").write_text(json.dumps(payload))
         return payload
 
@@ -145,6 +152,55 @@ class MappingAblationToolsTest(unittest.TestCase):
             (run / "mapping_ablation.json").write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "mask cardinality"):
                 fusion_mapping_ablation.load(run)
+
+    def test_complete_3x3_grid_and_legacy_compatibility(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = pathlib.Path(tmp) / "grid"
+            payload = self.fixture(run, region=True, grid=True)
+            report, variants = fusion_mapping_ablation.load(run)
+            self.assertEqual(report["frames"], 195)
+            self.assertEqual(len(variants), 54)
+            self.assertEqual(len({(v["hit_log_odds"], v["free_log_odds"])
+                                  for v in variants}), 9)
+            self.assertEqual(
+                {v["evidence"] for v in variants},
+                set(fusion_mapping_ablation.GRID_EVIDENCE))
+            new = next(v for v in variants if
+                       v["id"]=="full_gyro_wheel_original_h100_f030")
+            self.assertEqual((new["hit_log_odds"], new["free_log_odds"]),
+                             (1.0, -.3))
+            payload["variants"].pop()
+            (run / "mapping_ablation.json").write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "expected 54"):
+                fusion_mapping_ablation.load(run)
+            payload = self.fixture_payload_restore(run, payload, new)
+            payload["variants"][0]["hit_log_odds"] = 1.2
+            (run / "mapping_ablation.json").write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "evidence label or hit/free"):
+                fusion_mapping_ablation.load(run)
+            payload["variants"][0]["hit_log_odds"] = .85
+            payload["evidence_free_levels"] = [-.4, -.3]
+            (run / "mapping_ablation.json").write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "unsupported or incomplete"):
+                fusion_mapping_ablation.load(run)
+
+    @staticmethod
+    def fixture_payload_restore(run, payload, variant):
+        # Reconstruct the removed ID from the pristine registered grid.
+        # A fresh fixture is not needed just to restore the last variant.
+        evidence = fusion_mapping_ablation.GRID_EVIDENCE
+        from copy import deepcopy
+        template = deepcopy(payload["variants"][-1])
+        template.update({
+            "id": "late_graph_corrected_motion_model_combined",
+            "window": "late", "deskew": "graph_corrected_motion_model",
+            "evidence": "combined",
+            "hit_log_odds": evidence["combined"][0],
+            "free_log_odds": evidence["combined"][1],
+            "map_path": "mapping_ablation/late_graph_corrected_motion_model_combined.slammap",
+        })
+        payload["variants"].append(template)
+        return payload
 
     def test_reject_mismatched_geometry_or_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
