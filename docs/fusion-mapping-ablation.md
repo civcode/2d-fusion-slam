@@ -69,8 +69,9 @@ Every run with `--mapping-ablation` produces:
   wall-distance precision/recall/F1, **plus spatially region-masked**
   IoU/precision/recall/wall-distance and tolerance scores using a
   common original-ray observation footprint.
-- `mapping_ablation/*.slammap` — 24 additional independent FUSMAP2D
-  maps (24 files; substantial extra disk and build time). These are
+- `mapping_ablation/*.slammap` — 54 additional independent FUSMAP2D
+  maps (2 deskew modes × 3 windows × 9 evidence settings; substantial
+  extra disk use and compute time). These are
   **not** included in the regular Map Explorer's method allowlist.
 
 ```sh
@@ -92,13 +93,21 @@ original-deskew, baseline-odds reconstruction. Its local checks reject
 missing/duplicate variant IDs, inconsistent scan windows, wrong scene,
 missing maps and invalid/nonmonotonic wall-tolerance scores.
 
-### Controlled variants (2 × 3 × 4)
+### Controlled variants (2 × 3 × 9)
 
 | Dimension | Levels |
 | --- | --- |
 | Deskew | original gyro/wheel deskew; graph-corrected high-rate motion model |
 | Contribution window | all frames; early/middle first 88%; late final 12% |
-| Occupancy evidence | baseline hit +0.85 / free −0.40; stronger hit +1.20 / free −0.40; gentler free hit +0.85 / free −0.20; combined hit +1.20 / free −0.20 |
+| Occupancy evidence | All nine combinations of hit +0.85, +1.00, +1.20 and free −0.40, −0.30, −0.20; the four original corner settings remain included |
+
+The four original evidence IDs remain stable (`baseline`,
+`stronger_hit`, `gentler_free`, `combined`). Five new IDs are
+`h085_f030`, `h100_f040`, `h100_f030`, `h100_f020` and
+`h120_f030`. New reports explicitly declare
+`evidence_grid: three_by_three_v1` and the hit/free level arrays.
+The report format stays `FUSMAPABL1`; the Python reader also accepts
+older complete 24-variant reports.
 
 All evidence values are *configured log-odds updates*, not calibrated sensor
 probabilities. The grid remains **5 cm**. No map threshold, scan decimation,
@@ -164,7 +173,7 @@ The experimental evidence settings remain **opt-in**; the standard
 hit +0.85/free −0.40 remains the default. Use the same LiDAR-loop
 detector, Ceres options, scan sampling and 5 cm map grid for all
 seven synthetic scenes. Each scene solves its graph **once** and
-evaluates the four evidence settings against the identical graph
+evaluates all nine hit/free combinations against the identical graph
 poses and LiDAR scans. The number of accepted loops may legitimately
 differ per scene; never invent or force exactly two loops.
 
@@ -183,13 +192,13 @@ docker compose run --rm \
   tools/fusion_mapping_sweep.py run \
   --binary ./build-docker/slam_offline_fusion \
   --runs-dir /output \
-  --prefix mapping-generalization-001
+  --prefix mapping-grid-001
 ```
 
 Every run is named
-`apps/demo/fusion/mapping-generalization-001-<scene>/`
-and contains the normal fusion artifacts and 24 mapping-ablation
-maps. **The sweep refuses to overwrite any existing output directory.**
+`apps/demo/fusion/mapping-grid-001-<scene>/`
+and contains the normal fusion artifacts and **54** mapping-ablation
+maps (378 across all seven scenes). **The sweep refuses to overwrite any existing output directory.**
 Use a new prefix for a repeat or experiment revision.
 
 Activate the [repository-local Python venv](../README.md#python-virtual-environment-and-local-analysis)
@@ -199,15 +208,21 @@ on the **host** and aggregate the finished runs without rerunning SLAM:
 source .venv/bin/activate
 python tools/fusion_mapping_sweep.py summarize \
   --runs-dir apps/demo/fusion \
-  --prefix mapping-generalization-001 \
-  --csv reports/mapping-generalization-001-full.csv \
-  --region-csv reports/mapping-generalization-001-regions.csv
+  --prefix mapping-grid-001 \
+  --csv reports/mapping-grid-001-full.csv \
+  --region-csv reports/mapping-grid-001-regions.csv \
+  --ranking-csv reports/mapping-grid-001-ranking.csv
 ```
 
-The full-scene CSV has **28 rows** (7 scenes × 4 evidence
+The full-scene CSV has **63 rows** (7 scenes × 9 evidence
 settings, original deskew, full scan window). The region CSV has
-**84 rows** (7 × 3 windows × 4 evidence levels, original deskew).
-Both include accepted loop counts. The tool fails closed on
+**189 rows** (7 × 3 windows × 9 evidence levels, original deskew).
+The ranked cross-scene CSV contains **9 rows**, ordered by macro-average
+exact 5 cm occupied IoU, with mean occupied precision, the worst
+relative precision loss in any scene, counts of scenes losing more than
+5%/10% precision, IoU regressions, wall-distance regressions and a
+descriptive 5% precision guardrail. Both per-scene CSVs include
+accepted loop counts. The tool fails closed on
 missing/duplicated variants, missing region metrics, wrong scene,
 changed graph/estimator settings or map fingerprint mismatch.
 It reports unweighted macro averages and counts of scenes showing
@@ -224,28 +239,20 @@ root-owned run directories.
 
 ### Local checks
 
-The lightweight checks run without the heavy 24-map integration:
+Docker builds default to **28 parallel compilation jobs**; CTest
+concurrency is configured separately. Python score readers use only
+the standard library and work in the repository's virtual environment.
+
+Fast Python report and C++ scoring regressions:
 
 ```sh
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R '^(map_accuracy|fusion_mapping_ablation_tools|fusion_mapping_sweep_tools)
+  -R '^(map_accuracy|fusion_mapping_ablation_tools|fusion_mapping_sweep_tools)$'
 ```
 
-The separate native test builds and scores all 24 maps:
-
-```sh
-docker compose run --rm --entrypoint ctest test \
-  --test-dir build-docker --output-on-failure \
-  -R '^fusion_mapping_ablation$'
-```
-
-No GitHub Actions are configured or dispatched by this experiment.
-Recorded FR079 inputs are outside the provenance scope of these scores.
-
-```
-
-The separate native test builds and scores all 24 maps:
+The heavier native integration test reconstructs all **54** maps and
+checks that the original GTSAM poses and map fingerprints are unchanged:
 
 ```sh
 docker compose run --rm --entrypoint ctest test \
