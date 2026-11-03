@@ -1,5 +1,6 @@
 #include "slam/evaluation/map_accuracy.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -99,6 +100,77 @@ int main() {
     if (truth[i]) wall_index = i;
     else free_index = i;
   }
+  // A spatial mask must exclude reference walls outside the region,
+  // including distance-to-wall search sites. It must never declare them
+  // "correct" by classifying unseen wall cells as free.
+  std::vector<std::uint8_t> region(truth.size(),0);
+  region[wall_index]=1;
+  region[free_index]=1;
+  const auto localized=evaluate_map_accuracy_region(map,ap,region);
+  require(localized.reference_wall_cells==1 &&
+          localized.predicted_wall_cells==1 &&
+          localized.true_positive==1 &&
+          localized.true_negative==1 &&
+          localized.known_coverage==1. &&
+          localized.occupied_iou==1.,
+          "masked perfect map counts only in-footprint reference and prediction");
+  const auto region_distances=evaluate_wall_tolerances_region(map,ap,region);
+  require(region_distances.size()==3 &&
+          region_distances[0].symmetric_f1==1. &&
+          region_distances[2].reference_near_predicted==1.,
+          "masked perfect surface scores remain exactly correct");
+  const auto entire_region=std::vector<std::uint8_t>(truth.size(),1);
+  const auto entire_mask_score=evaluate_map_accuracy_region(
+      map,ap,entire_region);
+  require(entire_mask_score.true_positive==ideal.true_positive &&
+          entire_mask_score.false_positive==ideal.false_positive &&
+          entire_mask_score.occupied_iou==ideal.occupied_iou &&
+          entire_mask_score.known_coverage==ideal.known_coverage &&
+          entire_mask_score.symmetric_mean_wall_distance_m==
+              ideal.symmetric_mean_wall_distance_m,
+          "full-footprint scores retain old evaluator semantics");
+  require(evaluate_wall_tolerances_region(map,ap,entire_region)[1].symmetric_f1==
+              perfect_wall_tolerances[1].symmetric_f1,
+          "full-footprint tolerance scores retain original semantics");
+  must_reject([&]{
+    (void)evaluate_map_accuracy_region(map,ap,
+                                       std::vector<std::uint8_t>(truth.size()-1,1));
+  },"mismatched footprint dimensions rejected");
+  must_reject([&]{
+    (void)evaluate_map_accuracy_region(map,ap,
+                                       std::vector<std::uint8_t>(truth.size(),0));
+  },"empty region refused");
+  auto bad_region=region;
+  bad_region[free_index]=2;
+  must_reject([&]{
+    (void)evaluate_wall_tolerances_region(map,ap,bad_region);
+  },"nonbinary surface-region mask rejected");
+
+  // The observation region is determined only by the given map's observed
+  // mask plus a fixed metric padding, not by reference-wall geometry.
+  const auto full_footprint=observed_footprint_mask(map,.25);
+  require(full_footprint==entire_region,
+          "all-observed map remains full-footprint regardless of padding");
+  auto sparse_cells=std::vector<Cell>(truth.size());
+  sparse_cells[wall_index]={2.0,true};
+  auto sparse_map=map;
+  sparse_map.snapshot=MapSnapshot::from_cells(grid(),21,sparse_cells);
+  const auto exact_footprint=observed_footprint_mask(sparse_map,0.);
+  const auto padded_footprint=observed_footprint_mask(sparse_map,.25);
+  require(std::count(exact_footprint.begin(),exact_footprint.end(),1)==1 &&
+          std::count(padded_footprint.begin(),padded_footprint.end(),1)>1 &&
+          std::count(padded_footprint.begin(),padded_footprint.end(),1)
+              <padded_footprint.size(),
+          "metric padding expands a sparse observed ray footprint");
+  must_reject([&]{
+    (void)observed_footprint_mask(sparse_map,-.1);
+  },"negative footprint padding rejected");
+  auto empty_cells=std::vector<Cell>(truth.size());
+  sparse_map.snapshot=MapSnapshot::from_cells(grid(),22,std::move(empty_cells));
+  must_reject([&]{
+    (void)observed_footprint_mask(sparse_map,.25);
+  },"unobserved occupancy has no assessable footprint");
+
   cells[wall_index] = {0.0, false};
   cells[free_index] = {2.0, true};
   auto degraded = map;
