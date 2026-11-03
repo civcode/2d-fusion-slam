@@ -169,11 +169,11 @@ class MappingAblationToolsTest(unittest.TestCase):
                        v["id"]=="full_gyro_wheel_original_h100_f030")
             self.assertEqual((new["hit_log_odds"], new["free_log_odds"]),
                              (1.0, -.3))
-            payload["variants"].pop()
+            removed = payload["variants"].pop()
             (run / "mapping_ablation.json").write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "expected 54"):
                 fusion_mapping_ablation.load(run)
-            payload = self.fixture_payload_restore(run, payload, new)
+            payload["variants"].append(removed)
             payload["variants"][0]["hit_log_odds"] = 1.2
             (run / "mapping_ablation.json").write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "evidence label or hit/free"):
@@ -183,24 +183,6 @@ class MappingAblationToolsTest(unittest.TestCase):
             (run / "mapping_ablation.json").write_text(json.dumps(payload))
             with self.assertRaisesRegex(ValueError, "unsupported or incomplete"):
                 fusion_mapping_ablation.load(run)
-
-    @staticmethod
-    def fixture_payload_restore(run, payload, variant):
-        # Reconstruct the removed ID from the pristine registered grid.
-        # A fresh fixture is not needed just to restore the last variant.
-        evidence = fusion_mapping_ablation.GRID_EVIDENCE
-        from copy import deepcopy
-        template = deepcopy(payload["variants"][-1])
-        template.update({
-            "id": "late_graph_corrected_motion_model_combined",
-            "window": "late", "deskew": "graph_corrected_motion_model",
-            "evidence": "combined",
-            "hit_log_odds": evidence["combined"][0],
-            "free_log_odds": evidence["combined"][1],
-            "map_path": "mapping_ablation/late_graph_corrected_motion_model_combined.slammap",
-        })
-        payload["variants"].append(template)
-        return payload
 
     def test_reject_mismatched_geometry_or_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
