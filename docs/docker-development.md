@@ -5,20 +5,33 @@ Docker is the only required host tool; GitHub Actions remains manual-only.
 
 ## Build and test
 
-From the repository root, use 28 parallel build/test jobs:
+From the repository root, all Docker CMake/Ninja **builds default to 28
+parallel compilation jobs**. This applies to both full GTSAM/Ceres builds
+and lightweight viewer builds:
 
 ```sh
-SLAM_DOCKER_JOBS=28 docker compose run --build --rm test
+docker compose build test demo
+docker compose run --rm test
 
 # Or without Compose:
-docker build --build-arg SLAM_DOCKER_JOBS=28 --target test -t fusion-slam:test .
+docker build --target test -t fusion-slam:test .
 docker run --rm --init fusion-slam:test
 ```
 
-The build argument controls CMake build parallelism and sets the test image's
-`CTEST_PARALLEL_LEVEL`. Override test parallelism at runtime with
-`docker run --rm -e CTEST_PARALLEL_LEVEL=28 fusion-slam:test`.
-Without an override, builds default to two jobs.
+`SLAM_DOCKER_JOBS` overrides the compilation job count when desired:
+
+```sh
+SLAM_DOCKER_JOBS=12 docker compose build test demo
+docker build --build-arg SLAM_DOCKER_JOBS=12 --target test -t fusion-slam:test .
+```
+
+**CTest is independent of build parallelism.** Docker Compose and the
+test image default to two concurrent tests so a 28-job build does not
+accidentally launch 28 potentially memory-intensive suites. Override
+test concurrency explicitly with `SLAM_CTEST_JOBS=8 docker compose run
+--rm test` or `docker run --rm -e CTEST_PARALLEL_LEVEL=8 fusion-slam:test`.
+The `Justfile` defaults to `BUILD_JOBS=28` and `TEST_JOBS=16`,
+and maps these separately.
 
 For incremental development, the wrapper mounts the checkout read-only and
 writes build outputs to Git-ignored `.build/docker-ubuntu24.04-apt/`, using
@@ -26,7 +39,7 @@ the host UID/GID:
 
 ```sh
 bash scripts/docker-build-test.sh image
-SLAM_DOCKER_JOBS=28 bash scripts/docker-build-test.sh test
+bash scripts/docker-build-test.sh test  # build: 28 jobs, tests: 2 concurrent by default
 # Other actions: build, shell
 ```
 
@@ -43,7 +56,7 @@ modifying that file.
 ## Native browser demo
 
 ```sh
-SLAM_DOCKER_JOBS=28 docker compose up --build demo
+docker compose up --build demo  # 28 build jobs by default
 # Open http://127.0.0.1:8765
 ```
 
