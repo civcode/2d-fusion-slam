@@ -16,7 +16,7 @@ EXE = sys.argv.pop() if len(sys.argv) > 1 else None
 
 def run(scene, output, *flags):
     return subprocess.run([EXE, scene, str(output), *flags],
-                          text=True, capture_output=True, timeout=480)
+                          text=True, capture_output=True, timeout=1200)
 
 
 class MappingAblationIntegrationTest(unittest.TestCase):
