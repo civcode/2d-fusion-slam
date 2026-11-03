@@ -1121,6 +1121,7 @@ void export_mapping_ablation(const std::filesystem::path& directory,
   std::array<slam::mapping::MapBundle,3> baseline_maps;
   std::array<std::vector<std::uint8_t>,3> footprints;
   std::array<std::size_t,3> footprint_counts{};
+  std::array<std::uint64_t,3> footprint_fingerprints{};
   for(std::size_t w=0;w<windows.size();++w) {
     Mask included(n,false);
     for(std::size_t i=windows[w].begin;i<windows[w].end;++i)
@@ -1131,6 +1132,14 @@ void export_mapping_ablation(const std::filesystem::path& directory,
         baseline_maps[w],kRegionPaddingM);
     footprint_counts[w]=std::count(footprints[w].begin(),
                                    footprints[w].end(),std::uint8_t{1});
+    // Stable FNV-1a for the binary spatial mask (audit identity, not
+    // cryptographic authentication). Emit as text to avoid JS precision loss.
+    std::uint64_t fingerprint=14695981039346656037ULL;
+    for(const auto cell:footprints[w]) {
+      fingerprint^=cell;
+      fingerprint*=1099511628211ULL;
+    }
+    footprint_fingerprints[w]=fingerprint;
   }
   out<<"{\n\"format\":\"FUSMAPABL1\","
      <<"\n\"region_mask_source\":\"original_deskew_baseline_ray_observation_padded\","
@@ -1198,7 +1207,8 @@ void export_mapping_ablation(const std::filesystem::path& directory,
         out<<"],\"region_footprint\":{\"source\":\"original_baseline_rays\","
            <<"\"padding_m\":"<<kRegionPaddingM<<","
            <<"\"cells\":"<<footprint_counts[w]<<","
-           <<"\"total_grid_cells\":"<<footprints[w].size()<<"},"
+           <<"\"total_grid_cells\":"<<footprints[w].size()<<","
+           <<"\"fingerprint\":\""<<footprint_fingerprints[w]<<"\"},"
            <<"\"region_map\":";
         slam::evaluation::write_map_accuracy_json(
             out,region_score,sim.scene);
