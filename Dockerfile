@@ -44,7 +44,8 @@ for name, start, end in [
 PY
 
 FROM dependencies AS build
-ARG SLAM_DOCKER_JOBS=2
+# Default to 28 parallel compilation jobs; override with --build-arg if needed.
+ARG SLAM_DOCKER_JOBS=28
 ARG SLAM_PROFILE_FUSION=ON
 WORKDIR /workspace
 COPY . /workspace
@@ -62,13 +63,14 @@ RUN cmake -S . -B build-docker -G Ninja \
 # Tests are run only when the user invokes this target.
 FROM build AS test
 ENV CTEST_OUTPUT_ON_FAILURE=1
-ENV CTEST_PARALLEL_LEVEL=${SLAM_DOCKER_JOBS}
+ENV CTEST_PARALLEL_LEVEL=2
 CMD ["ctest", "--test-dir", "build-docker", "--output-on-failure", "--timeout", "120"]
 
 # Lightweight C++20 web UI build: no GTSAM, Ceres, Python runtime or Catch2.
 # Keep this independent from the heavy offline SLAM test/toolchain builder.
 FROM ubuntu:24.04 AS demo-builder
-ARG SLAM_DOCKER_JOBS=2
+# Keep lightweight demo builds consistent with the full native build.
+ARG SLAM_DOCKER_JOBS=28
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build ca-certificates \
