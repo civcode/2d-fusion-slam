@@ -282,7 +282,7 @@ git pull --ff-only
 docker compose build test
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R '^(fixtures_smoke|fusion_diverse_routes|fusion_mapping_sweep_tools|fusion_mapping_ablation)
+  -R '^(fixtures_smoke|workshop_contour_parity|fusion_diverse_routes|fusion_mapping_sweep_tools|fusion_mapping_ablation)
 Docker builds default to **28 parallel compilation jobs**; CTest
 concurrency is configured separately. Python score readers use only
 the standard library and work in the repository's virtual environment.
