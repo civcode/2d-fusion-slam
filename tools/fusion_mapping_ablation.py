@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Audit fixed-graph occupancy experiments without changing any SLAM estimate.
 
-Window-specific maps are always scored against FULL-scene reference walls;
-their precision/recall cannot be directly compared with full-run coverage.
-All exact reference metrics are independent post-hoc scoring only.
+Window-specific maps retain full-scene scores for backwards compatibility.
+New runs also include a shared fixed-ray observation-footprint region score,
+so evidence variants can be compared fairly within early/late windows.
+All exact synthetic reference metrics are independent post-hoc scoring only.
 """
 from __future__ import annotations
 
@@ -146,7 +147,9 @@ def summarize(run: Path, csv_output: Path | None = None):
     report, variants = load(run)
     rows = [normalized_row(row) for row in variants]
     print(f"Scene: {report['scene']}; fixed graph poses: {report['frames']} scans")
-    print("Full-scene reference scoring only; no truth supplied to map reconstruction.")
+    print("Full-scene reference scoring retained; optional spatially masked "
+          "region metrics follow below.")
+    print("Synthetic truth is used only after map reconstruction.")
     print("Original graph map fingerprint verified against baseline reconstruction.")
     for window in ("full", "early", "late"):
         subset = [row for row in rows if row["window"] == window]
