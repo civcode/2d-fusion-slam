@@ -85,7 +85,9 @@ def load(run: Path):
             if (footprint.get("source") != "original_baseline_rays" or
                     footprint.get("padding_m") != .25 or
                     not isinstance(footprint.get("cells"), int) or
-                    not 0 < footprint["cells"] <= footprint.get("total_grid_cells", 0)):
+                    not 0 < footprint["cells"] <= footprint.get("total_grid_cells", 0) or
+                    not isinstance(footprint.get("fingerprint"), str) or
+                    not footprint["fingerprint"].isdigit()):
                 raise ValueError("invalid fixed observation footprint")
             previous = footprints.setdefault(row["window"], footprint)
             if previous != footprint:
