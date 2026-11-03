@@ -16,6 +16,40 @@ import sys
 from pathlib import Path
 
 
+# The original four-setting experiment is still readable. New native runs
+# explicitly mark the exhaustive grid; never infer missing cases as zeros.
+LEGACY_EVIDENCE = {
+    "baseline": (.85, -.40),
+    "stronger_hit": (1.20, -.40),
+    "gentler_free": (.85, -.20),
+    "combined": (1.20, -.20),
+}
+GRID_EVIDENCE = {
+    "baseline": (.85, -.40),
+    "h085_f030": (.85, -.30),
+    "gentler_free": (.85, -.20),
+    "h100_f040": (1.00, -.40),
+    "h100_f030": (1.00, -.30),
+    "h100_f020": (1.00, -.20),
+    "stronger_hit": (1.20, -.40),
+    "h120_f030": (1.20, -.30),
+    "combined": (1.20, -.20),
+}
+WINDOWS = ("full", "early", "late")
+DESKEWS = ("gyro_wheel_original", "graph_corrected_motion_model")
+
+
+def evidence_settings(payload: dict) -> dict:
+    grid = payload.get("evidence_grid")
+    if grid is None:
+        return LEGACY_EVIDENCE
+    if (grid != "three_by_three_v1" or
+            payload.get("evidence_hit_levels") != [.85, 1.0, 1.2] or
+            payload.get("evidence_free_levels") != [-.4, -.3, -.2]):
+        raise ValueError("unsupported or incomplete hit/free evidence grid")
+    return GRID_EVIDENCE
+
+
 def metric(value):
     if value is None:
         return None
@@ -32,14 +66,15 @@ def load(run: Path):
             payload.get("reference_usage") != "posthoc_scoring_only" or
             payload.get("source") != "graph_optimized_fixed_estimated_poses"):
         raise ValueError("mapping-ablation format/source/scene mismatch")
+    settings = evidence_settings(payload)
     rows = payload.get("variants")
-    if not isinstance(rows, list) or len(rows) != 24:
-        raise ValueError("expected 24 fixed-graph mapping variants")
-    expected = set()
-    for window in ("full", "early", "late"):
-        for deskew in ("gyro_wheel_original", "graph_corrected_motion_model"):
-            for odds in ("baseline", "stronger_hit", "gentler_free", "combined"):
-                expected.add(f"{window}_{deskew}_{odds}")
+    count = len(WINDOWS) * len(DESKEWS) * len(settings)
+    if not isinstance(rows, list) or len(rows) != count:
+        raise ValueError(f"expected {count} fixed-graph mapping variants")
+    expected = {
+        f"{window}_{deskew}_{odds}"
+        for window in WINDOWS for deskew in DESKEWS for odds in settings
+    }
     if {row["id"] for row in rows} != expected:
         raise ValueError("missing/duplicated mapping ablation variants")
     baseline = next(row for row in rows
@@ -54,9 +89,15 @@ def load(run: Path):
         raise ValueError("incomplete region-masked mapping metrics")
     footprints = {}
     for row in rows:
-        if row.get("evidence") not in (
-                "baseline", "stronger_hit", "gentler_free", "combined"):
+        evidence = row.get("evidence")
+        if evidence not in settings:
             raise ValueError("unknown occupancy evidence variant")
+        if (row["id"] != f"{row['window']}_{row['deskew']}_{evidence}" or
+                not math.isclose(row["hit_log_odds"], settings[evidence][0],
+                                 rel_tol=0, abs_tol=1e-12) or
+                not math.isclose(row["free_log_odds"], settings[evidence][1],
+                                 rel_tol=0, abs_tol=1e-12)):
+            raise ValueError("evidence label or hit/free values inconsistent")
         if row["map"]["format"] != "FUSMAPACC1":
             raise ValueError("unverified map scoring format")
         if row["map"]["reference_scene"] != report["scene"]:
