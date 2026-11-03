@@ -46,7 +46,8 @@ class SevenSceneSweepTest(unittest.TestCase):
             self.assertEqual(len(rows),7*4)
             self.assertEqual(len(regional),7*3*4)
             self.assertEqual({r["scene"] for r in rows},set(sweep.SCENES))
-            self.assertEqual({r["evidence"] for r in rows},set(sweep.EVIDENCE))
+            self.assertEqual({r["evidence"] for r in rows},
+                             set(sweep.ablation.LEGACY_EVIDENCE))
             self.assertEqual({r["window"] for r in regional},set(sweep.WINDOWS))
             self.assertTrue(all(float(r["mask_fraction"])>0 for r in regional))
             self.assertTrue(all(r["accepted_loops"]=="2" for r in rows))
