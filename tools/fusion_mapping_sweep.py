@@ -21,7 +21,7 @@ import fusion_mapping_ablation as ablation
 
 SCENES = ("apartment", "warehouse", "warehouse_asymmetric",
           "office", "loft", "atrium", "industrial")
-EVIDENCE = ("baseline", "stronger_hit", "gentler_free", "combined")
+EVIDENCE = tuple(ablation.GRID_EVIDENCE)  # complete 3x3, not an estimator input
 WINDOWS = ("full", "early", "late")
 DESKEW = "gyro_wheel_original"
 FUSION_FLAGS = (
@@ -79,6 +79,7 @@ def collect(runs_dir: Path, prefix: str):
     checked_prefix(prefix)
     rows, region_rows = [], []
     config = None
+    expected_evidence = None
     for scene in SCENES:
         directory = runs_dir / f"{prefix}-{scene}"
         report, variants = ablation.load(directory)
@@ -104,14 +105,27 @@ def collect(runs_dir: Path, prefix: str):
             raise ValueError(f"{scene}: cross-scene estimator settings changed")
         if not all("region_map" in row for row in variants):
             raise ValueError(f"{scene}: missing observation-footprint region metrics")
+        scene_evidence = {
+            row["evidence"] for row in variants
+            if row["window"] == "full" and row["deskew"] == DESKEW
+        }
+        if scene_evidence not in (set(ablation.LEGACY_EVIDENCE),
+                                  set(ablation.GRID_EVIDENCE)):
+            raise ValueError(f"{scene}: unsupported evidence settings")
+        if expected_evidence is None:
+            expected_evidence = scene_evidence
+        elif scene_evidence != expected_evidence:
+            raise ValueError("mixed legacy and three-by-three sweep runs")
         for window in WINDOWS:
             by_evidence = {
                 row["evidence"]: row for row in variants
                 if row["window"] == window and row["deskew"] == DESKEW
             }
-            if set(by_evidence) != set(EVIDENCE):
+            if set(by_evidence) != expected_evidence:
                 raise ValueError(f"{scene}: missing original-deskew evidence levels")
-            for evidence in EVIDENCE:
+            for evidence in ablation.GRID_EVIDENCE:
+                if evidence not in expected_evidence:
+                    continue
                 variant = by_evidence[evidence]
                 m = variant["map"]["metrics"]
                 region = variant["region_map"]["metrics"]
@@ -169,13 +183,76 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def rank_evidence(rows: list[dict]) -> list[dict]:
+    """Rank only complete comparable scene groups; never promote defaults."""
+    by_scene = {(r["scene"], r["evidence"]): r for r in rows}
+    if len(by_scene) != len(rows):
+        raise ValueError("duplicate scene/evidence rows in ranking")
+    scenes = set(SCENES)
+    present = {r["evidence"] for r in rows}
+    if present not in (set(ablation.LEGACY_EVIDENCE), set(ablation.GRID_EVIDENCE)):
+        raise ValueError("ranking requires all four legacy or all nine grid settings")
+    if {r["scene"] for r in rows} != scenes or len(rows) != len(scenes)*len(present):
+        raise ValueError("ranking must include every scene and evidence setting")
+    ranked = []
+    for evidence in ablation.GRID_EVIDENCE:
+        if evidence not in present:
+            continue
+        group = [by_scene[scene, evidence] for scene in SCENES]
+        original = [by_scene[scene, "baseline"] for scene in SCENES]
+        prec_changes = []
+        unavailable = False
+        for row, base in zip(group, original):
+            a, b = base["precision"], row["precision"]
+            if a is None or a <= 0 or b is None:
+                unavailable = True
+            else:
+                prec_changes.append(100. * (b/a - 1.))
+        iou_regressions = sum(r["iou"] + 1e-12 < b["iou"]
+                              for r, b in zip(group, original))
+        wall_regressions = sum(
+            r["mean_wall_m"] is not None and b["mean_wall_m"] is not None
+            and r["mean_wall_m"] > b["mean_wall_m"] + 1e-12
+            for r, b in zip(group, original))
+        all_prec = [r["precision"] for r in group]
+        result = {
+            "evidence": evidence,
+            "hit": ablation.GRID_EVIDENCE[evidence][0],
+            "free": ablation.GRID_EVIDENCE[evidence][1],
+            "mean_iou": sum(r["iou"] for r in group) / len(group),
+            "mean_precision": (sum(all_prec)/len(all_prec)
+                               if all(v is not None for v in all_prec) else None),
+            "worst_precision_change_pct": (min(prec_changes)
+                                            if not unavailable else None),
+            "precision_loss_gt_5pct_scenes":
+                sum(x < -5. - 1e-10 for x in prec_changes)
+                if not unavailable else None,
+            "precision_loss_gt_10pct_scenes":
+                sum(x < -10. - 1e-10 for x in prec_changes)
+                if not unavailable else None,
+            "iou_regression_scenes": iou_regressions,
+            "wall_distance_regression_scenes": wall_regressions,
+            "precision_guardrail_5pct": (
+                "PASS" if not unavailable and all(x >= -5.-1e-10 for x in prec_changes)
+                else "UNDEFINED" if unavailable else "FAIL"
+            ),
+        }
+        ranked.append(result)
+    ranked.sort(key=lambda r: (-r["mean_iou"], r["evidence"]))
+    return ranked
+
+
 def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
-              region_csv_path: Path | None) -> None:
+              region_csv_path: Path | None,
+              ranking_csv_path: Path | None = None) -> None:
     rows, regions = collect(runs_dir, prefix)
+    rankings = rank_evidence(rows)
     by_scene = {(r["scene"], r["evidence"]): r for r in rows}
     print("Seven-scene LiDAR-loop detector; graph poses fixed within each scene.")
     print("Loop counts can differ across scenes. No simulator truth entered mapping.")
-    print("Full-run 5cm exact occupied IoU: original deskew, fixed 4 evidence levels.\n")
+    print("Full-run 5cm exact occupied IoU; original deskew, fixed hit/free evidence.")
+    print(f"Evidence levels: {len(rankings)} "
+          f"({'full 3x3' if len(rankings)==9 else 'legacy 2x2'})\\n")
     print(f"{'Scene':23} {'loops':>5} {'IoU base':>9} {'IoU comb':>9} "
           f"{'P base':>8} {'P comb':>8} {'mean wall base':>14} {'mean wall comb':>14}")
     for scene in SCENES:
@@ -188,35 +265,27 @@ def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
               f"{fmt(b['precision']):>8} {fmt(a['mean_wall_m']):>14} "
               f"{fmt(b['mean_wall_m']):>14}")
 
-    print("\nCross-scene macro averages (unweighted, one vote per scene):")
-    print(f"{'Evidence':16} {'mean IoU':>10} {'mean precision':>15} "
-          f"{'IoU regressions':>15} {'precision <-10%':>16} {'wall regressions':>17}")
-    for evidence in EVIDENCE:
-        group = [by_scene[scene, evidence] for scene in SCENES]
-        originals = [by_scene[scene, "baseline"] for scene in SCENES]
-        def average(key):
-            values = [x[key] for x in group]
-            return sum(values)/len(values) if all(v is not None for v in values) else None
-        iou_bad = sum(row["iou"] + 1e-12 < base["iou"]
-                      for row, base in zip(group, originals))
-        precision_bad = sum(
-            row["precision"] is not None and base["precision"] is not None and
-            row["precision"] + 1e-12 < .9 * base["precision"]
-            for row, base in zip(group, originals)
-        )
-        distance_bad = sum(
-            row["mean_wall_m"] is not None and
-            base["mean_wall_m"] is not None and
-            row["mean_wall_m"] > base["mean_wall_m"] + 1e-12
-            for row, base in zip(group, originals)
-        )
-        avg_iou=average("iou")
-        avg_p=average("precision")
-        p_label = f"{avg_p:.5f}" if avg_p is not None else "undefined"
-        print(f"{evidence:16} {avg_iou:10.5f} "
-              f"{p_label:>15} "
-              f"{iou_bad:15} {precision_bad:16} {distance_bad:17}")
-    print("\nRegional scores use the SAME original-ray +25cm footprint for all "
+    print("\\nCross-scene macro averages (unweighted; ranked by mean occupied IoU):")
+    print(f"{'Rank':>4} {'Evidence':16} {'hit':>5} {'free':>6} "
+          f"{'mean IoU':>9} {'mean P':>8} {'worst ΔP':>9} "
+          f"{'P loss>5%':>9} {'P loss>10%':>10} "
+          f"{'IoU down':>8} {'wall down':>9} {'5% gate':>9}")
+    for index, r in enumerate(rankings,1):
+        def fmt(value, precision=2):
+            return "N/A" if value is None else f"{value:.{precision}f}"
+        print(f"{index:4} {r['evidence']:16} {r['hit']:5.2f} {r['free']:6.2f} "
+              f"{r['mean_iou']:9.5f} {fmt(r['mean_precision'],5):>8} "
+              f"{fmt(r['worst_precision_change_pct']):>9} "
+              f"{str(r['precision_loss_gt_5pct_scenes']):>9} "
+              f"{str(r['precision_loss_gt_10pct_scenes']):>10} "
+              f"{r['iou_regression_scenes']:8} "
+              f"{r['wall_distance_regression_scenes']:9} "
+              f"{r['precision_guardrail_5pct']:>9}")
+    print("\\nPrecision penalties are relative percentages against each scene's "
+          "+0.85/-0.40 baseline, not percentage points.")
+    print("5% gate = no scene loses more than 5% precision; it is a "
+          "diagnostic criterion, NOT automatic promotion.")
+    print("Regional scores use the SAME original-ray +25cm footprint for all "
           "evidence variants in each scene/window.")
     print("Early and late observation areas can overlap; do not add or directly "
           "compare their reference-wall recall.")
@@ -228,6 +297,9 @@ def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
     if region_csv_path is not None:
         write_csv(region_csv_path, regions)
         print(f"Spatially masked per-window CSV: {region_csv_path}")
+    if ranking_csv_path is not None:
+        write_csv(ranking_csv_path, rankings)
+        print(f"Cross-scene evidence ranking CSV: {ranking_csv_path}")
 
 
 def main() -> None:
@@ -242,11 +314,14 @@ def main() -> None:
     analysis.add_argument("--prefix", required=True)
     analysis.add_argument("--csv", type=Path)
     analysis.add_argument("--region-csv", type=Path)
+    analysis.add_argument("--ranking-csv", type=Path,
+                          help="optional ranked nine-setting comparison export")
     args = parser.parse_args()
     if args.command == "run":
         run_all(args.binary, args.runs_dir, args.prefix)
     else:
-        summarize(args.runs_dir, args.prefix, args.csv, args.region_csv)
+        summarize(args.runs_dir, args.prefix, args.csv, args.region_csv,
+                  args.ranking_csv)
 
 
 if __name__ == "__main__":
