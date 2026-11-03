@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end fixed-graph mapping ablation, separate from fast fusion smoke."""
+"""End-to-end nine-setting, fixed-graph mapping ablation (54 maps)."""
 from __future__ import annotations
 
 import json
@@ -51,8 +51,15 @@ class MappingAblationIntegrationTest(unittest.TestCase):
             self.assertEqual(data["format"],"FUSMAPABL1")
             self.assertEqual(data["reference_usage"],"posthoc_scoring_only")
             self.assertTrue(data["original_trajectory_and_maps_unchanged"])
-            self.assertEqual(len(data["variants"]),24)
-            self.assertEqual(len({v["id"] for v in data["variants"]}),24)
+            self.assertEqual(data["evidence_grid"],"three_by_three_v1")
+            self.assertEqual(data["evidence_hit_levels"],[.85,1.0,1.2])
+            self.assertEqual(data["evidence_free_levels"],[-.4,-.3,-.2])
+            self.assertEqual(len(data["variants"]),54)
+            self.assertEqual(len({v["id"] for v in data["variants"]}),54)
+            self.assertEqual(
+                {(v["hit_log_odds"],v["free_log_odds"])
+                 for v in data["variants"]},
+                {(h,f) for h in (.85,1.0,1.2) for f in (-.4,-.3,-.2)})
             n=new_report["frames"]
             cut=n-math.ceil(n*.12)
             self.assertTrue(
@@ -63,7 +70,9 @@ class MappingAblationIntegrationTest(unittest.TestCase):
                 {"full","early","late"})
             self.assertTrue(
                 {v["evidence"] for v in data["variants"]} ==
-                {"baseline","stronger_hit","gentler_free","combined"})
+                {"baseline","h085_f030","gentler_free",
+                 "h100_f040","h100_f030","h100_f020",
+                 "stronger_hit","h120_f030","combined"})
             masks_by_window={}
             self.assertEqual(data["region_padding_m"],.25)
             self.assertEqual(
