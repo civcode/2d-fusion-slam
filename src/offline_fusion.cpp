@@ -1103,10 +1103,18 @@ void export_mapping_ablation(const std::filesystem::path& directory,
   const std::size_t n=graph.poses.size();
   const std::size_t cut=n-static_cast<std::size_t>(std::ceil(.12*double(n)));
   struct Evidence {const char* id;double hit,free;};
-  constexpr std::array<Evidence,4> evidence{{
+  // Exhaustive, predeclared 3x3 hit/free log-odds sweep. Retain the
+  // original four IDs so prior 2x3x4 reports remain understandable.
+  // These are experimental map-only settings, never the SLAM defaults.
+  constexpr std::array<Evidence,9> evidence{{
       {"baseline",.85,-.4},
-      {"stronger_hit",1.2,-.4},
+      {"h085_f030",.85,-.3},
       {"gentler_free",.85,-.2},
+      {"h100_f040",1.0,-.4},
+      {"h100_f030",1.0,-.3},
+      {"h100_f020",1.0,-.2},
+      {"stronger_hit",1.2,-.4},
+      {"h120_f030",1.2,-.3},
       {"combined",1.2,-.2}
   }};
   struct Window {const char* id;std::size_t begin,end;};
@@ -1115,7 +1123,7 @@ void export_mapping_ablation(const std::filesystem::path& directory,
   }};
   // A single visibility footprint per frame-window is derived from the
   // ORIGINAL scan rays, independently of hit/free odds and corrected
-  // re-deskew. All eight mapping variants in a window share this same
+  // re-deskew. All eighteen mapping variants in a window share this same
   // padded spatial mask. Ground-truth walls play no part in its selection.
   constexpr double kRegionPaddingM=.25;
   std::array<slam::mapping::MapBundle,3> baseline_maps;
@@ -1142,6 +1150,9 @@ void export_mapping_ablation(const std::filesystem::path& directory,
     footprint_fingerprints[w]=fingerprint;
   }
   out<<"{\n\"format\":\"FUSMAPABL1\","
+     <<"\n\"evidence_grid\":\"three_by_three_v1\","
+     <<"\n\"evidence_hit_levels\":[0.85,1.0,1.2],"
+     <<"\n\"evidence_free_levels\":[-0.4,-0.3,-0.2],"
      <<"\n\"region_mask_source\":\"original_deskew_baseline_ray_observation_padded\","
      <<"\n\"region_padding_m\":"<<kRegionPaddingM<<","
      <<"\n\"source\":\"graph_optimized_fixed_estimated_poses\","
