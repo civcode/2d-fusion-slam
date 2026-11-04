@@ -54,6 +54,48 @@ class ReviewArtifactsTest(unittest.TestCase):
                 review.review_files(manifest,"missing",[("report",missing,True)])
             self.assertFalse(manifest.exists())
 
+    def test_organize_fr079_is_dry_run_by_default_and_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            prefix = parent / "fr079-continuous-noloop-001"
+            for suffix in review.FR079_ARTIFACT_SUFFIXES:
+                Path(str(prefix) + suffix).write_text("fixture")
+            preview = io.StringIO()
+            with contextlib.redirect_stdout(preview):
+                target = review.organize_fr079(prefix)
+            self.assertFalse(target.exists())
+            self.assertIn("Dry run", preview.getvalue())
+            for suffix in review.FR079_ARTIFACT_SUFFIXES:
+                self.assertTrue(Path(str(prefix) + suffix).exists())
+            with contextlib.redirect_stdout(io.StringIO()):
+                folder = review.organize_fr079(prefix, apply=True)
+            self.assertEqual(folder, parent / prefix.name)
+            self.assertEqual(review.fr079_basename(folder), folder / prefix.name)
+            self.assertEqual(
+                json.loads((folder/(prefix.name+".review.json")).read_text())["format"],
+                "SLAM_REVIEW1")
+            self.assertTrue((folder/(prefix.name+".slammap")).is_file())
+            for suffix in review.FR079_ARTIFACT_SUFFIXES:
+                self.assertFalse(Path(str(prefix) + suffix).exists())
+            with self.assertRaises(FileExistsError):
+                review.organize_fr079(prefix, apply=True)
+
+    def test_organize_requires_complete_non_symlinked_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            prefix = parent / "fr079-run"
+            (parent / "fr079-run.slammap").write_text("fixture")
+            with self.assertRaises(FileNotFoundError):
+                review.organize_fr079(prefix, apply=True)
+            self.assertFalse((parent/"fr079-run").exists())
+            for suffix in review.FR079_ARTIFACT_SUFFIXES:
+                Path(str(prefix) + suffix).write_text("fixture")
+            (parent/"fr079-run.slammap").unlink()
+            (parent/"fr079-run.slammap").symlink_to("/etc/passwd")
+            with self.assertRaises(FileNotFoundError):
+                review.organize_fr079(prefix, apply=True)
+            self.assertFalse((parent/"fr079-run").exists())
+
     def test_cli_indexes_existing_fr079_without_rerun(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

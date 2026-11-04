@@ -1,21 +1,23 @@
 # Experiment output and review-artifact convention
 
-**Status:** version 1 (opt-in; no existing result directories are moved,
-deleted, overwritten, or re-scored). This applies to persistent, user-invoked
+**Status:** version 2 (foldered FR079 runs are opt-in; legacy flat exports remain readable; no results are moved, deleted, overwritten, or re-scored automatically). This applies to persistent, user-invoked
 SLAM benchmarks; temporary CTest fixtures are deliberately not retained.
 
 ## Where files go (host filesystem)
 
 | Family | Output convention | Read-only Web UI |
 | --- | --- | --- |
-| Individual Freiburg FR079 native runs | `apps/demo/maps/<run-id>.slammap` with `<run-id>.report.json`, `.trajectory.json`, `.matches.json`, `.slamreplay.json`, `.review.json` beside it | Map Explorer and Recorded LiDAR Replay |
+| Individual Freiburg FR079 native runs | `apps/demo/maps/<run-id>/<run-id>.slammap` with `.report.json`, `.trajectory.json`, `.matches.json`, `.slamreplay.json`, `.review.json` in the same run folder | Map Explorer and Recorded LiDAR Replay |
 | Native synthetic fusion/mapping runs | `apps/demo/fusion/<run-id>/fusion_report.json`, `trajectories.json`, `fusion_replay.json`, `review-manifest.json` and map variants | Fusion Replay and Map Explorer |
 | Multi-run experiment campaigns | `benchmarks/<campaign-id>/` containing immutable per-run outputs, `scorecard.csv`, `manifest.json`, `review-manifest.json` | Explicitly mount a supported folder if appropriate |
 | Derived full/region/ranking CSVs | `reports/<prefix>-full.csv`, `<prefix>-regions.csv`, `<prefix>-ranking.csv`; companion `<prefix>-summary.review.json` | Upload the CSV files for analysis |
 
-The existing `apps/demo/maps` location stays flat because the map browser
-does not recursively traverse directories. `apps/demo/fusion` stays a
-run-directory collection. The multi-run study directory may instead be
+Map Explorer and Recorded LiDAR Replay now inspect **one level of named run
+directories** below `apps/demo/maps/`, alongside existing root-level files.
+They do not follow symlinks or recurse into deeper paths. The HTTP API gives
+foldered map/replay IDs the syntax `<run-id>@<run-id>.slammap` and
+`<run-id>@<run-id>.slamreplay.json` respectively. Legacy flat IDs remain
+unchanged. `apps/demo/fusion` stays a run-directory collection. The multi-run study directory may instead be
 under `benchmarks/` and mounted explicitly. Keep raw FR079 logs outside
 Git; do not upload full recordings merely to inspect a benchmark report.
 Use a **new run ID** when rerunning; do not silently overwrite previous data.
@@ -49,11 +51,11 @@ docker compose run --rm \
   -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
   --entrypoint ./build-docker/slam_fr079_offline test \
   /input/fr079.log.gz /output/fr079-continuous-noloop-002 \
-  --continuous-cost --match-every 5 --field-every 15 \
+  --run-directory --continuous-cost --match-every 5 --field-every 15 \
   --map-stride 1 --match-stride 4 --distance-truncation 0.5
 ```
 
-This creates `apps/demo/maps/fr079-continuous-noloop-002.review.json`
+This creates `apps/demo/maps/fr079-continuous-noloop-002/` and its nested `fr079-continuous-noloop-002.review.json`
 and prints absolute host paths for the four main JSON review files.
 For a different Docker mount, set `SLAM_HOST_OUTPUT_DIR` to that mount's
 actual host directory. `SLAM_CONTAINER_OUTPUT_DIR` defaults to
@@ -67,6 +69,25 @@ For synthetic fusion runs mounted as `/output`, use
 `-v "$PWD/apps/demo/fusion:/output"`. The native generator prints the
 per-scene review list and the seven-scene Python sweep can print the
 aggregate paths when `summarize` completes.
+
+### Organize an existing flat FR079 run
+
+The following commands operate on **your existing run files** without rerunning
+SLAM. First preview every move; only `--apply` actually moves data:
+
+```bash
+python3 tools/review_artifacts.py organize-fr079 \
+  apps/demo/maps/fr079-continuous-noloop-001
+
+python3 tools/review_artifacts.py organize-fr079 \
+  apps/demo/maps/fr079-continuous-noloop-001 --apply
+```
+
+The tool requires all seven original FR079 artifacts, refuses symlinks and
+existing destination directories, and writes a fresh review inventory within
+the dedicated run folder. Earlier review manifests outside the folder
+(including ones under `reports/`) are not modified and may point to the
+old locations. After the move, upload the new manifest.
 
 ### Index old results without rerunning
 
@@ -84,7 +105,8 @@ It prints absolute host paths for
 `fr079-continuous-noloop-001.report.json`,
 `.trajectory.json`, `.matches.json`, and `.slamreplay.json`,
 and a review-manifest path in `reports/`. A previous inventory is
-never rewritten. To index a synthetic run, use
+never rewritten. For a foldered FR079 run, the `fr079` indexing command
+also accepts the folder path directly. To index a synthetic run, use
 `python3 tools/review_artifacts.py fusion apps/demo/fusion/<run-id>`.
 
 **For ChatGPT review**, upload the `*.review.json` inventory and the
@@ -99,7 +121,7 @@ python3 tests/review_artifacts_tools_test.py
 docker compose build test
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker --output-on-failure \
-  -R '^(review_artifacts_tools|review_artifacts_cpp|fr079_offline_slam|fusion_mapping_sweep_tools)$'
+  -R '^(review_artifacts_tools|review_artifacts_cpp|fr079_offline_slam|fr079_offline_http|native_web_api|fusion_mapping_sweep_tools)$'
 ```
 
 No GitHub Actions are created, run or dispatched.

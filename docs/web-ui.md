@@ -130,15 +130,18 @@ and `--allow-network` is still required for explicit broad binding.
 | --- | --- |
 | \`GET /\` | Browser dashboard |
 | \`GET /api/health\` | Local service status; no robot tracking claim |
-| \`GET /api/maps\` | List direct \`.slammap\` files, active/previous pointer status |
+| \`GET /api/maps\` | List root-level and one-level foldered \`.slammap\` files, active/previous pointer status |
 | \`GET /api/maps/<filename>.slammap\` | Verified binary metadata and occupied/unknown counts |
 | \`GET /api/maps/<filename>.slammap/image.png\` | Occupancy image, highest Y at top |
 | \`GET /api/maps/<filename>.slammap/cell?x=…&y=…\` | Grid/metric cell inspection |
 
 POST, PUT, PATCH and DELETE return 405. The service never calls the
 graph optimizer, the map exporter or any robot-control action.
-It only reads files directly inside the configured directory, refuses
-symlinks, enforces map-size limits and validates checksums and binary
+It reads root-level files and **one level of named run directories** under
+the configured maps/replays root; deeper paths are not traversed.
+For foldered files, `<folder>@<filename>` is a virtual API identifier;
+browsers encode the `@` as `%40`. The server refuses symlinked folders and
+files, enforces map-size limits, and validates checksums and binary
 snapshot fingerprints before rendering or returning cell data. Browser
 resources are same-origin with a restrictive Content Security Policy.
 

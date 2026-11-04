@@ -329,7 +329,8 @@ int run(int argc,char** argv){
       "Offline FR079 CARMEN LiDAR and odometry SLAM");
   cli.add_options()
       ("log","FR079 recording",cxxopts::value<std::string>())
-      ("prefix","New output prefix",cxxopts::value<std::string>())
+      ("prefix","New output prefix or new run directory",cxxopts::value<std::string>())
+      ("run-directory","Create an exclusive directory and save run-prefixed files inside")
       ("reference","Use geometry-reference matcher without Ceres")
       ("support-aware","Enable opt-in certified-support Ceres matcher")
       ("continuous-cost","Enable opt-in finite cost for unknown EDT cells")
@@ -392,9 +393,27 @@ int run(int argc,char** argv){
     options.distance_truncation_m=positive_distance(
         args["distance-truncation"].as<std::string>());
   ensure(capture_max_frames<=100,"capture-max-frames must be at most 100");
-  const std::filesystem::path prefix(args["prefix"].as<std::string>());
-  ensure(!prefix.filename().empty()&&std::filesystem::is_directory(prefix.parent_path()),
+  const std::filesystem::path requested(args["prefix"].as<std::string>());
+  ensure(!requested.filename().empty()&&
+         std::filesystem::is_directory(requested.parent_path()),
          "output parent must already be a directory");
+  const bool run_directory=args.count("run-directory")&&
+      args["run-directory"].as<bool>();
+  std::filesystem::path prefix=requested;
+  if(run_directory) {
+    const auto id=requested.filename().string();
+    ensure(!id.empty()&&id.size()<=80&&
+           ((id.front()>='a'&&id.front()<='z')||
+            (id.front()>='A'&&id.front()<='Z')||
+            (id.front()>='0'&&id.front()<='9')) &&
+           std::all_of(id.begin(),id.end(),[](unsigned char ch){
+             return (ch>='a'&&ch<='z')||(ch>='A'&&ch<='Z')||
+                    (ch>='0'&&ch<='9')||ch=='_'||ch=='-';
+           }),"run-directory name must be 1-80 ASCII letters/digits/_/-");
+    ensure(!std::filesystem::exists(std::filesystem::symlink_status(requested)),
+           "run directory already exists; refusing overwrite");
+    prefix=requested/id;
+  }
   const auto binary=prefix.string()+".slammap";
   const auto replay=prefix.string()+".slamreplay.json";
   const auto trajectory=prefix.string()+".trajectory.json";
@@ -414,6 +433,11 @@ int run(int argc,char** argv){
   const auto content=read_log(args["log"].as<std::string>());
   const auto digest=sha256(content); // hash uncompressed CARMEN bytes, not filename
   const auto scans=parse(content);
+  // Do not create an empty run directory for unreadable/malformed input.
+  // The exclusive folder is created before any capture or map artifacts.
+  if(run_directory)
+    ensure(std::filesystem::create_directory(requested),
+           "failed creating exclusive run directory");
   std::unique_ptr<slam::datasets::Fr079CaptureBenchmark> capture_benchmark;
   if(capture) {
     capture_benchmark=std::make_unique<slam::datasets::Fr079CaptureBenchmark>(

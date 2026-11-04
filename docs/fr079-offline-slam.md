@@ -8,9 +8,10 @@ or logged laser-pose estimate is used as the trajectory or map input**.
 ## Build and run
 
 The full Ubuntu 24.04 Docker test image has Ceres, zlib and OpenSSL.
-Choose an output basename that does not already exist. The directory
-must exist and must be the **same directory used by the native viewer**
-if you want both the new map and scan replay in the Web UI.
+Use a new output run ID. With `--run-directory` the native executable
+creates `apps/demo/maps/<run-id>/` automatically, saving all run files together.
+Only the **parent** directory must already exist and be mounted in the
+native viewer. Older flat files remain readable for compatibility.
 
 ~~~sh
 export BUILD_JOBS=28
@@ -27,7 +28,7 @@ docker compose run --rm \
   -v "$PWD/apps/demo/maps:/output" \
   -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
   --entrypoint ./build-docker/slam_fr079_offline \
-  test /input/fr079.log.gz /output/fr079-slam
+  test /input/fr079.log.gz /output/fr079-slam --run-directory
 
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker -R 'fr079_offline_slam|fr079_offline_http' --output-on-failure
@@ -36,8 +37,8 @@ docker compose up -d demo
 ~~~
 
 View the new file at **http://127.0.0.1:8765/** (Map Explorer, select
-fr079-slam.slammap) and **http://127.0.0.1:8765/replay** (select
-fr079-slam.slamreplay.json). Do not select the unrelated workshop demo
+fr079-slam / fr079-slam.slammap) and **http://127.0.0.1:8765/replay** (select
+fr079-slam@fr079-slam.slamreplay.json). Do not select the unrelated workshop demo
 or legacy FR079 logged-pose replay when evaluating reconstructed maps.
 
 New runs also export `<prefix>.review.json` and print
@@ -47,8 +48,22 @@ map remains optional. `/output` is a Docker mount path, not a host path:
 the explicit `SLAM_HOST_OUTPUT_DIR` above tells the exporter which host
 directory corresponds to it.
 
-To find/upload your **already completed** `fr079-continuous-noloop-001`
-without rerunning SLAM:
+To move your **already completed** flat
+`fr079-continuous-noloop-001` files into their own folder, preview the
+move and then explicitly apply it (no SLAM rerun):
+
+```bash
+python3 tools/review_artifacts.py organize-fr079 \
+  apps/demo/maps/fr079-continuous-noloop-001
+python3 tools/review_artifacts.py organize-fr079 \
+  apps/demo/maps/fr079-continuous-noloop-001 --apply
+```
+
+The tool generates a fresh review inventory inside the new folder.
+The earlier inventory in `reports/` is not rewritten and will contain
+outdated paths after relocation.
+
+To find/upload an old *flat* run without moving it:
 
 ```bash
 mkdir -p reports
@@ -66,7 +81,7 @@ Native local build:
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=ON -DSLAM_ENABLE_CERES=ON -DSLAM_REQUIRE_CERES=ON
 cmake --build build --target slam_fr079_offline --parallel 28
-./build/slam_fr079_offline /path/to/fr079.log.gz apps/demo/maps/fr079-slam
+./build/slam_fr079_offline /path/to/fr079.log.gz apps/demo/maps/fr079-slam-local --run-directory
 ctest --test-dir build -R fr079_offline_slam --output-on-failure
 ~~~
 
@@ -76,7 +91,8 @@ backend; no hidden solver fallback is claimed. Optional parameters:
 --match-every N (default 5), --field-every N (default 15),
 --map-stride N (default 3), --match-stride N (default 4).
 All are deterministic, strictly bounded integer settings.
-Remove old output files or use a new prefix before repeating a run.
+Always use a new run ID rather than deleting or overwriting prior results.
+The legacy flat file prefix remains supported when `--run-directory` is omitted.
 
 ## Actual pipeline
 
