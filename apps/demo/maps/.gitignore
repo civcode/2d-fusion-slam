@@ -13,3 +13,4 @@ CURRENT
 *.trajectory.json
 *.matches.json
 *.report.json
+*.review.json
