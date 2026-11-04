@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -25,6 +26,8 @@ SETTINGS = ("matcher","distance_truncation_m","ablation_mode",
 COUNTS = ("frames","attempts","accepted","rejected","inserted_scans")
 FRONTEND_SOURCE = "frontend_scanmatched_relative_correlated_v1"
 LOOP_MODE = "fr079_frontend_relative_gtsam_loops_v2"
+# Official MIT DSpace fr079-sm.log.gz archive checksum; not a ground-truth claim.
+PUBLISHED_FR079_SM_ARCHIVE_MD5 = "2f1d5b62f229d3e86c43460255f761bb"
 
 
 def json_at(path: Path):
@@ -38,7 +41,8 @@ def run_prefix(path: Path) -> Path:
 
 def evaluate(raw_log: Path, reference_sm_log: Path, baseline: Path,
              optimized: Path, *, resolution: float = .10,
-             beam_stride: int = 4, max_range: float = 18.) -> dict:
+             beam_stride: int = 4, max_range: float = 18.,
+             verify_published_reference: bool = True) -> dict:
     if not (.02 <= resolution <= .50 and 1 <= beam_stride <= 64 and
             1. <= max_range <= 40.):
         raise ValueError("invalid map proxy resolution/beam stride/max range")
@@ -75,6 +79,13 @@ def evaluate(raw_log: Path, reference_sm_log: Path, baseline: Path,
     if bp["poses"] != lp["poses"]:
         raise ValueError("Ceres frontend pose sequence changed")
 
+    # Authenticate the actual compressed archive before interpreting the
+    # logged laser poses as the official published reference. A synthetic
+    # fixture may opt out only through the Python API, never the CLI.
+    archive_md5 = hashlib.md5(Path(reference_sm_log).read_bytes()).hexdigest()
+    authentic_reference = (archive_md5 == PUBLISHED_FR079_SM_ARCHIVE_MD5)
+    if verify_published_reference and not authentic_reference:
+        raise ValueError("scan-matched reference archive checksum differs from published FR079 MD5")
     raw, raw_hash = laser_records(raw_log)
     reference_scans, ref_hash = laser_records(reference_sm_log)
     if raw_hash == ref_hash:
@@ -122,6 +133,8 @@ def evaluate(raw_log: Path, reference_sm_log: Path, baseline: Path,
         "format":"FUSFR079REFERENCEBENCH1",
         "raw_source_sha256":raw_hash,
         "reference_source_sha256":ref_hash,
+        "reference_archive_md5":archive_md5,
+        "reference_archive_published_md5_verified":authentic_reference,
         "reference_kind":"fr079_sm_log_scanmatched_logged_laser_pose_estimate",
         "reference_used_in_estimation":False,
         "independent_ground_truth":False,

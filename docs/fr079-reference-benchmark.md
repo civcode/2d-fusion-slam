@@ -10,7 +10,10 @@ The official dataset entry lists three separate artifacts:
 [MIT/Radish fr079](https://dspace.mit.edu/entities/publication/2fe88c52-8693-4343-add4-b09f07257f94)
 (`fr079.log.gz`, `fr079-sm.log.gz`, and `fr079-map.tgz`).
 Use the **raw** recording for estimation and the **scan-matched** recording
-for evaluation only.
+for evaluation only. The published `fr079-sm.log.gz` compressed-file MD5 is
+`2f1d5b62f229d3e86c43460255f761bb`; the benchmark verifies the
+archive bytes and refuses a different reference log by default. Synthetic
+test fixtures opt out of this checksum through the Python API only.
 
 ## Experimental arms
 

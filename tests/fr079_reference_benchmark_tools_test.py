@@ -100,7 +100,9 @@ class ReferenceBenchmarkTest(unittest.TestCase):
     def test_paired_estimates_improve_correlated_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
             raw,sm,base,opt=self.fixture(Path(tmp))
-            result=evaluate(raw,sm,base,opt,beam_stride=8)
+            result=evaluate(raw,sm,base,opt,beam_stride=8,
+                            verify_published_reference=False)
+            self.assertFalse(result["reference_archive_published_md5_verified"])
             self.assertEqual(result["frames"],22)
             self.assertFalse(result["independent_ground_truth"])
             self.assertFalse(result["reference_used_in_estimation"])
@@ -118,20 +120,22 @@ class ReferenceBenchmarkTest(unittest.TestCase):
     def test_refuse_wrong_graph_and_mismatched_scans(self):
         with tempfile.TemporaryDirectory() as tmp:
             raw,sm,base,opt=self.fixture(Path(tmp))
+            with self.assertRaisesRegex(ValueError,"published FR079 MD5"):
+                evaluate(raw,sm,base,opt)
             report=opt/(opt.name+".report.json")
             obj=json.loads(report.read_text())
             obj["sequential_factor_source"]="logged_odometry_scan_time_v1"
             report.write_text(json.dumps(obj))
             with self.assertRaisesRegex(ValueError,"requires original Ceres"):
-                evaluate(raw,sm,base,opt)
+                evaluate(raw,sm,base,opt,verify_published_reference=False)
             obj["sequential_factor_source"]="frontend_scanmatched_relative_correlated_v1"
             report.write_text(json.dumps(obj))
             different=gzip.open(sm,"rb").read().replace(b"2.000",b"2.100",1)
             with gzip.open(sm,"wb") as stream:stream.write(different)
             with self.assertRaisesRegex(ValueError,"LiDAR ranges differ"):
-                evaluate(raw,sm,base,opt)
+                evaluate(raw,sm,base,opt,verify_published_reference=False)
             with self.assertRaisesRegex(ValueError,"same raw and reference"):
-                evaluate(raw,raw,base,opt)
+                evaluate(raw,raw,base,opt,verify_published_reference=False)
 
     def test_refuse_different_ceres_control_and_matches(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,7 +145,7 @@ class ReferenceBenchmarkTest(unittest.TestCase):
             obj["graph_control_poses"][10][0]+=1.
             graph.write_text(json.dumps(obj))
             with self.assertRaisesRegex(ValueError,"does not preserve Ceres"):
-                evaluate(raw,sm,base,opt)
+                evaluate(raw,sm,base,opt,verify_published_reference=False)
             obj["graph_control_poses"][10][0]-=1.
             graph.write_text(json.dumps(obj))
             decisions=opt/(opt.name+".matches.json")
@@ -149,7 +153,7 @@ class ReferenceBenchmarkTest(unittest.TestCase):
             rows["frames"][10]["accepted"]=True
             decisions.write_text(json.dumps(rows))
             with self.assertRaisesRegex(ValueError,"matching decision audit"):
-                evaluate(raw,sm,base,opt)
+                evaluate(raw,sm,base,opt,verify_published_reference=False)
 
 
 if __name__=="__main__":
