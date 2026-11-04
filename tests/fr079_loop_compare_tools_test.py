@@ -30,8 +30,12 @@ class Fr079LoopPairingTest(unittest.TestCase):
         pose={
             "format":"FUSFR079POSE1","source_sha256":sha,
             "poses":[{"estimated":[float(i),0,0]} for i in range(3)]}
+        matching={"format":"FUSFR079MATCH1","source_sha256":sha,
+                  "frames":[{"index":i,"status":"accepted" if i==2 else "not_attempted",
+                             "accepted":i==2,"field_ms":.1} for i in range(3)]}
         for prefix in (base,loop/"loop"):
             Path(str(prefix)+".trajectory.json").write_text(json.dumps(pose))
+            Path(str(prefix)+".matches.json").write_text(json.dumps(matching))
         Path(str(base)+".report.json").write_text(json.dumps(report))
         report["pose_graph_optimized"]=True
         report["loop_mode"]="fr079_lidar_scan_registration_gtsam_v1"
@@ -89,6 +93,15 @@ class Fr079LoopPairingTest(unittest.TestCase):
             obj["poses"][2]["estimated"][0]+=2
             poses.write_text(json.dumps(obj))
             with self.assertRaisesRegex(ValueError,"frontend trajectory changed"):
+                compare(base,loop)
+            poses.write_text(json.dumps({
+                "format":"FUSFR079POSE1","source_sha256":"a"*64,
+                "poses":[{"estimated":[float(i),0,0]} for i in range(3)]}))
+            audit_path=loop/"loop.matches.json"
+            audit=json.loads(audit_path.read_text())
+            audit["frames"][2]["accepted"]=False
+            audit_path.write_text(json.dumps(audit))
+            with self.assertRaisesRegex(ValueError,"matching decisions changed"):
                 compare(base,loop)
 
     def test_rejects_unverified_provenance_and_marks_zero_loops(self):

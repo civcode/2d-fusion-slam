@@ -297,7 +297,8 @@ void save_report(const std::filesystem::path& file,
                  const std::string& source,
                  const slam::datasets::Fr079SlamOptions& options,
                  double loading_ms,double slam_ms,double export_ms,
-                 const slam::datasets::Fr079LoopResult* loop=nullptr) {
+                 const slam::datasets::Fr079LoopResult* loop=nullptr,
+                 double graph_compute_ms=0) {
   std::ofstream out(file);
   if(!out)throw std::runtime_error("failed to write FR079 report");
   std::vector<double> per_frame,fields,matches,inserts;
@@ -383,6 +384,7 @@ void save_report(const std::filesystem::path& file,
      <<",\"profiling\":{\"clock\":\"std::chrono::steady_clock\""
      <<",\"input_load_ms\":"<<loading_ms
      <<",\"slam_compute_ms\":"<<compute_ms
+     <<",\"graph_compute_ms\":"<<graph_compute_ms
      <<",\"slam_wall_including_capture_ms\":"<<slam_ms
      <<",\"capture_benchmark_ms\":"<<result.capture_benchmark_ms
      <<",\"estimated_offline_fps\":"<<(compute_ms>0?frames*1000./compute_ms:0)
@@ -556,11 +558,13 @@ int run(int argc,char** argv){
   const std::size_t capture_trials=capture_benchmark?capture_benchmark->tested_trials():0;
   capture_benchmark.reset();
   std::optional<slam::datasets::Fr079LoopResult> loop;
+  const auto graph_start=Clock::now();
 #ifdef SLAM_FR079_WITH_GTSAM
   if(lidar_loop_closure)
     loop=slam::datasets::run_fr079_loop_experiment(scans,result,options);
 #endif
   const auto computed=Clock::now();
+  const double graph_compute_ms=loop?elapsed_ms(graph_start,computed):0.;
   {
     std::ofstream out(binary,std::ios::binary);
     if(!out)throw std::runtime_error("cannot open FUSMAP2D output");
@@ -594,7 +598,7 @@ int run(int argc,char** argv){
   const auto exported=Clock::now();
   save_report(report,result,digest,options,elapsed_ms(begin,loaded),
               elapsed_ms(loaded,computed),elapsed_ms(computed,exported),
-              loop?&*loop:nullptr);
+              loop?&*loop:nullptr,graph_compute_ms);
   std::cout<<"FR079 offline LiDAR+odometry SLAM: scans="<<scans.size()
            <<" matched="<<result.accepted<<"/"<<result.attempts
            <<" inserted="<<result.inserted_scans

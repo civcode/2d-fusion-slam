@@ -62,6 +62,23 @@ def compare(base: Path, loop: Path) -> dict:
         raise ValueError("incremental frontend map changed; cannot attribute result to loops")
     if bp["poses"] != lp["poses"]:
         raise ValueError("incremental frontend trajectory changed; run configurations not paired")
+    base_prefix = base / base.name if base.is_dir() else base
+    loop_prefix = loop / loop.name if loop.is_dir() else loop
+    bm = json.loads(Path(str(base_prefix) + ".matches.json").read_text())
+    lm = json.loads(Path(str(loop_prefix) + ".matches.json").read_text())
+    if (bm.get("format") != "FUSFR079MATCH1" or
+            lm.get("format") != "FUSFR079MATCH1" or
+            bm.get("source_sha256") != sha or
+            lm.get("source_sha256") != sha):
+        raise ValueError("invalid frontend match audit provenance")
+    if len(bm["frames"]) != l["frames"] or len(lm["frames"]) != l["frames"]:
+        raise ValueError("frontend matching audit frame count mismatch")
+    times = {"field_ms", "match_ms", "insertion_ms", "frame_ms"}
+    def untimed(audit):
+        return [{key:value for key,value in row.items() if key not in times}
+                for row in audit["frames"]]
+    if untimed(bm) != untimed(lm):
+        raise ValueError("frontend matching decisions changed between runs")
     if (g.get("independent_ground_truth") is not False or
             g.get("loop_evidence") !=
                 "correlated_raw_lidar_reciprocal_scan_registration" or
@@ -100,10 +117,14 @@ def compare(base: Path, loop: Path) -> dict:
                    "Neither graph objective nor map fingerprint measures physical accuracy."),
         "comparison_status": status,
         "frontend_trajectory_identical": True,
+        "frontend_matching_audit_identical": True,
         "frontend_map_identical": True,
         "frontend_matched": l["accepted"],
         "frontend_attempts": l["attempts"],
         "frames": n,
+        "baseline_incremental_compute_ms": b.get("profiling", {}).get("slam_compute_ms"),
+        "loop_run_compute_including_graph_ms": l.get("profiling", {}).get("slam_compute_ms"),
+        "graph_compute_ms": l.get("profiling", {}).get("graph_compute_ms"),
         "loop_nearby_pairs": g["nearby_pairs"],
         "loop_registrations": g["registration_attempts"],
         "loop_geometry_verified": g["geometry_verified"],
