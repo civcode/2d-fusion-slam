@@ -59,6 +59,44 @@ int main() {
   check((wide.previous_from_current.translation-farther.translation).norm()<.07);
   check(std::abs(slam::wrap_yaw(
       wide.previous_from_current.yaw_rad-farther.yaw_rad))<.04);
+  // An opposite-direction revisit can have arbitrary absolute heading,
+  // provided its *correction from the supplied SE(2) prior* is small.
+  const Pose2 reverse_pose{{.28,.10},slam::wrap_yaw(3.14159265358979323846-.06)};
+  std::vector<Eigen::Vector2d> opposite;
+  for(std::size_t i=0;i<previous.size();++i) {
+    if(i%19==0)continue;
+    const auto p=slam::transform(slam::inverse(reverse_pose),previous[i]);
+    opposite.emplace_back(p.x()+.001*std::sin(double(i)),
+                          p.y()+.001*std::cos(double(i)));
+  }
+  const Pose2 reverse_prior{{.25,.08},
+       slam::wrap_yaw(reverse_pose.yaw_rad-.035)};
+  const auto legacy_reverse=register_consecutive_scans(
+       previous,opposite,reverse_prior,false,{3.0,.7});
+  check(!legacy_reverse.accepted);
+  const auto pose_prior_reverse=slam::matching::register_scans_from_pose_prior(
+       previous,opposite,reverse_prior,false);
+  check(pose_prior_reverse.accepted && pose_prior_reverse.correspondence_rank);
+  check(pose_prior_reverse.forward_overlap>.82 &&
+        pose_prior_reverse.reverse_overlap>.82);
+  // Discrete wall points can permit a small longitudinal ICP ambiguity;
+  // this tests large absolute heading plus bounded correction, not an
+  // unrealistically perfect corridor localization requirement.
+  check((pose_prior_reverse.previous_from_current.translation-
+         reverse_pose.translation).norm()<.20);
+  check(std::abs(slam::wrap_yaw(pose_prior_reverse.previous_from_current.yaw_rad-
+                                reverse_pose.yaw_rad))<.05);
+  const auto repeated=slam::matching::register_scans_from_pose_prior(
+       previous,opposite,reverse_prior,false);
+  check(repeated.accepted);
+  check((repeated.previous_from_current.translation-
+         pose_prior_reverse.previous_from_current.translation).norm()<1e-12);
+  const Pose2 bad_prior{{2.8,2.8},-1.5};
+  check(!slam::matching::register_scans_from_pose_prior(
+       previous,opposite,bad_prior,false).accepted);
+  const auto invalid_correction=slam::matching::register_scans_from_pose_prior(
+       previous,opposite,reverse_prior,false,{3.0,2.0,.17});
+  check(!invalid_correction.accepted);
   const auto invalid_limits=register_consecutive_scans(
       previous,revisited,farther,false,
       {.max_translation_m=10.,.max_rotation_rad=.6});

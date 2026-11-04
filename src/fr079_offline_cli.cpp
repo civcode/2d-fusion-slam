@@ -238,6 +238,11 @@ void save_loop_diagnostics(const std::filesystem::path& path,
      <<",\"loop_evidence\":\"correlated_raw_lidar_reciprocal_scan_registration\""
      <<",\"odometry_source\":\"embedded_scan_time_odom_not_ground_truth\""
      <<",\"sequential_factor_source\":\""<<loop.sequential_factor_source<<"\""
+     <<",\"registration_mode\":\""<<loop.registration_mode<<"\""
+     <<",\"large_heading_nearby_pairs\":"<<loop.large_heading_nearby_pairs
+     <<",\"large_heading_registration_attempts\":"<<loop.large_heading_registration_attempts
+     <<",\"large_heading_geometry_verified\":"<<loop.large_heading_geometry_verified
+     <<",\"large_heading_accepted_loops\":"<<loop.large_heading_accepted_loops
      <<",\"proposed_loops\":"<<loop.proposed_loops
      <<",\"accepted_loops\":"<<loop.accepted_loops
      <<",\"nearby_pairs\":"<<loop.nearby_pairs
@@ -265,7 +270,8 @@ void save_loop_diagnostics(const std::filesystem::path& path,
        <<",\"overlap\":"<<d.overlap
        <<",\"rms_m\":"<<d.rms_m
        <<",\"innovation_m\":"<<d.innovation_m
-       <<",\"innovation_yaw_rad\":"<<d.innovation_yaw_rad<<"}";
+       <<",\"innovation_yaw_rad\":"<<d.innovation_yaw_rad
+       <<",\"predicted_relative_yaw_rad\":"<<d.predicted_relative_yaw_rad<<"}";
   }
   out<<"],\""<<(loop.sequential_factor_source==
       "frontend_scanmatched_relative_correlated_v1"?
@@ -339,6 +345,8 @@ void save_report(const std::filesystem::path& file,
              "fr079_frontend_relative_gtsam_loops_v2":
              "fr079_lidar_scan_registration_gtsam_v1"):"none")<<"\""
      <<",\"sequential_factor_source\":\""<<(loop?loop->sequential_factor_source:"none")<<"\""
+     <<",\"loop_registration_mode\":\""<<(loop?loop->registration_mode:"none")<<"\""
+     <<",\"loop_large_heading_accepted\":"<<(loop?loop->large_heading_accepted_loops:0)
      <<",\"loop_candidates\":"<<(loop?loop->proposed_loops:0)
      <<",\"loop_registration_attempts\":"<<(loop?loop->registration_attempts:0)
      <<",\"loop_geometry_verified\":"<<(loop?loop->geometry_verified:0)
@@ -432,6 +440,7 @@ int run(int argc,char** argv){
       ("continuous-cost","Enable opt-in finite cost for unknown EDT cells")
       ("lidar-loop-closure","Detect reciprocal LiDAR revisits and optimize an offline GTSAM graph")
       ("frontend-sequential-graph","Use correlated frontend-relative sequential factors instead of logged odometry (requires --lidar-loop-closure)")
+      ("loop-registration","Loop matching method: legacy-scan (default), pose-prior-scan (arbitrary predicted heading)",cxxopts::value<std::string>())
       ("ablation","Experimental finite Ceres variant: finite-seed-legacy, finite-all-legacy, finite-seed-continuous",cxxopts::value<std::string>())
       ("capture","Write frozen-map pose perturbation benchmark")
       ("capture-every","Capture interval",cxxopts::value<std::string>())
@@ -472,6 +481,16 @@ int run(int argc,char** argv){
       args["frontend-sequential-graph"].as<bool>();
   ensure(!frontend_sequential_graph||lidar_loop_closure,
          "--frontend-sequential-graph requires --lidar-loop-closure");
+  const std::string loop_registration=args.count("loop-registration")?
+      args["loop-registration"].as<std::string>():"legacy-scan";
+  ensure(loop_registration=="legacy-scan" ||
+         loop_registration=="pose-prior-scan",
+         "invalid --loop-registration: choose legacy-scan or pose-prior-scan");
+  ensure(!args.count("loop-registration")||lidar_loop_closure,
+         "--loop-registration requires --lidar-loop-closure");
+  const auto registration_mode=loop_registration=="pose-prior-scan"?
+      slam::datasets::Fr079LoopRegistrationMode::pose_prior_scan_to_scan:
+      slam::datasets::Fr079LoopRegistrationMode::legacy_scan_to_scan;
 #ifndef SLAM_FR079_WITH_GTSAM
   ensure(!lidar_loop_closure,
          "--lidar-loop-closure requires a native build with GTSAM");
@@ -574,7 +593,7 @@ int run(int argc,char** argv){
 #ifdef SLAM_FR079_WITH_GTSAM
   if(lidar_loop_closure)
     loop=slam::datasets::run_fr079_loop_experiment(
-        scans,result,options,frontend_sequential_graph);
+        scans,result,options,frontend_sequential_graph,registration_mode);
 #endif
   const auto computed=Clock::now();
   const double graph_compute_ms=loop?elapsed_ms(graph_start,computed):0.;

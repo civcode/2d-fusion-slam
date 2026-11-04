@@ -175,3 +175,91 @@ To assess physical map error against `fr079-map.tgz`,
 first establish a documented frame transform, cell conventions,
 resolution and independently verifiable registration, then add that
 as a distinct evaluation.
+
+
+## Opt-in experiment: full-heading scan-to-scan loop matching (before submaps)
+
+The original 11-loop benchmark above used the **legacy** scan-to-scan
+candidate/matcher path. Preserve those maps and scores as the baseline. The
+heading correction is a **separate selectable experiment**, not a retroactive
+change to those archived results.
+
+The new loop-registration API is
+`register_scans_from_pose_prior(previous,current,initial_previous_from_current,...)`.
+The initial transformation is the complete Ceres-estimated **SE(2)** relative
+pose. It may contain **any initial heading, including ~180 degrees**. The
+matcher bounds the **innovation from that supplied prior**, not the absolute
+relative yaw: maximum 0.55 m translational and 0.17 rad angular correction,
+and maximum 3 m candidate translation. The consecutive-scan registration
+API retains its original small-angle envelope.
+
+New opt-in mode:
+`--loop-registration pose-prior-scan`. Its default remains
+`legacy-scan`. This flag requires `--lidar-loop-closure`.
+In pose-prior mode:
+
+- Candidate discovery uses the Ceres-predicted **spatial** neighborhood
+  (2.8 m), **without a relative-heading cutoff**.
+- The first three of six registration slots can be assigned to
+  near-heading candidates and three to candidates differing by at least
+  90 degrees; unused slots fill from the nearest remaining candidates.
+  This avoids starving reverse corridor traversals.
+- Scan registration searches small corrections **around the full prior**
+  rather than treating the absolute relative rotation as a motion limit.
+- Existing strict reciprocal inlier, overlap, rank, loop innovation and
+  graph-consistency checks are unchanged. A valid large-heading prior
+  **does not guarantee** overlapping 180-degree LiDAR views.
+- The run's `*.loops.json` records `registration_mode`, the number of
+  large-heading (>=90 deg) nearby pairs, registrations, geometrically
+  verified candidates and accepted loops. Every attempted loop decision
+  carries its `predicted_relative_yaw_rad`. The report includes
+  `loop_registration_mode`.
+
+From the same `FR079_LOG` used for the existing Ceres baseline, generate
+**a new run ID** without modifying the 11-loop run:
+
+```bash
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-ceresgraph-poseprior-001 \
+  --run-directory --continuous-cost \
+  --match-every 5 --field-every 15 \
+  --map-stride 1 --match-stride 4 --distance-truncation 0.5 \
+  --lidar-loop-closure --frontend-sequential-graph \
+  --loop-registration pose-prior-scan
+```
+
+Run exactly the same reference evaluation as before, with a **new** prefix:
+
+```bash
+python3 tools/fr079_reference_benchmark.py \
+  --raw-log "$FR079_LOG" \
+  --reference-sm-log "$FR079_SM_LOG" \
+  --baseline apps/demo/maps/fr079-continuous-noloop-001 \
+  --optimized apps/demo/maps/fr079-ceresgraph-poseprior-001 \
+  --out reports/fr079-reference-poseprior-001
+```
+
+Compare its loop diagnostics and errors with the existing
+`fr079-reference-benchmark-001` results. Inspect the
+`*.graph_optimized.slammap` in Map Explorer: the plain `*.pgm` is always
+the unchanged Ceres frontend map.
+
+### Future submap matcher, deliberately not implemented in this step
+
+The scan-to-scan matcher's bounded **pose-prior correction** is a reusable
+geometric registration primitive. A subsequent Cartographer-style
+scan-to-submap registration mode should build historical frozen local
+submaps, search pose hypotheses against them (including large-drift
+alternatives), then add validated factors to **the same GTSAM backend**.
+
+Keep the legacy scan-to-scan mode, the new pose-prior scan-to-scan mode and
+future scan-to-submap mode separately selectable for controlled ablation.
+Neither the new spatial gate nor a single-scan 82% reciprocal overlap
+threshold solves scan-to-submap place recognition or corridor ambiguity.
+No improvement in accepted loop count, trajectory agreement, or map
+quality is claimed before a real FR079 rerun.
+

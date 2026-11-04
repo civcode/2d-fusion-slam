@@ -82,6 +82,36 @@ def main():
             (corrected/(corrected.name+".review.json")).read_text())
         assert "frontend_sequential_graph_control_map" in {
             entry["role"] for entry in corrected_manifest["files"]}
+        # Opt-in full-heading pose-prior scan matcher. This mode must be
+        # separately selectable, preserving the original loop experiment.
+        pose_prior = root / "pose-prior"
+        run(binary,log,pose_prior,*flags,
+            "--lidar-loop-closure","--frontend-sequential-graph",
+            "--loop-registration","pose-prior-scan")
+        pose_report=json.loads(
+            (pose_prior/(pose_prior.name+".report.json")).read_text())
+        pose_loops=json.loads(
+            (pose_prior/(pose_prior.name+".loops.json")).read_text())
+        assert pose_report["loop_registration_mode"] == "pose_prior_scan_to_scan_v1"
+        assert pose_loops["registration_mode"] == "pose_prior_scan_to_scan_v1"
+        assert pose_loops["sequential_factor_source"] == (
+            "frontend_scanmatched_relative_correlated_v1")
+        assert pose_loops["large_heading_nearby_pairs"] >= (
+            pose_loops["large_heading_registration_attempts"])
+        assert pose_loops["large_heading_registration_attempts"] >= (
+            pose_loops["large_heading_geometry_verified"])
+        assert pose_loops["large_heading_geometry_verified"] >= (
+            pose_loops["large_heading_accepted_loops"])
+        assert all("predicted_relative_yaw_rad" in entry
+                   for entry in pose_loops["loop_decisions"])
+        assert len(pose_loops["graph_control_poses"]) == 184
+        assert len(pose_loops["loop_graph_poses"]) == 184
+        assert (pose_prior/(pose_prior.name+".graph_optimized.slammap")).is_file()
+        # A loop matcher change must not affect frontend scan matching/maps.
+        prior_timeline=json.loads(
+            (pose_prior/(pose_prior.name+".trajectory.json")).read_text())
+        assert prior_timeline["poses"] == new_trajectory["poses"]
+        assert pose_report["map"]["fingerprint"] == new_report["map"]["fingerprint"]
         print("FR079 loop/native graph-control integration and pairing passed")
         print("Loop closures on toy CARMEN fixture (not Freiburg):",
               graph["accepted_loops"])

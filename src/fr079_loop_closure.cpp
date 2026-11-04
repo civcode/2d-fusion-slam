@@ -21,6 +21,7 @@ constexpr std::size_t kMaxLoops=24;
 constexpr std::size_t kDistinctAnchorGap=24;
 constexpr double kNearbyM=2.8;
 constexpr double kNearbyYaw=.52;
+constexpr double kLargeHeadingRad=1.57079632679489661923; // >90 degrees
 
 void need(bool ok,const char* message) {
   if(!ok)throw std::invalid_argument(message);
@@ -85,7 +86,8 @@ struct Candidate {
 
 Fr079LoopResult run_fr079_loop_experiment(
     const std::vector<CarmenLaser>& scans,const Fr079SlamResult& frontend,
-    const Fr079SlamOptions& options,bool frontend_sequential_graph) {
+    const Fr079SlamOptions& options,bool frontend_sequential_graph,
+    Fr079LoopRegistrationMode registration_mode) {
   need(scans.size()==frontend.frames.size()&&scans.size()>kTemporalExclusion,
        "FR079 loop experiment requires >120 aligned scans and frontend poses");
   slam::graph::BatchGraphInput input;
@@ -125,6 +127,10 @@ Fr079LoopResult run_fr079_loop_experiment(
        "odometry-only graph lost its fixed first pose");
 
   Fr079LoopResult out;
+  const bool pose_prior_scan =
+      registration_mode==Fr079LoopRegistrationMode::pose_prior_scan_to_scan;
+  out.registration_mode=pose_prior_scan?"pose_prior_scan_to_scan_v1":
+                                       "legacy_scan_to_scan_v1";
   out.odometry_graph_poses=control.optimized_map_from_base;
   out.sequential_factor_source=frontend_sequential_graph?
       "frontend_scanmatched_relative_correlated_v1":"logged_odometry_scan_time_v1";
@@ -154,32 +160,66 @@ Fr079LoopResult run_fr079_loop_experiment(
       i<scans.size()&&selected.size()<kMaxLoops;i+=kKeyframeStride) {
     const auto& current=clouds[i];
     if(current.size()<80)continue;
-    struct Neighbor {std::size_t index;double distance;};
+    struct Neighbor {std::size_t index;double distance,heading_difference;};
     std::vector<Neighbor> nearby;
     for(std::size_t j=0;j+kTemporalExclusion<i;j+=kKeyframeStride) {
       const auto relative=slam::compose(
           slam::inverse(input.initial_map_from_base[j]),
           input.initial_map_from_base[i]);
+      const double heading_difference=
+          std::abs(slam::wrap_yaw(relative.yaw_rad));
       if(relative.translation.norm()<=kNearbyM &&
-         std::abs(slam::wrap_yaw(relative.yaw_rad))<=kNearbyYaw)
-        nearby.push_back({j,relative.translation.norm()});
+         (pose_prior_scan||heading_difference<=kNearbyYaw)) {
+        nearby.push_back({j,relative.translation.norm(),heading_difference});
+        if(heading_difference>=kLargeHeadingRad)
+          ++out.large_heading_nearby_pairs;
+      }
     }
     out.nearby_pairs+=nearby.size();
     std::sort(nearby.begin(),nearby.end(),[](const auto& a,const auto& b){
       return a.distance==b.distance?a.index<b.index:a.distance<b.distance;
     });
 
+    // In pose-prior mode reserve up to half the registration attempts for
+    // large heading differences. Without this, the closest six candidates
+    // could all be same-direction and starve reverse corridor revisits.
+    // Remaining capacity is filled by nearest candidates of either class.
+    std::vector<std::size_t> registrations;
+    if(pose_prior_scan) {
+      for(int large=0;large<2;++large) {
+        std::size_t allocated=0;
+        for(std::size_t k=0;k<nearby.size()&&allocated<kMaxHypotheses/2;++k) {
+          if((nearby[k].heading_difference>=kLargeHeadingRad)==
+              (large==1)) {
+            registrations.push_back(k);
+            ++allocated;
+          }
+        }
+      }
+    }
+    for(std::size_t k=0;k<nearby.size()&&
+        registrations.size()<kMaxHypotheses;++k)
+      if(std::find(registrations.begin(),registrations.end(),k)==
+         registrations.end())
+        registrations.push_back(k);
+    std::sort(registrations.begin(),registrations.end());
     std::vector<Candidate> valid;
-    for(std::size_t k=0;k<std::min(kMaxHypotheses,nearby.size());++k) {
+    for(const auto k:registrations) {
       const auto j=nearby[k].index;
+      const bool large_heading=
+          nearby[k].heading_difference>=kLargeHeadingRad;
       const auto& previous=clouds[j];
       if(previous.size()<80)continue;
       const Pose2 prior=slam::compose(
           slam::inverse(input.initial_map_from_base[j]),
           input.initial_map_from_base[i]);
-      auto registered=slam::matching::register_consecutive_scans(
-          previous,current,prior,false,{3.0,.7});
+      auto registered=pose_prior_scan?
+          slam::matching::register_scans_from_pose_prior(
+              previous,current,prior,false,{3.0,.55,.17}):
+          slam::matching::register_consecutive_scans(
+              previous,current,prior,false,{3.0,.7});
       ++out.registration_attempts;
+      if(large_heading)++out.large_heading_registration_attempts;
       const double overlap=std::min(registered.forward_overlap,
                                     registered.reverse_overlap);
       const auto change=slam::compose(
@@ -188,6 +228,7 @@ Fr079LoopResult run_fr079_loop_experiment(
           registered.forward_inliers,registered.reverse_inliers,overlap,
           registered.mean_error_m,change.translation.norm(),
           std::abs(slam::wrap_yaw(change.yaw_rad))};
+      event.predicted_relative_yaw_rad=nearby[k].heading_difference;
       if(!registered.accepted||!registered.correspondence_rank||
          registered.forward_inliers<80||registered.reverse_inliers<80||
          overlap<.82||registered.mean_error_m>.11||
@@ -195,9 +236,13 @@ Fr079LoopResult run_fr079_loop_experiment(
         out.decisions.push_back(event);
         continue;
       }
-      const auto reverse=slam::matching::register_consecutive_scans(
-          current,previous,slam::inverse(registered.previous_from_current),
-          false,{3.0,.7});
+      const auto reverse=pose_prior_scan?
+          slam::matching::register_scans_from_pose_prior(
+              current,previous,slam::inverse(registered.previous_from_current),
+              false,{3.0,.55,.17}):
+          slam::matching::register_consecutive_scans(
+              current,previous,slam::inverse(registered.previous_from_current),
+              false,{3.0,.7});
       const auto cycle=slam::compose(registered.previous_from_current,
                                      reverse.previous_from_current);
       if(!reverse.accepted||!reverse.correspondence_rank||
@@ -210,6 +255,7 @@ Fr079LoopResult run_fr079_loop_experiment(
         continue;
       }
       ++out.geometry_verified;
+      if(large_heading)++out.large_heading_geometry_verified;
       const slam::graph::FactorProvenance lidar{
           slam::graph::EvidenceClass::lidar_scan_registration,
           "fr079_raw_scan_reciprocal_registration_v1",true,false};
@@ -262,6 +308,9 @@ Fr079LoopResult run_fr079_loop_experiment(
   for(std::size_t i=0;i<selected.size();++i) {
     auto event=selected[i].event;
     event.decision=decision(result.loop_decisions[i]);
+    if(result.loop_decisions[i]==slam::graph::LoopDecision::accepted &&
+       event.predicted_relative_yaw_rad>=kLargeHeadingRad)
+      ++out.large_heading_accepted_loops;
     out.decisions.push_back(std::move(event));
   }
   double total_shift=0;
