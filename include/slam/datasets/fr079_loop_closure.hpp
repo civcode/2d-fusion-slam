@@ -22,6 +22,9 @@ struct Fr079LoopResult {
   mapping::MapBundle odometry_graph_map;
   mapping::MapBundle loop_graph_map;
   std::vector<Pose2> odometry_graph_poses, loop_graph_poses;
+  // The first vector is the sequential-only graph control in both modes;
+  // the historical field name is kept for backward-compatible consumers.
+  std::string sequential_factor_source{"logged_odometry_scan_time_v1"};
   std::vector<Fr079LoopEvent> decisions;
   std::size_t nearby_pairs{}, registration_attempts{}, geometry_verified{};
   std::size_t redundant_suppressed{}, proposed_loops{}, accepted_loops{};
@@ -30,13 +33,14 @@ struct Fr079LoopResult {
   double mean_graph_shift_m{}, maximum_graph_shift_m{};
   double maximum_graph_shift_yaw_rad{};
   bool first_pose_fixed{}, independent_ground_truth{false};
-  // Used to refuse highly unstable graph corrections as a run failure,
-  // rather than silently publish a distorted occupancy map.
+  // Post-optimization warning only; rejected candidates remain exported
+  // for experiment review and are never automatically promoted.
   bool graph_shift_within_safety_limit{};
 };
 
 [[nodiscard]] Fr079LoopResult run_fr079_loop_experiment(
     const std::vector<CarmenLaser>& scans,
     const Fr079SlamResult& frontend,
-    const Fr079SlamOptions& options);
+    const Fr079SlamOptions& options,
+    bool frontend_sequential_graph = false);
 } // namespace slam::datasets

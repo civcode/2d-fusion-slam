@@ -11,7 +11,8 @@ namespace slam::graph {
 // No odometry or loop edge is accepted without evidence of its source.
 // 'synthetic_exact' is for deterministic test fixtures, never real hardware.
 enum class EvidenceClass { unverified, synthetic_exact, independently_measured,
-                           lidar_scan_registration };
+                           lidar_scan_registration,
+                           frontend_scanmatched_correlated };
 struct FactorProvenance {
   EvidenceClass source{EvidenceClass::unverified};
   std::string source_id;        // identifiable log/sensor/fixture
@@ -37,6 +38,8 @@ struct LoopCandidate {
 };
 struct BatchGraphInput {
   std::vector<Pose2> initial_map_from_base;
+  // Consecutive factors: either independent recorded odometry or
+  // explicitly labeled correlated frontend-relative estimates.
   std::vector<PoseEdge> odometry;
   std::vector<LoopCandidate> loops;
 };

@@ -74,6 +74,10 @@ python3 tools/review_artifacts.py fr079 \
 
 For an **opt-in GTSAM loop-closure comparison** using the same FR079
 Ceres settings, see [FR079 real-data loop-closure experiment](fr079-loop-closure-experiment.md).
+For the **frontend-preserving GTSAM loop benchmark** measured against
+the published scan-matched FR079 estimate (trajectory and reference-derived
+hit-map proxy), see [FR079 reference benchmark](fr079-reference-benchmark.md).
+The historical odometry-only GTSAM experiment is not this benchmark.
 The incremental map and trajectory remain the reference; the new graph
 maps are additional, separately reported results.
 

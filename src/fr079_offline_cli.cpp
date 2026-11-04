@@ -237,6 +237,7 @@ void save_loop_diagnostics(const std::filesystem::path& path,
      <<"\",\"independent_ground_truth\":false"
      <<",\"loop_evidence\":\"correlated_raw_lidar_reciprocal_scan_registration\""
      <<",\"odometry_source\":\"embedded_scan_time_odom_not_ground_truth\""
+     <<",\"sequential_factor_source\":\""<<loop.sequential_factor_source<<"\""
      <<",\"proposed_loops\":"<<loop.proposed_loops
      <<",\"accepted_loops\":"<<loop.accepted_loops
      <<",\"nearby_pairs\":"<<loop.nearby_pairs
@@ -331,7 +332,11 @@ void save_report(const std::filesystem::path& file,
      <<",\"loop_closures\":"<<(loop?loop->accepted_loops:0)
      <<",\"pose_graph_optimized\":"<<(loop?"true":"false")
      <<",\"realtime_deadlines_verified\":false"
-     <<",\"loop_mode\":\""<<(loop?"fr079_lidar_scan_registration_gtsam_v1":"none")<<"\""
+     <<",\"loop_mode\":\""<<(loop?
+         (loop->sequential_factor_source=="frontend_scanmatched_relative_correlated_v1"?
+             "fr079_frontend_relative_gtsam_loops_v2":
+             "fr079_lidar_scan_registration_gtsam_v1"):"none")<<"\""
+     <<",\"sequential_factor_source\":\""<<(loop?loop->sequential_factor_source:"none")<<"\""
      <<",\"loop_candidates\":"<<(loop?loop->proposed_loops:0)
      <<",\"loop_registration_attempts\":"<<(loop?loop->registration_attempts:0)
      <<",\"loop_geometry_verified\":"<<(loop?loop->geometry_verified:0)
@@ -423,7 +428,8 @@ int run(int argc,char** argv){
       ("reference","Use geometry-reference matcher without Ceres")
       ("support-aware","Enable opt-in certified-support Ceres matcher")
       ("continuous-cost","Enable opt-in finite cost for unknown EDT cells")
-      ("lidar-loop-closure","Detect reciprocal LiDAR revisits and optimize a GTSAM graph with an odometry-only control")
+      ("lidar-loop-closure","Detect reciprocal LiDAR revisits and optimize an offline GTSAM graph")
+      ("frontend-sequential-graph","Use correlated frontend-relative sequential factors instead of logged odometry (requires --lidar-loop-closure)")
       ("ablation","Experimental finite Ceres variant: finite-seed-legacy, finite-all-legacy, finite-seed-continuous",cxxopts::value<std::string>())
       ("capture","Write frozen-map pose perturbation benchmark")
       ("capture-every","Capture interval",cxxopts::value<std::string>())
@@ -460,6 +466,10 @@ int run(int argc,char** argv){
   }
   const bool lidar_loop_closure=args.count("lidar-loop-closure")&&
       args["lidar-loop-closure"].as<bool>();
+  const bool frontend_sequential_graph=args.count("frontend-sequential-graph")&&
+      args["frontend-sequential-graph"].as<bool>();
+  ensure(!frontend_sequential_graph||lidar_loop_closure,
+         "--frontend-sequential-graph requires --lidar-loop-closure");
 #ifndef SLAM_FR079_WITH_GTSAM
   ensure(!lidar_loop_closure,
          "--lidar-loop-closure requires a native build with GTSAM");
@@ -561,7 +571,8 @@ int run(int argc,char** argv){
   const auto graph_start=Clock::now();
 #ifdef SLAM_FR079_WITH_GTSAM
   if(lidar_loop_closure)
-    loop=slam::datasets::run_fr079_loop_experiment(scans,result,options);
+    loop=slam::datasets::run_fr079_loop_experiment(
+        scans,result,options,frontend_sequential_graph);
 #endif
   const auto computed=Clock::now();
   const double graph_compute_ms=loop?elapsed_ms(graph_start,computed):0.;
@@ -620,7 +631,9 @@ int run(int argc,char** argv){
   if(capture)files.push_back({"capture_diagnostics",capture_csv,true});
   if(loop) {
     files.push_back({"loop_decisions_and_graph_poses",loops_json,true});
-    files.push_back({"odometry_only_graph_map",graph_control_map,false});
+    files.push_back({frontend_sequential_graph?
+        "frontend_sequential_graph_control_map":"odometry_only_graph_map",
+        graph_control_map,false});
     files.push_back({"loop_optimized_map",graph_optimized_map,false});
   }
   slam::cli::write_review_manifest(review,"fr079_offline",files);

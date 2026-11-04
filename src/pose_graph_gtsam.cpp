@@ -26,10 +26,18 @@ bool valid_sigma(const PoseEdge& e) {
          std::isfinite(e.sigma_yaw_rad) && e.sigma_yaw_rad >= 1e-6 && e.sigma_yaw_rad < 3.15;
 }
 bool verified(const FactorProvenance& p) {
-  return p.source != EvidenceClass::unverified &&
-         p.source != EvidenceClass::lidar_scan_registration &&
+  return (p.source == EvidenceClass::independently_measured ||
+          p.source == EvidenceClass::synthetic_exact) &&
          !p.source_id.empty() && p.source_id.size() <= 256 &&
          p.clock_and_frame_verified && p.independent_of_initial_trajectory;
+}
+bool correlated_frontend_factor(const PoseEdge& e) {
+  const auto& p=e.provenance;
+  return p.source == EvidenceClass::frontend_scanmatched_correlated &&
+         !p.source_id.empty() && p.source_id.size() <= 256 &&
+         p.clock_and_frame_verified && !p.independent_of_initial_trajectory &&
+         e.sigma_x_m >= .05 && e.sigma_y_m >= .05 &&
+         e.sigma_yaw_rad >= .04;
 }
 gtsam::Pose2 gpose(const Pose2& p) {
   return {p.translation.x(),p.translation.y(),p.yaw_rad};
@@ -75,8 +83,9 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
   for(std::size_t i=0;i<input.odometry.size();++i){
     const auto& e=input.odometry[i];
     valid_edge_shape(e,n);
-    if(e.from!=i || e.to!=i+1 || !verified(e.provenance))
-      throw std::invalid_argument("odometry edges must be consecutive and independently verified");
+    if(e.from!=i || e.to!=i+1 ||
+       !(verified(e.provenance)||correlated_frontend_factor(e)))
+      throw std::invalid_argument("sequential graph factors need verified independent or explicitly correlated-frontend provenance");
     odometry_sources.insert(e.provenance.source_id);
     graph.emplace_shared<gtsam::BetweenFactor<gtsam::Pose2>>(
         e.from,e.to,gpose(e.from_to),diagonal(e));

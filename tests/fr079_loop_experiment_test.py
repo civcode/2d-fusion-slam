@@ -57,6 +57,31 @@ def main():
         assert {x["role"] for x in manifest["files"]} >= {
             "report","matching_decisions","loop_decisions_and_graph_poses",
             "odometry_only_graph_map","loop_optimized_map"}
+        corrected = root / "frontend-sequential"
+        run(binary,log,corrected,*flags,
+            "--lidar-loop-closure","--frontend-sequential-graph")
+        new_report=json.loads((corrected/(corrected.name+".report.json")).read_text())
+        new_graph=json.loads((corrected/(corrected.name+".loops.json")).read_text())
+        new_trajectory=json.loads((corrected/(corrected.name+".trajectory.json")).read_text())
+        assert new_report["loop_mode"] == "fr079_frontend_relative_gtsam_loops_v2"
+        assert new_report["sequential_factor_source"] == (
+            "frontend_scanmatched_relative_correlated_v1")
+        assert new_graph["sequential_factor_source"] == (
+            "frontend_scanmatched_relative_correlated_v1")
+        assert new_graph["first_pose_fixed"] is True
+        assert len(new_graph["odometry_graph_poses"]) == 184
+        assert len(new_graph["loop_graph_poses"]) == 184
+        # Native no-loop graph must preserve the input frontend trajectory.
+        for ctrl, frame in zip(new_graph["odometry_graph_poses"],
+                               new_trajectory["poses"]):
+            pose = frame["estimated"]
+            assert sum((x-y)**2 for x,y in zip(ctrl[:2],pose[:2])) < 1e-8
+            assert abs((ctrl[2]-pose[2]+3.141592653589793) % (
+                2*3.141592653589793)-3.141592653589793) < 1e-4
+        corrected_manifest=json.loads(
+            (corrected/(corrected.name+".review.json")).read_text())
+        assert "frontend_sequential_graph_control_map" in {
+            entry["role"] for entry in corrected_manifest["files"]}
         print("FR079 loop/native graph-control integration and pairing passed")
         print("Loop closures on toy CARMEN fixture (not Freiburg):",
               graph["accepted_loops"])

@@ -85,7 +85,7 @@ struct Candidate {
 
 Fr079LoopResult run_fr079_loop_experiment(
     const std::vector<CarmenLaser>& scans,const Fr079SlamResult& frontend,
-    const Fr079SlamOptions& options) {
+    const Fr079SlamOptions& options,bool frontend_sequential_graph) {
   need(scans.size()==frontend.frames.size()&&scans.size()>kTemporalExclusion,
        "FR079 loop experiment requires >120 aligned scans and frontend poses");
   slam::graph::BatchGraphInput input;
@@ -101,10 +101,16 @@ Fr079LoopResult run_fr079_loop_experiment(
   const slam::graph::FactorProvenance odom{
       slam::graph::EvidenceClass::independently_measured,
       "fr079_recorded_odom_scan_time_v1",true,true};
+  const slam::graph::FactorProvenance frontend_relative{
+      slam::graph::EvidenceClass::frontend_scanmatched_correlated,
+      "fr079_frontend_relative_correlated_v1",true,false};
   for(std::size_t i=1;i<scans.size();++i) {
-    const Pose2 increment=slam::compose(
-        slam::inverse(frontend.frames[i-1].odom),frontend.frames[i].odom);
-    input.odometry.push_back({i-1,i,increment,.10,.10,.08,odom});
+    const auto& poses=frontend.frames;
+    const Pose2 increment=frontend_sequential_graph?
+        slam::compose(slam::inverse(poses[i-1].estimated),poses[i].estimated):
+        slam::compose(slam::inverse(poses[i-1].odom),poses[i].odom);
+    input.odometry.push_back({i-1,i,increment,.10,.10,.08,
+                              frontend_sequential_graph?frontend_relative:odom});
   }
 
   // First optimize the *identical* odometry graph without loops. This
@@ -120,6 +126,19 @@ Fr079LoopResult run_fr079_loop_experiment(
 
   Fr079LoopResult out;
   out.odometry_graph_poses=control.optimized_map_from_base;
+  out.sequential_factor_source=frontend_sequential_graph?
+      "frontend_scanmatched_relative_correlated_v1":"logged_odometry_scan_time_v1";
+  if(frontend_sequential_graph) {
+    // With no loop factors, consecutive frontend constraints must recover
+    // the input frontend trajectory, not silently create a new odometry map.
+    for(std::size_t i=0;i<scans.size();++i) {
+      const auto& a=out.odometry_graph_poses[i];
+      const auto& b=frontend.frames[i].estimated;
+      need((a.translation-b.translation).norm()<1e-4 &&
+           std::abs(slam::wrap_yaw(a.yaw_rad-b.yaw_rad))<1e-4,
+           "frontend graph control failed to preserve frontend trajectory");
+    }
+  }
   out.control_initial_cost=control.initial_cost;
   out.control_final_cost=control.final_cost;
 
@@ -264,10 +283,14 @@ Fr079LoopResult run_fr079_loop_experiment(
   const auto& config=frontend.map.snapshot->config();
   out.odometry_graph_map=build_map(
       scans,out.odometry_graph_poses,config,options,
-      "fr079-recorded-odometry-graph-control-v1");
+      frontend_sequential_graph?
+          "fr079-correlated-frontend-graph-control-v1":
+          "fr079-recorded-odometry-graph-control-v1");
   out.loop_graph_map=build_map(
       scans,out.loop_graph_poses,config,options,
-      "fr079-recorded-odometry-graph-with-lidar-loops-v1");
+      frontend_sequential_graph?
+          "fr079-correlated-frontend-graph-with-lidar-loops-v1":
+          "fr079-recorded-odometry-graph-with-lidar-loops-v1");
   return out;
 }
 } // namespace slam::datasets
