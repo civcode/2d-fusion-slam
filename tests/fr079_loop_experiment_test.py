@@ -69,10 +69,10 @@ def main():
         assert new_graph["sequential_factor_source"] == (
             "frontend_scanmatched_relative_correlated_v1")
         assert new_graph["first_pose_fixed"] is True
-        assert len(new_graph["odometry_graph_poses"]) == 184
+        assert len(new_graph["graph_control_poses"]) == 184
         assert len(new_graph["loop_graph_poses"]) == 184
         # Native no-loop graph must preserve the input frontend trajectory.
-        for ctrl, frame in zip(new_graph["odometry_graph_poses"],
+        for ctrl, frame in zip(new_graph["graph_control_poses"],
                                new_trajectory["poses"]):
             pose = frame["estimated"]
             assert sum((x-y)**2 for x,y in zip(ctrl[:2],pose[:2])) < 1e-8

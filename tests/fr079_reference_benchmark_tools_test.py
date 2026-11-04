@@ -79,7 +79,7 @@ class ReferenceBenchmarkTest(unittest.TestCase):
             "independent_ground_truth":False,"first_pose_fixed":True,
             "sequential_factor_source":"frontend_scanmatched_relative_correlated_v1",
             "accepted_loops":2,
-            "odometry_graph_poses":controls,"loop_graph_poses":loops,
+            "graph_control_poses":controls,"loop_graph_poses":loops,
         })
         return raw,sm,baseline,optimized
 
@@ -138,11 +138,11 @@ class ReferenceBenchmarkTest(unittest.TestCase):
             raw,sm,base,opt=self.fixture(Path(tmp))
             graph=opt/(opt.name+".loops.json")
             obj=json.loads(graph.read_text())
-            obj["odometry_graph_poses"][10][0]+=1.
+            obj["graph_control_poses"][10][0]+=1.
             graph.write_text(json.dumps(obj))
             with self.assertRaisesRegex(ValueError,"does not preserve Ceres"):
                 evaluate(raw,sm,base,opt)
-            obj["odometry_graph_poses"][10][0]-=1.
+            obj["graph_control_poses"][10][0]-=1.
             graph.write_text(json.dumps(obj))
             decisions=opt/(opt.name+".matches.json")
             rows=json.loads(decisions.read_text())

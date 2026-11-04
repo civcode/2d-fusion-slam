@@ -86,6 +86,8 @@ docker compose run --rm \
 
 The new `*.report.json` and `*.loops.json` both contain
 `sequential_factor_source=frontend_scanmatched_relative_correlated_v1`.
+For this new mode, the JSON array is named `graph_control_poses`, not
+the historical `odometry_graph_poses` used by the old raw-odometry experiment.
 The former also carries
 `loop_mode=fr079_frontend_relative_gtsam_loops_v2`.
 The generated maps are:

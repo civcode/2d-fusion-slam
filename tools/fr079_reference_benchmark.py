@@ -86,7 +86,7 @@ def evaluate(raw_log: Path, reference_sm_log: Path, baseline: Path,
             raise ValueError("raw log SHA-256 mismatch with SLAM artifacts")
     n = len(raw)
     if any(size != n for size in (br["frames"],lr["frames"],
-               len(bp["poses"]),len(lp["poses"]),len(g["odometry_graph_poses"]),
+               len(bp["poses"]),len(lp["poses"]),len(g["graph_control_poses"]),
                len(g["loop_graph_poses"]))):
         raise ValueError("scan and pose timeline counts do not match")
     left_match = json_at(Path(str(a)+".matches.json"))
@@ -107,7 +107,7 @@ def evaluate(raw_log: Path, reference_sm_log: Path, baseline: Path,
                            [record["t"] for record in bp["poses"]])
     frontend = [pose(p["estimated"],"Ceres estimate") for p in bp["poses"]]
     sequential = [pose(p,"frontend graph control")
-                  for p in g["odometry_graph_poses"]]
+                  for p in g["graph_control_poses"]]
     loop = [pose(p,"GTSAM loop estimate") for p in g["loop_graph_poses"]]
     if any(math.hypot(x[0]-y[0],x[1]-y[1]) > 1e-4 or
            abs(wrap(x[2]-y[2])) > 1e-4

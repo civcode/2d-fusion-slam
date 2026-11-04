@@ -267,7 +267,9 @@ void save_loop_diagnostics(const std::filesystem::path& path,
        <<",\"innovation_m\":"<<d.innovation_m
        <<",\"innovation_yaw_rad\":"<<d.innovation_yaw_rad<<"}";
   }
-  out<<"],\"odometry_graph_poses\":[";
+  out<<"],\""<<(loop.sequential_factor_source==
+      "frontend_scanmatched_relative_correlated_v1"?
+        "graph_control_poses":"odometry_graph_poses")<<"\":[";
   for(std::size_t k=0;k<loop.odometry_graph_poses.size();++k) {
     if(k)out<<",";
     out<<pose(loop.odometry_graph_poses[k]);

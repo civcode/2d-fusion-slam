@@ -113,9 +113,9 @@ Fr079LoopResult run_fr079_loop_experiment(
                               frontend_sequential_graph?frontend_relative:odom});
   }
 
-  // First optimize the *identical* odometry graph without loops. This
-  // control is essential: raw odometry factors may already move a
-  // map relative to the incremental Ceres frontend.
+  // Optimize the selected sequential graph without loops. Frontend-derived
+  // factors must preserve Ceres exactly; the old raw-odometry mode remains
+  // available separately for diagnostic compatibility.
   slam::graph::BatchGraphOptions graph_settings;
   graph_settings.maximum_iterations=75;
   graph_settings.maximum_loop_residual_translation_m=.8;
