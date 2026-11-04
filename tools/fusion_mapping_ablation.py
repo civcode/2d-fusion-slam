@@ -8,6 +8,8 @@ All exact synthetic reference metrics are independent post-hoc scoring only.
 """
 from __future__ import annotations
 
+from review_artifacts import review_files
+
 import argparse
 import csv
 import json
@@ -236,6 +238,12 @@ def summarize(run: Path, csv_output: Path | None = None):
             writer.writeheader()
             writer.writerows(rows)
         print(f"\nCSV: {csv_output}")
+        review_files(csv_output.parent / (csv_output.stem + ".review.json"),
+                     "fusion_mapping_ablation_summary", [
+                         ("mapping_ablation_csv", csv_output, True),
+                         ("run_report", run/"fusion_report.json", True),
+                         ("mapping_ablation_json", run/"mapping_ablation.json", True),
+                     ])
 
 
 def main():

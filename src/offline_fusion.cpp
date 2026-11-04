@@ -1,4 +1,5 @@
 #include <cxxopts.hpp>
+#include "slam/cli/review_artifacts.hpp"
 #include "slam/evaluation/map_accuracy.hpp"
 #include "slam/fixtures/synthetic.hpp"
 #include "slam/fusion/gyro_wheel.hpp"
@@ -1721,6 +1722,20 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
                         matched.backend,sim.scene.id);
     if(!profile)throw std::runtime_error("failed writing fusion profiler output");
   }
+  std::vector<slam::cli::ReviewFile> review_files={
+      {"report",directory/"fusion_report.json",true},
+      {"trajectories",directory/"trajectories.json",true},
+      {"matching_audit",directory/"lidar_only_match_audit.json",true},
+      {"replay",directory/"fusion_replay.json",true},
+      {"performance",directory/"fusion_profile.json",true},
+      {"fused_map",directory/"fused_scan_matched.slammap",false},
+  };
+  if(graph_map)review_files.push_back(
+      {"optimized_map",directory/"graph_optimized.slammap",false});
+  if(options.mapping_ablation)review_files.push_back(
+      {"mapping_ablation",directory/"mapping_ablation.json",true});
+  slam::cli::write_review_manifest(
+      directory/"review-manifest.json",sim.scene.id,review_files);
   std::cout<<"scene="<<sim.scene.id
            <<" frames="<<sim.reference.size()
            <<" matcher="<<matched.backend

@@ -25,6 +25,7 @@ mkdir -p apps/demo/maps
 docker compose run --rm \
   -v "$FR079_LOG:/input/fr079.log.gz:ro" \
   -v "$PWD/apps/demo/maps:/output" \
+  -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
   --entrypoint ./build-docker/slam_fr079_offline \
   test /input/fr079.log.gz /output/fr079-slam
 
@@ -38,6 +39,26 @@ View the new file at **http://127.0.0.1:8765/** (Map Explorer, select
 fr079-slam.slammap) and **http://127.0.0.1:8765/replay** (select
 fr079-slam.slamreplay.json). Do not select the unrelated workshop demo
 or legacy FR079 logged-pose replay when evaluating reconstructed maps.
+
+New runs also export `<prefix>.review.json` and print
+**Review artifacts (upload to ChatGPT)** with the *host* paths of the
+report, trajectory, matching decisions, and replay. The large binary
+map remains optional. `/output` is a Docker mount path, not a host path:
+the explicit `SLAM_HOST_OUTPUT_DIR` above tells the exporter which host
+directory corresponds to it.
+
+To find/upload your **already completed** `fr079-continuous-noloop-001`
+without rerunning SLAM:
+
+```bash
+mkdir -p reports
+python3 tools/review_artifacts.py fr079 \
+  apps/demo/maps/fr079-continuous-noloop-001 \
+  --manifest reports/fr079-continuous-noloop-001.review.json
+```
+
+See [experiment artifacts and review paths](experiment-artifacts.md)
+for the repository's complete output naming and upload convention.
 
 Native local build:
 

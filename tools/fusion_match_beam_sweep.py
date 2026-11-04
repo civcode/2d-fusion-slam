@@ -86,6 +86,8 @@ def command(a, scene, matcher, stride, label, offset=0):
         return [
             "docker", "compose", "run", "--rm",
             "-v", f"{a.out_dir}:/fusion",
+                "-e", f"SLAM_HOST_OUTPUT_DIR={a.out_dir}",
+            "-e", "SLAM_CONTAINER_OUTPUT_DIR=/fusion",
             "--entrypoint", "./build-docker/slam_offline_fusion",
             "test", scene, f"/fusion/{label}", *opts,
         ]

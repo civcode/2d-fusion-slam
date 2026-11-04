@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import fusion_mapping_ablation as ablation
+from review_artifacts import review_files, host_path
 
 
 SCENES = ("apartment", "warehouse", "warehouse_asymmetric",
@@ -73,6 +74,13 @@ def run_all(binary: Path, runs_dir: Path, prefix: str,
         print(f"\n[{scene}] {directory}", flush=True)
         subprocess.run(command, check=True)  # local native process, never Actions
     print(f"\nCompleted seven fixed-detector scene runs (suite={suite}).")
+    # The native generator prints each run's review files. Also provide one
+    # discoverable index of scene reports for upload without opening 7 folders.
+    reviews = [(f"{scene}_report", directory / "fusion_report.json", True)
+               for scene, directory in zip(scenes, destinations)]
+    if all(file.is_file() for _, file, _ in reviews):
+        review_files(runs_dir / f"{prefix}-runs.review.json",
+                     f"fusion_mapping_sweep:{suite}", reviews)
 
 
 def _finite(value, label: str) -> float:
@@ -322,6 +330,19 @@ def summarize(runs_dir: Path, prefix: str, csv_path: Path | None,
     if ranking_csv_path is not None:
         write_csv(ranking_csv_path, rankings)
         print(f"Cross-scene evidence ranking CSV: {ranking_csv_path}")
+    exports = [
+        ("full_scene_csv", csv_path, True),
+        ("region_csv", region_csv_path, True),
+        ("ranking_csv", ranking_csv_path, True),
+    ]
+    exports = [(name, path, upload) for name, path, upload in exports
+               if path is not None]
+    if exports:
+        manifest = exports[0][1].parent / f"{prefix}-summary.review.json"
+        if not manifest.exists():
+            review_files(manifest, f"fusion_mapping_summary:{suite}", exports)
+        else:
+            print("Review manifest already exists:", host_path(manifest) or manifest)
 
 
 def main() -> None:

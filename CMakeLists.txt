@@ -556,6 +556,10 @@ if(BUILD_TESTING)
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_mapping_sweep_tools_test.py")
     set_tests_properties(fusion_mapping_sweep_tools PROPERTIES TIMEOUT 45)
+    add_test(NAME review_artifacts_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/review_artifacts_tools_test.py")
+    set_tests_properties(review_artifacts_tools PROPERTIES TIMEOUT 30)
     add_test(NAME fusion_scene_diversity
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_scene_diversity_test.py"
@@ -717,6 +721,11 @@ if(BUILD_TESTING)
   add_executable(slam_fixtures_smoke tests/fixtures_smoke.cpp)
   target_link_libraries(slam_fixtures_smoke PRIVATE slam_fixtures)
   add_test(NAME fixtures_smoke COMMAND slam_fixtures_smoke)
+  add_executable(slam_review_artifacts_test tests/review_artifacts_test.cpp)
+  target_compile_features(slam_review_artifacts_test PRIVATE cxx_std_20)
+  target_include_directories(slam_review_artifacts_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  add_test(NAME review_artifacts_cpp COMMAND slam_review_artifacts_test)
 
   add_executable(slam_workshop_contour_dump tests/workshop_contour_dump.cpp)
   target_link_libraries(slam_workshop_contour_dump PRIVATE slam_fixtures)

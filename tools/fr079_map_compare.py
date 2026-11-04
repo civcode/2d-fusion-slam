@@ -12,6 +12,8 @@ scoring are strictly after the recording has been processed.
 """
 from __future__ import annotations
 
+from review_artifacts import review_files
+
 import argparse
 import gzip
 import json
@@ -277,6 +279,10 @@ def main():
               reference_resolution_m=res)
     print(json.dumps(report,indent=2))
     print("Overlay:",args.out.with_suffix(".png"),file=sys.stderr)
+    review_files(args.out.with_suffix(".review.json"), "fr079_map_compare", [
+        ("map_agreement_json", args.out.with_suffix(".json"), True),
+        ("map_alignment_overlay_png", args.out.with_suffix(".png"), True),
+    ])
     return 0
 
 if __name__=="__main__":

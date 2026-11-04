@@ -98,6 +98,7 @@ def command(args, tag, truncation, prefix):
         return ["docker", "compose", "run", "--rm",
                 "-v", f"{args.log}:/input/fr079.log.gz:ro",
                 "-v", f"{args.out_dir}:/output",
+                "-e", f"SLAM_HOST_OUTPUT_DIR={args.out_dir}",
                 "--entrypoint", "./build-docker/slam_fr079_offline", "test",
                 "/input/fr079.log.gz", f"/output/{tag}", *options]
     return [str(args.binary), str(args.log), str(prefix), *options]

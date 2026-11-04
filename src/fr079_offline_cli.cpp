@@ -1,4 +1,5 @@
 #include <cxxopts.hpp>
+#include "slam/cli/review_artifacts.hpp"
 #include "slam/datasets/fr079_offline.hpp"
 #include "slam/datasets/fr079_capture_benchmark.hpp"
 #include "slam/datasets/carmen.hpp"
@@ -402,7 +403,8 @@ int run(int argc,char** argv){
   const auto yaml=prefix.string()+".yaml";
   const auto report=prefix.string()+".report.json";
   const auto capture_csv=prefix.string()+".capture.csv";
-  for(const auto& f:{binary,replay,trajectory,match,pgm,yaml,report})
+  const auto review=prefix.string()+".review.json";
+  for(const auto& f:{binary,replay,trajectory,match,pgm,yaml,report,review})
     ensure(!std::filesystem::exists(std::filesystem::symlink_status(f)),
            "output already exists; refusing overwrite");
   if(capture)
@@ -464,6 +466,17 @@ int run(int argc,char** argv){
            <<" replay="<<replay
            <<" report="<<report
            <<(capture?" capture_trials="+std::to_string(capture_trials):"")<<"\n";
+  std::vector<slam::cli::ReviewFile> files={
+      {"report",report,true},
+      {"trajectory",trajectory,true},
+      {"matching_decisions",match,true},
+      {"replay",replay,true},
+      {"occupancy_map",binary,false},
+      {"map_preview",pgm,false},
+      {"map_metadata",yaml,false},
+  };
+  if(capture)files.push_back({"capture_diagnostics",capture_csv,true});
+  slam::cli::write_review_manifest(review,"fr079_offline",files);
   return 0;
 }
 } // namespace

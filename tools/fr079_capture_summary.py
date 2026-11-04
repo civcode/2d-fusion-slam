@@ -6,6 +6,8 @@ proxy, NOT independently measured ground truth or a false-positive rate).
 """
 from __future__ import annotations
 
+from review_artifacts import review_files
+
 import argparse
 import csv
 from collections import defaultdict
@@ -147,6 +149,15 @@ def main():
         fig.savefig(args.out.with_suffix(".png"), dpi=150)
         plt.close(fig)
     print(json.dumps({"format": report["format"], "grouped": compact}, indent=2))
+    review_entries = [
+        ("capture_summary_json", args.out.with_suffix(".json"), True),
+        ("capture_summary_csv", args.out.with_suffix(".csv"), True),
+    ]
+    if args.out.with_suffix(".png").is_file():
+        review_entries.append(
+            ("capture_heatmap_png", args.out.with_suffix(".png"), True))
+    review_files(args.out.with_suffix(".review.json"),
+                 "fr079_capture_summary", review_entries)
     return 0
 
 
