@@ -1,4 +1,7 @@
 #include "slam/cli/review_artifacts.hpp"
+#ifdef NDEBUG
+#undef NDEBUG // test assertions must run even for Release CMake builds
+#endif
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
