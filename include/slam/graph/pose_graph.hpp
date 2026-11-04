@@ -12,6 +12,7 @@ namespace slam::graph {
 // 'synthetic_exact' is for deterministic test fixtures, never real hardware.
 enum class EvidenceClass { unverified, synthetic_exact, independently_measured,
                            lidar_scan_registration,
+                           lidar_scan_to_submap_registration,
                            frontend_scanmatched_correlated };
 struct FactorProvenance {
   EvidenceClass source{EvidenceClass::unverified};

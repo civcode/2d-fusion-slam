@@ -100,25 +100,35 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
        used.contains({e.from,e.to})){
       out.loop_decisions.push_back(LoopDecision::duplicate_or_nearby_nodes);continue;
     }
-    // Scan-to-scan loop detection shares LiDAR evidence with the
-    // frontend and is seeded by an estimated pose. It is NOT an
-    // independently measured factor. Admit only explicit, conservative
-    // robust scan factors with bounded reciprocal geometry; never allow
-    // these provenance flags on odometry or external-sensor paths.
+    // Both LiDAR loop detector modes share raw LiDAR evidence with the
+    // frontend and seed registration with estimated poses. Neither is
+    // independent ground truth. Use distinct provenance and conservative
+    // gates; do not admit them as verified independent sequential factors.
     const bool scan_loop=e.provenance.source==
         EvidenceClass::lidar_scan_registration;
-    const bool scan_verified=scan_loop &&
+    const bool submap_loop=e.provenance.source==
+        EvidenceClass::lidar_scan_to_submap_registration;
+    const bool lidar_loop=scan_loop||submap_loop;
+    const bool common_lidar_evidence=lidar_loop &&
         !e.provenance.source_id.empty() &&
         e.provenance.source_id.size()<=256 &&
         e.provenance.clock_and_frame_verified &&
         !e.provenance.independent_of_initial_trajectory &&
         !odometry_sources.contains(e.provenance.source_id) &&
+        candidate.supported_hits>=80 && candidate.full_rank;
+    // The two modes have separate quality gates. The submap hit support
+    // fraction is NOT symmetric scan-to-scan overlap, so it must carry
+    // explicit provenance, stronger positional sigmas, and 2D observability
+    // verified by the submap matcher before factor construction.
+    const bool scan_verified=common_lidar_evidence && scan_loop &&
         e.sigma_x_m>=.18 && e.sigma_y_m>=.18 &&
-        e.sigma_yaw_rad>=.12 &&
-        candidate.supported_hits>=80 &&
-        candidate.overlap>=.82;
-    if (!(scan_verified||verified(e.provenance)) ||
-        ((scan_loop ||
+        e.sigma_yaw_rad>=.12 && candidate.overlap>=.82;
+    const bool submap_verified=common_lidar_evidence && submap_loop &&
+        e.sigma_x_m>=.35 && e.sigma_y_m>=.35 &&
+        e.sigma_yaw_rad>=.20 && candidate.overlap>=.58 &&
+        candidate.registration_error_m<=.22;
+    if (!(scan_verified||submap_verified||verified(e.provenance)) ||
+        ((lidar_loop ||
           e.provenance.source==EvidenceClass::independently_measured) &&
          odometry_sources.contains(e.provenance.source_id))) {
       out.loop_decisions.push_back(LoopDecision::unverified_or_correlated_evidence);continue;

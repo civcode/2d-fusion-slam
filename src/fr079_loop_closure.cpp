@@ -3,10 +3,13 @@
 #include "slam/core/se2.hpp"
 #include "slam/mapping/occupancy.hpp"
 #include "slam/matching/scan_to_scan.hpp"
+#include "slam/matching/scan_to_submap.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -22,6 +25,8 @@ constexpr std::size_t kDistinctAnchorGap=24;
 constexpr double kNearbyM=2.8;
 constexpr double kNearbyYaw=.52;
 constexpr double kLargeHeadingRad=1.57079632679489661923; // >90 degrees
+constexpr std::size_t kSubmapHalfWindow=32;  // scans on either side of anchor
+constexpr std::size_t kSubmapSampleStride=3;
 
 void need(bool ok,const char* message) {
   if(!ok)throw std::invalid_argument(message);
@@ -122,6 +127,11 @@ Fr079LoopResult run_fr079_loop_experiment(
   graph_settings.maximum_iterations=75;
   graph_settings.maximum_loop_residual_translation_m=.8;
   graph_settings.maximum_loop_residual_yaw_rad=.30;
+  const bool submap_mode=
+      registration_mode==Fr079LoopRegistrationMode::correlative_scan_to_submap;
+  // A submap's current-scan support fraction is not symmetric two-scan
+  // overlap. The submap factor has its own stronger geometry/quality gates.
+  if(submap_mode)graph_settings.minimum_overlap=.58;
   const auto control=slam::graph::optimize_pose_graph(input,graph_settings);
   need(control.fixed_first_pose&&control.optimized_map_from_base.size()==scans.size(),
        "odometry-only graph lost its fixed first pose");
@@ -129,8 +139,8 @@ Fr079LoopResult run_fr079_loop_experiment(
   Fr079LoopResult out;
   const bool pose_prior_scan =
       registration_mode==Fr079LoopRegistrationMode::pose_prior_scan_to_scan;
-  out.registration_mode=pose_prior_scan?"pose_prior_scan_to_scan_v1":
-                                       "legacy_scan_to_scan_v1";
+  out.registration_mode=submap_mode?"correlative_scan_to_submap_v1":
+      (pose_prior_scan?"pose_prior_scan_to_scan_v1":"legacy_scan_to_scan_v1");
   out.odometry_graph_poses=control.optimized_map_from_base;
   out.sequential_factor_source=frontend_sequential_graph?
       "frontend_scanmatched_relative_correlated_v1":"logged_odometry_scan_time_v1";
@@ -148,12 +158,41 @@ Fr079LoopResult run_fr079_loop_experiment(
   out.control_initial_cost=control.initial_cost;
   out.control_final_cost=control.final_cost;
 
-  // Scan-to-scan hypotheses use ONLY the accepted frontend estimate to
-  // select neighbors; the loop measurement comes from reciprocal raw
-  // LiDAR registrations, not a copied pose difference or logged laser pose.
+  // All hypothesis selection uses the accepted frontend poses only.
+  // Actual loop measurements come from raw LiDAR scan-to-scan or frozen
+  // historical scan-to-submap registration, never from copied Ceres relative
+  // poses, future reference poses or the mutable global Ceres map.
   std::vector<Cloud> clouds(scans.size());
   for(std::size_t i=0;i<scans.size();i+=kKeyframeStride)
     clouds[i]=scan_hits(scans[i],options.max_hit_range_m);
+
+  // Immutable local historical submaps are built once per anchor, only in
+  // the opt-in submap arm. Each window ends at least 120 scans before its
+  // candidate current scan, preventing temporal-neighbor self-validation.
+  std::vector<std::optional<slam::matching::FrozenLidarSubmap>> submap_cache(
+      submap_mode?scans.size():0);
+  auto historical_submap=[&](std::size_t j)
+      -> const slam::matching::FrozenLidarSubmap& {
+    auto& cached=submap_cache.at(j);
+    if(!cached) {
+      std::vector<slam::matching::SubmapSweep> sweeps;
+      const auto first=j>kSubmapHalfWindow?j-kSubmapHalfWindow:0;
+      const auto last=std::min(scans.size()-1,j+kSubmapHalfWindow);
+      for(std::size_t k=first;k<=last;k+=kSubmapSampleStride) {
+        const auto relative=slam::compose(
+            slam::inverse(input.initial_map_from_base[j]),
+            input.initial_map_from_base[k]);
+        sweeps.push_back({relative,scan_hits(scans[k],options.max_hit_range_m)});
+      }
+      // Always include the keyframe anchor, even if a window's sampling
+      // phase did not land on it.
+      if((j-first)%kSubmapSampleStride!=0)
+        sweeps.push_back({Pose2{},scan_hits(scans[j],options.max_hit_range_m)});
+      cached=slam::matching::build_frozen_lidar_submap(sweeps);
+      ++out.submaps_built;
+    }
+    return *cached;
+  };
 
   std::vector<Candidate> selected;
   for(std::size_t i=kTemporalExclusion+kKeyframeStride;
@@ -169,7 +208,9 @@ Fr079LoopResult run_fr079_loop_experiment(
       const double heading_difference=
           std::abs(slam::wrap_yaw(relative.yaw_rad));
       if(relative.translation.norm()<=kNearbyM &&
-         (pose_prior_scan||heading_difference<=kNearbyYaw)) {
+         (pose_prior_scan||submap_mode||heading_difference<=kNearbyYaw) &&
+         (!submap_mode ||
+          j+kSubmapHalfWindow+kTemporalExclusion<=i)) {
         nearby.push_back({j,relative.translation.norm(),heading_difference});
         if(heading_difference>=kLargeHeadingRad)
           ++out.large_heading_nearby_pairs;
@@ -185,7 +226,7 @@ Fr079LoopResult run_fr079_loop_experiment(
     // could all be same-direction and starve reverse corridor revisits.
     // Remaining capacity is filled by nearest candidates of either class.
     std::vector<std::size_t> registrations;
-    if(pose_prior_scan) {
+    if(pose_prior_scan||submap_mode) {
       for(int large=0;large<2;++large) {
         std::size_t allocated=0;
         for(std::size_t k=0;k<nearby.size()&&allocated<kMaxHypotheses/2;++k) {
@@ -213,6 +254,45 @@ Fr079LoopResult run_fr079_loop_experiment(
       const Pose2 prior=slam::compose(
           slam::inverse(input.initial_map_from_base[j]),
           input.initial_map_from_base[i]);
+      if(submap_mode) {
+        const auto& map=historical_submap(j);
+        const auto match=slam::matching::register_scan_to_frozen_submap(
+            map,current,prior);
+        ++out.registration_attempts;
+        ++out.submap_registration_attempts;
+        if(large_heading)++out.large_heading_registration_attempts;
+        Fr079LoopEvent event{j,i,"submap_registration_rejected",
+            match.supported_hits,0,match.support_fraction,match.rms_m,
+            match.innovation_m,match.innovation_yaw_rad};
+        event.predicted_relative_yaw_rad=nearby[k].heading_difference;
+        event.submap_contributing_scans=map.contributing_scans;
+        event.submap_score=match.correlation_score;
+        event.submap_support_fraction=match.support_fraction;
+        event.submap_translation_curvature_min=match.translation_curvature_min;
+        event.submap_translation_curvature_ratio=match.translation_curvature_ratio;
+        event.submap_minimum_shift_score_drop=match.minimum_shift_score_drop;
+        if(!match.accepted) {
+          if(!match.observable) {
+            event.decision="submap_ambiguous_geometry_rejected";
+            ++out.submap_ambiguous_rejected;
+          }
+          out.decisions.push_back(std::move(event));
+          continue;
+        }
+        ++out.geometry_verified;
+        ++out.submap_geometry_verified;
+        if(large_heading)++out.large_heading_geometry_verified;
+        const slam::graph::FactorProvenance lidar{
+            slam::graph::EvidenceClass::lidar_scan_to_submap_registration,
+            "fr079_raw_scans_frozen_submap_correlative_v1",true,false};
+        event.decision="geometry_verified";
+        valid.push_back({{{j,i,match.anchor_from_current,
+                            .40,.40,.24,lidar},
+                           match.supported_hits,
+                           match.support_fraction,match.observable,
+                           match.rms_m},event});
+        continue;
+      }
       auto registered=pose_prior_scan?
           slam::matching::register_scans_from_pose_prior(
               previous,current,prior,false,{3.0,.55,.17}):
@@ -294,6 +374,29 @@ Fr079LoopResult run_fr079_loop_experiment(
   }
   for(const auto& item:selected)input.loops.push_back(item.loop);
   out.proposed_loops=input.loops.size();
+
+  // Existing rejected opposite-heading FR079 pairs provide deterministic,
+  // diagnosis-only regression probes for the new matcher. They are NOT
+  // assumed correct, are not counted as loop candidates, and can never
+  // influence graph optimization. Only the known 3,118-scan experiment is
+  // probed; ordinary synthetic tests use the standalone submap test.
+  if(submap_mode && scans.size()==3118) {
+    constexpr std::array<std::pair<std::size_t,std::size_t>,3> probes{{
+        {1040,1288},{2704,2936},{536,872}}};
+    for(const auto [j,i]:probes) {
+      const Pose2 prior=slam::compose(
+          slam::inverse(input.initial_map_from_base[j]),
+          input.initial_map_from_base[i]);
+      const auto& map=historical_submap(j);
+      const auto match=slam::matching::register_scan_to_frozen_submap(
+          map,clouds[i],prior);
+      out.submap_probes.push_back({j,i,match.accepted,match.observable,
+          std::abs(slam::wrap_yaw(prior.yaw_rad)),
+          match.correlation_score,match.support_fraction,
+          match.translation_curvature_min,match.translation_curvature_ratio,
+          match.minimum_shift_score_drop});
+    }
+  }
 
   const auto result=slam::graph::optimize_pose_graph(input,graph_settings);
   need(result.fixed_first_pose&&

@@ -112,6 +112,42 @@ def main():
             (pose_prior/(pose_prior.name+".trajectory.json")).read_text())
         assert prior_timeline["poses"] == new_trajectory["poses"]
         assert pose_report["map"]["fingerprint"] == new_report["map"]["fingerprint"]
+        # Opt-in local frozen-submap matcher. Zero loops is a valid result
+        # on this small fixture; invariants and graph provenance still apply.
+        submaps = root / "submap"
+        run(binary,log,submaps,*flags,
+            "--lidar-loop-closure","--frontend-sequential-graph",
+            "--loop-registration","scan-to-submap")
+        submap_report=json.loads(
+            (submaps/(submaps.name+".report.json")).read_text())
+        submap_graph=json.loads(
+            (submaps/(submaps.name+".loops.json")).read_text())
+        submap_trajectory=json.loads(
+            (submaps/(submaps.name+".trajectory.json")).read_text())
+        assert submap_report["loop_registration_mode"] == (
+            "correlative_scan_to_submap_v1")
+        assert submap_graph["registration_mode"] == (
+            "correlative_scan_to_submap_v1")
+        assert submap_graph["loop_evidence"] == (
+            "correlated_raw_lidar_frozen_submap_correlative_registration")
+        assert submap_graph["sequential_factor_source"] == (
+            "frontend_scanmatched_relative_correlated_v1")
+        assert submap_graph["submap_registration_attempts"] >= (
+            submap_graph["submap_geometry_verified"])
+        assert submap_graph["submap_registration_attempts"] == (
+            submap_graph["registration_attempts"])
+        assert submap_graph["submap_geometry_verified"] >= (
+            submap_graph["accepted_loops"])
+        assert submap_graph["large_heading_accepted_loops"] <= (
+            submap_graph["accepted_loops"])
+        assert submap_graph["first_pose_fixed"] is True
+        assert len(submap_graph["graph_control_poses"]) == 184
+        assert len(submap_graph["loop_graph_poses"]) == 184
+        assert all("submap_translation_curvature_min" in entry
+                   for entry in submap_graph["loop_decisions"])
+        assert submap_trajectory["poses"] == new_trajectory["poses"]
+        assert submap_report["map"]["fingerprint"] == new_report["map"]["fingerprint"]
+        assert (submaps/(submaps.name+".graph_optimized.slammap")).is_file()
         print("FR079 loop/native graph-control integration and pairing passed")
         print("Loop closures on toy CARMEN fixture (not Freiburg):",
               graph["accepted_loops"])

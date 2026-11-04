@@ -92,7 +92,50 @@ int main(){
   require(weak_support.accepted_loops==0&&
           weak_support.loop_decisions[0]==LoopDecision::unverified_or_correlated_evidence,
           "LiDAR loop requires stronger geometry than independently measured factor");
-  in.odometry[0].provenance.source=EvidenceClass::unverified;
+  // Frozen scan-to-submap factors carry a separate source class. Their
+  // current-scan support fraction is not symmetric pairwise scan overlap.
+  auto submap_input=scan_input;
+  submap_input.loops[0].edge.provenance={
+      EvidenceClass::lidar_scan_to_submap_registration,
+      "frozen_submap_correlative_v1",true,false};
+  submap_input.loops[0].edge.sigma_x_m=.40;
+  submap_input.loops[0].edge.sigma_y_m=.40;
+  submap_input.loops[0].edge.sigma_yaw_rad=.24;
+  submap_input.loops[0].overlap=.72;
+  submap_input.loops[0].registration_error_m=.12;
+  const auto submap_ok=optimize_pose_graph(submap_input);
+  require(submap_ok.accepted_loops==1 &&
+          submap_ok.loop_decisions[0]==LoopDecision::accepted,
+          "correlated frozen-submap factor accepted with explicit geometry");
+  auto submap_weak=submap_input;
+  submap_weak.loops[0].overlap=.56;
+  const auto submap_low_support=optimize_pose_graph(submap_weak);
+  require(submap_low_support.accepted_loops==0 &&
+          submap_low_support.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "low submap support must not be promoted");
+  auto submap_flat=submap_input;
+  submap_flat.loops[0].full_rank=false;
+  const auto submap_unobservable=optimize_pose_graph(submap_flat);
+  require(submap_unobservable.accepted_loops==0 &&
+          submap_unobservable.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "unobservable corridor match rejected by graph");
+  auto submap_overconfident=submap_input;
+  submap_overconfident.loops[0].edge.sigma_x_m=.10;
+  const auto submap_bad_sigma=optimize_pose_graph(submap_overconfident);
+  require(submap_bad_sigma.accepted_loops==0 &&
+          submap_bad_sigma.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "submap evidence cannot use overly certain factors");
+  auto submap_independent=submap_input;
+  submap_independent.loops[0].edge.provenance.independent_of_initial_trajectory=true;
+  const auto submap_bad_provenance=optimize_pose_graph(submap_independent);
+  require(submap_bad_provenance.accepted_loops==0 &&
+          submap_bad_provenance.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "submap matcher cannot claim independent trajectory evidence");
+    in.odometry[0].provenance.source=EvidenceClass::unverified;
   bool denied=false;try{(void)optimize_pose_graph(in);}catch(const std::invalid_argument&){denied=true;}
   require(denied,"unverified odometry cannot become a graph factor");
   std::cout<<"Pose2 batch graph and false-loop guards passed\n";

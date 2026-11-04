@@ -505,6 +505,15 @@ target_include_directories(slam_scan_to_scan PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_scan_to_scan PUBLIC slam::distance_field)
 
+# Frozen local 2D LiDAR submaps and coarse-to-fine correlative matching.
+# Kept independent of the graph backend and of the sequential frontend.
+add_library(slam_scan_to_submap STATIC src/scan_to_submap.cpp)
+add_library(slam::scan_to_submap ALIAS slam_scan_to_submap)
+target_compile_features(slam_scan_to_submap PUBLIC cxx_std_20)
+target_include_directories(slam_scan_to_submap PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_scan_to_submap PUBLIC slam::scan_to_scan)
+
 # FR079 post-hoc reciprocal LiDAR loop detection and GTSAM graph control.
 # The incremental frontend is unchanged unless the explicit flag is passed.
 if(TARGET slam_offline_graph AND TARGET slam_fr079_offline)
@@ -513,7 +522,7 @@ if(TARGET slam_offline_graph AND TARGET slam_fr079_offline)
   target_include_directories(slam_fr079_loop PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
   target_link_libraries(slam_fr079_loop PUBLIC
-    slam::fr079_offline slam::scan_to_scan slam::offline_graph)
+    slam::fr079_offline slam::scan_to_scan slam::scan_to_submap slam::offline_graph)
   target_link_libraries(slam_fr079_offline PRIVATE slam_fr079_loop)
   target_compile_definitions(slam_fr079_offline PRIVATE SLAM_FR079_WITH_GTSAM=1)
   if(BUILD_TESTING AND Python3_Interpreter_FOUND)
@@ -545,6 +554,9 @@ if(BUILD_TESTING)
   add_executable(slam_scan_to_scan_test tests/scan_to_scan_test.cpp)
   target_link_libraries(slam_scan_to_scan_test PRIVATE slam::scan_to_scan)
   add_test(NAME scan_to_scan_bootstrap COMMAND slam_scan_to_scan_test)
+  add_executable(slam_scan_to_submap_test tests/scan_to_submap_test.cpp)
+  target_link_libraries(slam_scan_to_submap_test PRIVATE slam::scan_to_submap)
+  add_test(NAME scan_to_submap_correlative COMMAND slam_scan_to_submap_test)
   add_executable(slam_fusion_profiler_test tests/fusion_profiler_test.cpp)
   target_compile_features(slam_fusion_profiler_test PRIVATE cxx_std_20)
   target_include_directories(slam_fusion_profiler_test PRIVATE

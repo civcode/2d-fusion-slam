@@ -263,3 +263,131 @@ threshold solves scan-to-submap place recognition or corridor ambiguity.
 No improvement in accepted loop count, trajectory agreement, or map
 quality is claimed before a real FR079 rerun.
 
+
+## Third experimental arm: frozen 2D scan-to-submap constraints
+
+The option `--loop-registration scan-to-submap` is an **opt-in** third mode.
+The default `legacy-scan` mode and the prior
+`pose-prior-scan` results (13 accepted loops in the recorded
+FR079 comparison) remain unchanged and available for ablation.
+
+This is an initial **Cartographer-inspired local** scan-to-submap constraint
+builder, not a reproduction of Cartographer's branch-and-bound or global place
+recognition. It does the following:
+
+1. For each considered historical keyframe, create and cache an **immutable
+   0.10 m occupied-endpoint likelihood raster**. Fuse hits from up to
+   approximately 22 historical 180-degree scans spanning 32 scan indices
+   before/after the anchor, expressed in that anchor's Ceres frame. All of
+   these observations must precede the candidate by at least 120 scans.
+   Hits need two endpoint observations per raster cell before being used,
+   and a compact spatial likelihood kernel allows discretization error.
+2. Discover keyframe pairs **without filtering by relative heading**.
+   Retain the old Ceres proximity gate of 2.8 m, exclusion window, at most
+   six registrations per current keyframe and at most 24 proposed loops.
+   Reserve candidate slots for large heading differences, as in
+   `pose-prior-scan`.
+3. Run a deterministic **coarse-to-fine correlation search** around the
+   **full** Ceres SE(2) relative pose, including its arbitrary initial
+   heading. The positional correction is limited to 0.54 m and angular
+   correction to 0.18 rad; unlike direct scan-to-scan registration, there
+   is no absolute rotation cap of 40 degrees. Score on a sparse beam set
+   during search and recheck all current LiDAR hits at the final pose.
+4. Accept a geometric match only if it has at least 80 supported current
+   LiDAR hits, at least 58% current-scan support from the frozen historical
+   map, a normalized correlation score >=0.48, and a raster-distance
+   proxy RMS <=0.22 m. In addition, use the **smallest eigenvalue and
+   eigenvalue ratio of the translation correlation-score curvature** and
+   four-sided 0.40 m score-peak checks to reject flat, ambiguous corridor
+   ridges. These are deterministic observability **heuristics**, not a
+   calibrated covariance or a proof of correct place recognition.
+5. Feed verified submap-to-current relative pose measurements into the
+   existing **GTSAM pose graph**, represented in the anchor scan's frame.
+   They carry the explicit correlated
+   `lidar_scan_to_submap_registration` evidence type and nominal
+   0.40 m / 0.40 m / 0.24 rad factor sigmas; the graph backend applies
+   separate gates, robust loss and the same first-pose anchor. The
+   **Ceres-derived sequential factors and frontend maps do not change**.
+
+Unlike the previous 82% *reciprocal scan-to-scan* overlap, the new 58%
+criterion is **support of a current scan in an accumulated historical
+submap**, not a symmetric two-scan overlap value. It must never be
+misrepresented as an equivalent relaxed scan-to-scan gate.
+
+### Reproduce with Docker
+
+From the repository root, after obtaining the unchanged FR079 raw and
+published scan-matched archives:
+
+```bash
+git pull --ff-only
+docker compose build test demo
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R '^(scan_to_submap_correlative|scan_to_scan_bootstrap|fr079_loop_experiment|fr079_reference_benchmark_tools)$'
+
+export FR079_LOG="$PWD/.build/datasets/fr079.log.gz"
+export FR079_SM_LOG="$PWD/.build/datasets/fr079-sm.log.gz"
+mkdir -p apps/demo/maps reports
+
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-ceresgraph-submap-001 \
+  --run-directory --continuous-cost \
+  --match-every 5 --field-every 15 \
+  --map-stride 1 --match-stride 4 --distance-truncation 0.5 \
+  --lidar-loop-closure --frontend-sequential-graph \
+  --loop-registration scan-to-submap
+
+python3 tools/fr079_reference_benchmark.py \
+  --raw-log "$FR079_LOG" \
+  --reference-sm-log "$FR079_SM_LOG" \
+  --baseline apps/demo/maps/fr079-continuous-noloop-001 \
+  --optimized apps/demo/maps/fr079-ceresgraph-submap-001 \
+  --out reports/fr079-reference-submap-001
+```
+
+Inspect
+`fr079-ceresgraph-submap-001.graph_optimized.slammap`
+rather than the frontend-only `*.pgm` image.
+
+### Diagnosis and reproducibility
+
+The `*.loops.json` artifact includes the selected mode,
+numbers of built historical submaps, submap registration attempts,
+geometrically verified candidates, ambiguous-geometry rejections and
+accepted large-heading loops. Per-attempt records include the number of
+historical sweeps, support, correlation, approximate distance RMS and
+translation-curvature eigenvalue diagnostics. `submap_regression_probes`
+evaluates the following **previously rejected, unlabeled** FR079 pairs,
+provided the recording contains exactly 3,118 scans:
+
+- 1040 -> 1288
+- 2704 -> 2936
+- 536 -> 872
+
+Those probes are **diagnostic-only**; even a passing result is not inserted
+into the graph and does **not** establish a true loop closure. The usual
+candidate finder and quality gates independently decide graph constraints.
+Unit tests use a synthetic reverse-direction revisit with distinctive
+transverse structure and a featureless corridor that must remain rejected.
+
+**Known limitations:** The new submaps are frozen **endpoint likelihood
+rasters**, not full probabilistic free/occupied Cartographer submaps. Search
+is deterministic coarse-to-fine but **not branch-and-bound**. Initial
+place recognition is still Ceres-position-gated, so substantial drift may
+miss true revisits. Correlation scores are sensor- and scan-dependent;
+curvature is not probabilistic uncertainty and repeating corridor geometry
+may still be deceptive. The frontend's pose errors can distort the
+historical submaps, and all loop evidence is correlated with Ceres LiDAR.
+Visual and independent accuracy validation remain important.
+
+The previously published FR079 heading-aware benchmark remains the
+baseline to beat: **13 loops, 1.173 m first-pose ATE RMSE and 0.846 m rigid
+ATE RMSE relative to the published scan-matched estimate** (which is not
+surveyed ground truth). No new FR079 score is claimed without running
+this new mode on the real dataset.
+

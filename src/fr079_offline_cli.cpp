@@ -235,10 +235,17 @@ void save_loop_diagnostics(const std::filesystem::path& path,
   out<<std::setprecision(15)
      <<"{\"format\":\"FUSFR079LOOP1\",\"source_sha256\":\""<<sha
      <<"\",\"independent_ground_truth\":false"
-     <<",\"loop_evidence\":\"correlated_raw_lidar_reciprocal_scan_registration\""
+     <<",\"loop_evidence\":\""
+     <<(loop.registration_mode=="correlative_scan_to_submap_v1"?
+           "correlated_raw_lidar_frozen_submap_correlative_registration":
+           "correlated_raw_lidar_reciprocal_scan_registration")<<"\""
      <<",\"odometry_source\":\"embedded_scan_time_odom_not_ground_truth\""
      <<",\"sequential_factor_source\":\""<<loop.sequential_factor_source<<"\""
      <<",\"registration_mode\":\""<<loop.registration_mode<<"\""
+     <<",\"submaps_built\":"<<loop.submaps_built
+     <<",\"submap_registration_attempts\":"<<loop.submap_registration_attempts
+     <<",\"submap_geometry_verified\":"<<loop.submap_geometry_verified
+     <<",\"submap_ambiguous_rejected\":"<<loop.submap_ambiguous_rejected
      <<",\"large_heading_nearby_pairs\":"<<loop.large_heading_nearby_pairs
      <<",\"large_heading_registration_attempts\":"<<loop.large_heading_registration_attempts
      <<",\"large_heading_geometry_verified\":"<<loop.large_heading_geometry_verified
@@ -271,7 +278,13 @@ void save_loop_diagnostics(const std::filesystem::path& path,
        <<",\"rms_m\":"<<d.rms_m
        <<",\"innovation_m\":"<<d.innovation_m
        <<",\"innovation_yaw_rad\":"<<d.innovation_yaw_rad
-       <<",\"predicted_relative_yaw_rad\":"<<d.predicted_relative_yaw_rad<<"}";
+       <<",\"predicted_relative_yaw_rad\":"<<d.predicted_relative_yaw_rad
+       <<",\"submap_contributing_scans\":"<<d.submap_contributing_scans
+       <<",\"submap_score\":"<<d.submap_score
+       <<",\"submap_support_fraction\":"<<d.submap_support_fraction
+       <<",\"submap_translation_curvature_min\":"<<d.submap_translation_curvature_min
+       <<",\"submap_translation_curvature_ratio\":"<<d.submap_translation_curvature_ratio
+       <<",\"submap_minimum_shift_score_drop\":"<<d.submap_minimum_shift_score_drop<<"}";
   }
   out<<"],\""<<(loop.sequential_factor_source==
       "frontend_scanmatched_relative_correlated_v1"?
@@ -284,6 +297,21 @@ void save_loop_diagnostics(const std::filesystem::path& path,
   for(std::size_t k=0;k<loop.loop_graph_poses.size();++k) {
     if(k)out<<",";
     out<<pose(loop.loop_graph_poses[k]);
+  }
+  out<<"],\"submap_regression_probes\":[";
+  for(std::size_t k=0;k<loop.submap_probes.size();++k) {
+    const auto& p=loop.submap_probes[k];
+    if(k)out<<",";
+    out<<"{\"from\":"<<p.from<<",\"to\":"<<p.to
+       <<",\"accepted\":"<<(p.accepted?"true":"false")
+       <<",\"observable\":"<<(p.observable?"true":"false")
+       <<",\"predicted_relative_yaw_rad\":"<<p.predicted_relative_yaw_rad
+       <<",\"score\":"<<p.score
+       <<",\"support_fraction\":"<<p.support_fraction
+       <<",\"translation_curvature_min\":"<<p.translation_curvature_min
+       <<",\"translation_curvature_ratio\":"<<p.translation_curvature_ratio
+       <<",\"minimum_shift_score_drop\":"<<p.minimum_shift_score_drop
+       <<"}";
   }
   out<<"]}\n";
   if(!out)throw std::runtime_error("failed writing FR079 graph artifact");
@@ -347,6 +375,7 @@ void save_report(const std::filesystem::path& file,
      <<",\"sequential_factor_source\":\""<<(loop?loop->sequential_factor_source:"none")<<"\""
      <<",\"loop_registration_mode\":\""<<(loop?loop->registration_mode:"none")<<"\""
      <<",\"loop_large_heading_accepted\":"<<(loop?loop->large_heading_accepted_loops:0)
+     <<",\"loop_submap_geometry_verified\":"<<(loop?loop->submap_geometry_verified:0)
      <<",\"loop_candidates\":"<<(loop?loop->proposed_loops:0)
      <<",\"loop_registration_attempts\":"<<(loop?loop->registration_attempts:0)
      <<",\"loop_geometry_verified\":"<<(loop?loop->geometry_verified:0)
@@ -440,7 +469,7 @@ int run(int argc,char** argv){
       ("continuous-cost","Enable opt-in finite cost for unknown EDT cells")
       ("lidar-loop-closure","Detect reciprocal LiDAR revisits and optimize an offline GTSAM graph")
       ("frontend-sequential-graph","Use correlated frontend-relative sequential factors instead of logged odometry (requires --lidar-loop-closure)")
-      ("loop-registration","Loop matching method: legacy-scan (default), pose-prior-scan (arbitrary predicted heading)",cxxopts::value<std::string>())
+      ("loop-registration","Loop matching method: legacy-scan (default), pose-prior-scan, scan-to-submap",cxxopts::value<std::string>())
       ("ablation","Experimental finite Ceres variant: finite-seed-legacy, finite-all-legacy, finite-seed-continuous",cxxopts::value<std::string>())
       ("capture","Write frozen-map pose perturbation benchmark")
       ("capture-every","Capture interval",cxxopts::value<std::string>())
@@ -484,13 +513,16 @@ int run(int argc,char** argv){
   const std::string loop_registration=args.count("loop-registration")?
       args["loop-registration"].as<std::string>():"legacy-scan";
   ensure(loop_registration=="legacy-scan" ||
-         loop_registration=="pose-prior-scan",
-         "invalid --loop-registration: choose legacy-scan or pose-prior-scan");
+         loop_registration=="pose-prior-scan" ||
+         loop_registration=="scan-to-submap",
+         "invalid --loop-registration: choose legacy-scan, pose-prior-scan, or scan-to-submap");
   ensure(!args.count("loop-registration")||lidar_loop_closure,
          "--loop-registration requires --lidar-loop-closure");
-  const auto registration_mode=loop_registration=="pose-prior-scan"?
-      slam::datasets::Fr079LoopRegistrationMode::pose_prior_scan_to_scan:
-      slam::datasets::Fr079LoopRegistrationMode::legacy_scan_to_scan;
+  const auto registration_mode=loop_registration=="scan-to-submap"?
+      slam::datasets::Fr079LoopRegistrationMode::correlative_scan_to_submap:
+      (loop_registration=="pose-prior-scan"?
+        slam::datasets::Fr079LoopRegistrationMode::pose_prior_scan_to_scan:
+        slam::datasets::Fr079LoopRegistrationMode::legacy_scan_to_scan);
 #ifndef SLAM_FR079_WITH_GTSAM
   ensure(!lidar_loop_closure,
          "--lidar-loop-closure requires a native build with GTSAM");
