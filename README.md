@@ -589,7 +589,8 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Offline dependency bundle, restore and Release setup](docs/dependency-cache.md)
 - [Docker build/test using Ubuntu APT packages](docs/docker-development.md)
 - [Offline GTSAM 4.3 pose-graph integration](docs/offline-pose-graph.md)
-- [Experiment result directories, Docker host paths, and ChatGPT review manifests](docs/experiment-artifacts.md)
+
+- [FR079 continuous-cost Ceres + real LiDAR loop-closure GTSAM A/B experiment](docs/fr079-loop-closure-experiment.md)- [Experiment result directories, Docker host paths, and ChatGPT review manifests](docs/experiment-artifacts.md)
 - [Offline map candidate rebuilding, comparison and rollback](docs/offline-map-generation.md)
 - [Persistent map-generation registry and recovery](docs/map-generation-registry.md)
 - [Offline map Web UI: launch, Docker and API](docs/web-ui.md)

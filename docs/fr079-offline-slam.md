@@ -72,6 +72,11 @@ python3 tools/review_artifacts.py fr079 \
   --manifest reports/fr079-continuous-noloop-001.review.json
 ```
 
+For an **opt-in GTSAM loop-closure comparison** using the same FR079
+Ceres settings, see [FR079 real-data loop-closure experiment](fr079-loop-closure-experiment.md).
+The incremental map and trajectory remain the reference; the new graph
+maps are additional, separately reported results.
+
 See [experiment artifacts and review paths](experiment-artifacts.md)
 for the repository's complete output naming and upload convention.
 

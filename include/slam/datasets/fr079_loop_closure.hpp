@@ -1,0 +1,42 @@
+#pragma once
+
+// FR079 has scan-level LiDAR and logged odometry only: no calibrated
+// per-beam timing, extrinsics or independent pose ground truth. These offline
+// graph results are hypotheses, not a certified accuracy improvement.
+#include "slam/datasets/fr079_offline.hpp"
+#include "slam/graph/pose_graph.hpp"
+
+#include <cstddef>
+#include <string>
+#include <vector>
+
+namespace slam::datasets {
+struct Fr079LoopEvent {
+  std::size_t from{}, to{};
+  std::string decision;
+  std::size_t forward_inliers{}, reverse_inliers{};
+  double overlap{}, rms_m{};
+  double innovation_m{}, innovation_yaw_rad{};
+};
+struct Fr079LoopResult {
+  mapping::MapBundle odometry_graph_map;
+  mapping::MapBundle loop_graph_map;
+  std::vector<Pose2> odometry_graph_poses, loop_graph_poses;
+  std::vector<Fr079LoopEvent> decisions;
+  std::size_t nearby_pairs{}, registration_attempts{}, geometry_verified{};
+  std::size_t redundant_suppressed{}, proposed_loops{}, accepted_loops{};
+  double control_initial_cost{}, control_final_cost{};
+  double loop_initial_cost{}, loop_final_cost{};
+  double mean_graph_shift_m{}, maximum_graph_shift_m{};
+  double maximum_graph_shift_yaw_rad{};
+  bool first_pose_fixed{}, independent_ground_truth{false};
+  // Used to refuse highly unstable graph corrections as a run failure,
+  // rather than silently publish a distorted occupancy map.
+  bool graph_shift_within_safety_limit{};
+};
+
+[[nodiscard]] Fr079LoopResult run_fr079_loop_experiment(
+    const std::vector<CarmenLaser>& scans,
+    const Fr079SlamResult& frontend,
+    const Fr079SlamOptions& options);
+} // namespace slam::datasets

@@ -18,6 +18,13 @@ apps/demo/maps/
     fr079-continuous-noloop-001.review.json
 ```
 
+An explicitly loop-enabled FR079 run also contains
+`<run-id>.loops.json` (reciprocal registration and GTSAM decisions),
+`<run-id>.graph_control.slammap` (odometry-only graph control), and
+`<run-id>.graph_optimized.slammap` (same graph plus LiDAR loop factors).
+These are never promoted automatically. See
+[FR079 loop comparison](../../../docs/fr079-loop-closure-experiment.md).
+
 The Web UI lists **both** existing flat files and files in one level of
 run directories; it refuses symlinked folders/files and does not recurse.
 A foldered map is shown as `fr079-continuous-noloop-001 / ...slammap`

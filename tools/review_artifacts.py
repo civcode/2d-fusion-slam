@@ -80,7 +80,8 @@ FR079_ARTIFACT_SUFFIXES = (
     ".slammap", ".slamreplay.json", ".report.json",
     ".trajectory.json", ".matches.json", ".pgm", ".yaml",
 )
-FR079_OPTIONAL_SUFFIXES = (".capture.csv",)
+FR079_OPTIONAL_SUFFIXES = (".capture.csv", ".loops.json",
+                           ".graph_control.slammap", ".graph_optimized.slammap")
 FR079_UPLOAD_SUFFIXES = (".report.json", ".trajectory.json",
                           ".matches.json", ".slamreplay.json")
 
@@ -153,6 +154,15 @@ def organize_fr079(flat_prefix: Path, *, apply: bool = False) -> Path:
                   for role, suffix, upload in roles]
         if (folder / (name + ".capture.csv")).is_file():
             review.append(("capture_diagnostics", Path(str(base) + ".capture.csv"), True))
+        if (folder / (name + ".loops.json")).is_file():
+            review.append(("loop_decisions_and_graph_poses",
+                           Path(str(base) + ".loops.json"), True))
+            review.extend([
+                ("odometry_only_graph_map",
+                 Path(str(base) + ".graph_control.slammap"), False),
+                ("loop_optimized_map",
+                 Path(str(base) + ".graph_optimized.slammap"), False),
+            ])
         review_files(folder / (name + ".review.json"), "fr079_offline", review)
     except Exception:
         manifest = folder / (name + ".review.json")
@@ -204,6 +214,15 @@ def cli() -> None:
         optional = Path(prefix + ".capture.csv")
         if optional.is_file():
             files.append(("capture_diagnostics", optional, True))
+        if Path(prefix + ".loops.json").is_file():
+            files.extend([
+                ("loop_decisions_and_graph_poses",
+                 Path(prefix + ".loops.json"), True),
+                ("odometry_only_graph_map",
+                 Path(prefix + ".graph_control.slammap"), False),
+                ("loop_optimized_map",
+                 Path(prefix + ".graph_optimized.slammap"), False),
+            ])
         experiment = "fr079_offline"
     else:
         folder = args.directory

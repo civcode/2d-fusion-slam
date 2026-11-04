@@ -315,6 +315,10 @@ if(ZLIB_FOUND AND OpenSSL_FOUND)
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_matcher_beam_tools_test.py")
     set_tests_properties(fr079_matcher_beam_tools PROPERTIES TIMEOUT 60)
+    add_test(NAME fr079_loop_compare_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_loop_compare_tools_test.py")
+    set_tests_properties(fr079_loop_compare_tools PROPERTIES TIMEOUT 45)
     if(SLAM_FR079_LOG)
       if(TARGET slam_match_ceres)
         add_test(NAME fr079_offline_real_data
@@ -496,6 +500,27 @@ target_compile_features(slam_scan_to_scan PUBLIC cxx_std_20)
 target_include_directories(slam_scan_to_scan PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 target_link_libraries(slam_scan_to_scan PUBLIC slam::distance_field)
+
+# FR079 post-hoc reciprocal LiDAR loop detection and GTSAM graph control.
+# The incremental frontend is unchanged unless the explicit flag is passed.
+if(TARGET slam_offline_graph AND TARGET slam_fr079_offline)
+  add_library(slam_fr079_loop STATIC src/fr079_loop_closure.cpp)
+  target_compile_features(slam_fr079_loop PUBLIC cxx_std_20)
+  target_include_directories(slam_fr079_loop PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+  target_link_libraries(slam_fr079_loop PUBLIC
+    slam::fr079_offline slam::scan_to_scan slam::offline_graph)
+  target_link_libraries(slam_fr079_offline PRIVATE slam_fr079_loop)
+  target_compile_definitions(slam_fr079_offline PRIVATE SLAM_FR079_WITH_GTSAM=1)
+  if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    add_test(NAME fr079_loop_experiment
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_loop_experiment_test.py"
+        "$<TARGET_FILE:slam_fr079_offline>")
+    set_tests_properties(fr079_loop_experiment PROPERTIES TIMEOUT 900)
+  endif()
+endif()
+
 add_executable(slam_offline_fusion src/offline_fusion.cpp)
 if(SLAM_PROFILE_FUSION)
   target_compile_definitions(slam_offline_fusion PRIVATE SLAM_PROFILE_FUSION=1)

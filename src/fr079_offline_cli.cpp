@@ -1,6 +1,7 @@
 #include <cxxopts.hpp>
 #include "slam/cli/review_artifacts.hpp"
 #include "slam/datasets/fr079_offline.hpp"
+#include "slam/datasets/fr079_loop_closure.hpp"
 #include "slam/datasets/fr079_capture_benchmark.hpp"
 #include "slam/datasets/carmen.hpp"
 #include "slam/mapping/map_bundle.hpp"
@@ -19,6 +20,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -224,11 +226,78 @@ void save_replay(const std::filesystem::path& file,
   out<<"]}\n";
   if(!out)throw std::runtime_error("replay write failed");
 }
+
+void save_loop_diagnostics(const std::filesystem::path& path,
+                           const slam::datasets::Fr079LoopResult& loop,
+                           const std::string& sha) {
+  std::ofstream out(path);
+  if(!out)throw std::runtime_error("cannot create FR079 loop decision artifact");
+  out<<std::setprecision(15)
+     <<"{\"format\":\"FUSFR079LOOP1\",\"source_sha256\":\""<<sha
+     <<"\",\"independent_ground_truth\":false"
+     <<",\"loop_evidence\":\"correlated_raw_lidar_reciprocal_scan_registration\""
+     <<",\"odometry_source\":\"embedded_scan_time_odom_not_ground_truth\""
+     <<",\"proposed_loops\":"<<loop.proposed_loops
+     <<",\"accepted_loops\":"<<loop.accepted_loops
+     <<",\"nearby_pairs\":"<<loop.nearby_pairs
+     <<",\"registration_attempts\":"<<loop.registration_attempts
+     <<",\"geometry_verified\":"<<loop.geometry_verified
+     <<",\"redundant_suppressed\":"<<loop.redundant_suppressed
+     <<",\"graph_control_initial_cost\":"<<loop.control_initial_cost
+     <<",\"graph_control_final_cost\":"<<loop.control_final_cost
+     <<",\"graph_loop_initial_cost\":"<<loop.loop_initial_cost
+     <<",\"graph_loop_final_cost\":"<<loop.loop_final_cost
+     <<",\"first_pose_fixed\":"<<(loop.first_pose_fixed?"true":"false")
+     <<",\"maximum_graph_shift_m\":"<<loop.maximum_graph_shift_m
+     <<",\"mean_graph_shift_m\":"<<loop.mean_graph_shift_m
+     <<",\"maximum_graph_shift_yaw_rad\":"<<loop.maximum_graph_shift_yaw_rad
+     <<",\"graph_shift_within_safety_limit\":"
+     <<(loop.graph_shift_within_safety_limit?"true":"false")
+     <<",\"loop_decisions\":[";
+  for(std::size_t k=0;k<loop.decisions.size();++k) {
+    const auto& d=loop.decisions[k];
+    if(k)out<<",";
+    out<<"{\"from\":"<<d.from<<",\"to\":"<<d.to
+       <<",\"decision\":\""<<d.decision<<"\""
+       <<",\"forward_inliers\":"<<d.forward_inliers
+       <<",\"reverse_inliers\":"<<d.reverse_inliers
+       <<",\"overlap\":"<<d.overlap
+       <<",\"rms_m\":"<<d.rms_m
+       <<",\"innovation_m\":"<<d.innovation_m
+       <<",\"innovation_yaw_rad\":"<<d.innovation_yaw_rad<<"}";
+  }
+  out<<"],\"odometry_graph_poses\":[";
+  for(std::size_t k=0;k<loop.odometry_graph_poses.size();++k) {
+    if(k)out<<",";
+    out<<pose(loop.odometry_graph_poses[k]);
+  }
+  out<<"],\"loop_graph_poses\":[";
+  for(std::size_t k=0;k<loop.loop_graph_poses.size();++k) {
+    if(k)out<<",";
+    out<<pose(loop.loop_graph_poses[k]);
+  }
+  out<<"]}\n";
+  if(!out)throw std::runtime_error("failed writing FR079 graph artifact");
+}
+void save_graph_map(const std::filesystem::path& file,
+                    const slam::mapping::MapBundle& bundle) {
+  {
+    std::ofstream out(file,std::ios::binary);
+    if(!out)throw std::runtime_error("failed creating FR079 graph map");
+    slam::mapping::write_map_bundle(out,bundle);
+  }
+  std::ifstream in(file,std::ios::binary);
+  if(!in||slam::mapping::read_map_bundle(in).snapshot->fingerprint()!=
+          bundle.snapshot->fingerprint())
+    throw std::runtime_error("FR079 graph map readback fingerprint mismatch");
+}
+
 void save_report(const std::filesystem::path& file,
                  const Fr079SlamResult& result,
                  const std::string& source,
                  const slam::datasets::Fr079SlamOptions& options,
-                 double loading_ms,double slam_ms,double export_ms) {
+                 double loading_ms,double slam_ms,double export_ms,
+                 const slam::datasets::Fr079LoopResult* loop=nullptr) {
   std::ofstream out(file);
   if(!out)throw std::runtime_error("failed to write FR079 report");
   std::vector<double> per_frame,fields,matches,inserts;
@@ -258,9 +327,15 @@ void save_report(const std::filesystem::path& file,
      <<",\"map_frame_verified\":false"
      <<",\"independent_ground_truth\":false"
      <<",\"external_map_loaded\":false"
-     <<",\"loop_closures\":0"
-     <<",\"pose_graph_optimized\":false"
+     <<",\"loop_closures\":"<<(loop?loop->accepted_loops:0)
+     <<",\"pose_graph_optimized\":"<<(loop?"true":"false")
      <<",\"realtime_deadlines_verified\":false"
+     <<",\"loop_mode\":\""<<(loop?"fr079_lidar_scan_registration_gtsam_v1":"none")<<"\""
+     <<",\"loop_candidates\":"<<(loop?loop->proposed_loops:0)
+     <<",\"loop_registration_attempts\":"<<(loop?loop->registration_attempts:0)
+     <<",\"loop_geometry_verified\":"<<(loop?loop->geometry_verified:0)
+     <<",\"graph_shift_within_safety_limit\":"
+     <<(loop&&loop->graph_shift_within_safety_limit?"true":"false")
      <<",\"matcher\":\""<<(result.used_continuous_cost_ceres?"ceres_continuous_cost":(result.used_support_aware_ceres?"ceres_support_aware":(result.used_ceres?"ceres":"geometry_reference_fallback")))<<"\""
      <<",\"distance_truncation_m\":"<<options.distance_truncation_m
      <<",\"ablation_mode\":\""<<options.ablation_mode<<"\""
@@ -293,6 +368,18 @@ void save_report(const std::filesystem::path& file,
      <<",\"resolution_m\":"<<result.map.snapshot->config().resolution_m
      <<",\"revision\":"<<result.map.snapshot->revision()
      <<",\"fingerprint\":\""<<result.map.snapshot->fingerprint()<<"\"}"
+     <<",\"graph_control_map\":"
+     <<(loop?("{\"fingerprint\":\""+
+         std::to_string(loop->odometry_graph_map.snapshot->fingerprint())+
+         "\",\"revision\":"+
+         std::to_string(loop->odometry_graph_map.snapshot->revision())+"}"):
+         "null")
+     <<",\"graph_optimized_map\":"
+     <<(loop?("{\"fingerprint\":\""+
+         std::to_string(loop->loop_graph_map.snapshot->fingerprint())+
+         "\",\"revision\":"+
+         std::to_string(loop->loop_graph_map.snapshot->revision())+"}"):
+         "null")
      <<",\"profiling\":{\"clock\":\"std::chrono::steady_clock\""
      <<",\"input_load_ms\":"<<loading_ms
      <<",\"slam_compute_ms\":"<<compute_ms
@@ -334,6 +421,7 @@ int run(int argc,char** argv){
       ("reference","Use geometry-reference matcher without Ceres")
       ("support-aware","Enable opt-in certified-support Ceres matcher")
       ("continuous-cost","Enable opt-in finite cost for unknown EDT cells")
+      ("lidar-loop-closure","Detect reciprocal LiDAR revisits and optimize a GTSAM graph with an odometry-only control")
       ("ablation","Experimental finite Ceres variant: finite-seed-legacy, finite-all-legacy, finite-seed-continuous",cxxopts::value<std::string>())
       ("capture","Write frozen-map pose perturbation benchmark")
       ("capture-every","Capture interval",cxxopts::value<std::string>())
@@ -368,6 +456,12 @@ int run(int argc,char** argv){
            options.ablation_mode=="finite-seed-continuous",
            "invalid --ablation mode");
   }
+  const bool lidar_loop_closure=args.count("lidar-loop-closure")&&
+      args["lidar-loop-closure"].as<bool>();
+#ifndef SLAM_FR079_WITH_GTSAM
+  ensure(!lidar_loop_closure,
+         "--lidar-loop-closure requires a native build with GTSAM");
+#endif
   const bool capture=args.count("capture")&&args["capture"].as<bool>();
   ensure(!capture||options.ablation_mode=="none",
          "--capture cannot be combined with --ablation");
@@ -423,9 +517,16 @@ int run(int argc,char** argv){
   const auto report=prefix.string()+".report.json";
   const auto capture_csv=prefix.string()+".capture.csv";
   const auto review=prefix.string()+".review.json";
+  const auto loops_json=prefix.string()+".loops.json";
+  const auto graph_control_map=prefix.string()+".graph_control.slammap";
+  const auto graph_optimized_map=prefix.string()+".graph_optimized.slammap";
   for(const auto& f:{binary,replay,trajectory,match,pgm,yaml,report,review})
     ensure(!std::filesystem::exists(std::filesystem::symlink_status(f)),
            "output already exists; refusing overwrite");
+  if(lidar_loop_closure)
+    for(const auto& f:{loops_json,graph_control_map,graph_optimized_map})
+      ensure(!std::filesystem::exists(std::filesystem::symlink_status(f)),
+             "loop artifact already exists; refusing overwrite");
   if(capture)
     ensure(!std::filesystem::exists(std::filesystem::symlink_status(capture_csv)),
            "capture output already exists; refusing overwrite");
@@ -454,6 +555,11 @@ int run(int argc,char** argv){
   const auto result=slam::datasets::run_fr079_offline_slam(scans,options);
   const std::size_t capture_trials=capture_benchmark?capture_benchmark->tested_trials():0;
   capture_benchmark.reset();
+  std::optional<slam::datasets::Fr079LoopResult> loop;
+#ifdef SLAM_FR079_WITH_GTSAM
+  if(lidar_loop_closure)
+    loop=slam::datasets::run_fr079_loop_experiment(scans,result,options);
+#endif
   const auto computed=Clock::now();
   {
     std::ofstream out(binary,std::ios::binary);
@@ -480,15 +586,23 @@ int run(int argc,char** argv){
   save_trajectory(trajectory,result,digest);
   save_matches(match,result,digest);
   save_replay(replay,scans,result,digest);
+  if(loop) {
+    save_loop_diagnostics(loops_json,*loop,digest);
+    save_graph_map(graph_control_map,loop->odometry_graph_map);
+    save_graph_map(graph_optimized_map,loop->loop_graph_map);
+  }
   const auto exported=Clock::now();
   save_report(report,result,digest,options,elapsed_ms(begin,loaded),
-              elapsed_ms(loaded,computed),elapsed_ms(computed,exported));
+              elapsed_ms(loaded,computed),elapsed_ms(computed,exported),
+              loop?&*loop:nullptr);
   std::cout<<"FR079 offline LiDAR+odometry SLAM: scans="<<scans.size()
            <<" matched="<<result.accepted<<"/"<<result.attempts
            <<" inserted="<<result.inserted_scans
            <<" map="<<binary
            <<" replay="<<replay
            <<" report="<<report
+           <<(loop?" accepted_loops="+std::to_string(loop->accepted_loops)+
+                    " loop_decisions="+loops_json:"")
            <<(capture?" capture_trials="+std::to_string(capture_trials):"")<<"\n";
   std::vector<slam::cli::ReviewFile> files={
       {"report",report,true},
@@ -500,6 +614,11 @@ int run(int argc,char** argv){
       {"map_metadata",yaml,false},
   };
   if(capture)files.push_back({"capture_diagnostics",capture_csv,true});
+  if(loop) {
+    files.push_back({"loop_decisions_and_graph_poses",loops_json,true});
+    files.push_back({"odometry_only_graph_map",graph_control_map,false});
+    files.push_back({"loop_optimized_map",graph_optimized_map,false});
+  }
   slam::cli::write_review_manifest(review,"fr079_offline",files);
   return 0;
 }

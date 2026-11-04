@@ -70,6 +70,17 @@ For synthetic fusion runs mounted as `/output`, use
 per-scene review list and the seven-scene Python sweep can print the
 aggregate paths when `summarize` completes.
 
+### Optional FR079 loop-closure result files
+
+When `slam_fr079_offline --lidar-loop-closure` is explicitly enabled,
+the run folder also contains `<run-id>.loops.json`,
+`<run-id>.graph_control.slammap`, and
+`<run-id>.graph_optimized.slammap`. The loop JSON appears in the
+ChatGPT upload checklist; the two binary graph maps are optional uploads
+and appear separately in Map Explorer. A strict paired scorecard goes under
+`reports/<comparison-id>.{json,csv,review.json}`.
+See [FR079 loop-closure experiment](fr079-loop-closure-experiment.md).
+
 ### Organize an existing flat FR079 run
 
 The following commands operate on **your existing run files** without rerunning
