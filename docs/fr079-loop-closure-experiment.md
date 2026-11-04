@@ -120,15 +120,55 @@ Outputs:
 - `reports/fr079-continuous-loop-001-comparison.csv`
 - `reports/fr079-continuous-loop-001-comparison.review.json`
 
-The scorecard reports nearby pair counts, registration attempts,
-geometry-verified/accepted loop counts, loop-vs-control pose shifts,
-graph costs, and map fingerprints. **It does not invent occupied IoU,
-ATE, RPE or map precision**. For real map-quality scoring, an
+The updated scorecard explicitly reports **three paired trajectory differences**,
+all in the shared first-scan gauge, each with mean, median, p95, maximum,
+and index of largest displacement for both position (metres) and yaw (degrees):
+
+1. **Original Ceres frontend → LiDAR-loop GTSAM:** how much the mapped
+   solution differs from the original no-loop Ceres reconstruction.
+2. **Odometry-only GTSAM → LiDAR-loop GTSAM:** how much loop factors
+   correct the purely logged-odometry graph. This is the reference for
+   the **legacy post-optimization safety warning** (3 m / 0.9 rad).
+3. **Original Ceres frontend → odometry-only GTSAM:** exposes divergence
+   between the two pre-loop estimation strategies.
+
+These are **paired differences between estimates**, not independent
+trajectory error. They do not require rerunning SLAM: both FR079 run
+folders already hold the trajectories and graph pose arrays.
+The JSON groups the results under `trajectory_comparisons`; CSV flattens
+the statistics into explicitly prefixed columns. The old
+`maximum_loop_vs_control_shift_m` remains for compatibility but continues
+to refer **only** to GTSAM odometry versus GTSAM loops.
+
+The scorecard also reports nearby pair counts, registration attempts,
+geometry-verified/accepted loop counts, graph costs, and map fingerprints.
+**It does not invent occupied IoU, ATE, RPE or map precision**. For real map-quality scoring, an
 independently surveyed reference would be necessary. The FR079
 scan-matched archive is at most a correlated agreement proxy.
 
 If the comparison refuses an input, do not weaken its pairing checks;
 verify the baseline command/options and exact source data first.
+
+### Re-evaluate the already completed run (no SLAM rerun)
+
+If `reports/fr079-continuous-loop-001-comparison.{json,csv}` already
+exist, use a **new** output prefix to avoid overwriting previous results:
+
+```bash
+git pull --ff-only
+python3 tests/fr079_loop_compare_tools_test.py
+
+python3 tools/fr079_loop_compare.py \
+  --baseline apps/demo/maps/fr079-continuous-noloop-001 \
+  --loop apps/demo/maps/fr079-continuous-loop-001 \
+  --out reports/fr079-continuous-loop-001-comparison-v2
+```
+
+This reuses the original `*.trajectory.json`, `*.matches.json`,
+`*.report.json` and `*.loops.json` artifacts. It creates a fresh
+`-v2.json`, `-v2.csv` and `-v2.review.json` and prints the new
+host paths for review. **No Ceres, ICP or GTSAM jobs run** during this
+comparison.
 
 ## 4. Inspect the actual maps
 

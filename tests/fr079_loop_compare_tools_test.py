@@ -52,10 +52,10 @@ class Fr079LoopPairingTest(unittest.TestCase):
             "nearby_pairs":2,"registration_attempts":2,
             "geometry_verified":1,
             "loop_decisions":[{"from":0,"to":2,"decision":"accepted"}],
-            "odometry_graph_poses":[[float(i),0,0] for i in range(3)],
-            "loop_graph_poses":[[float(i),0,0] for i in range(3)],
-            "maximum_graph_shift_m":.1,"mean_graph_shift_m":.05,
-            "maximum_graph_shift_yaw_rad":.02,
+            "odometry_graph_poses":[[0.,0.,0.],[1.,-.1,.1],[2.,0.,0.]],
+            "loop_graph_poses":[[0.,0.,0.],[1.,.2,.2],[2.,0.,0.]],
+            "maximum_graph_shift_m":.3,"mean_graph_shift_m":.1,
+            "maximum_graph_shift_yaw_rad":.1,
             "graph_control_initial_cost":20,"graph_control_final_cost":10,
             "graph_loop_initial_cost":30,"graph_loop_final_cost":12,
             "graph_shift_within_safety_limit":True,
@@ -72,6 +72,32 @@ class Fr079LoopPairingTest(unittest.TestCase):
             self.assertTrue(row["frontend_trajectory_identical"])
             self.assertFalse(row["map_accuracy_measured"])
             self.assertEqual(row["loops_accepted"],1)
+            self.assertEqual(row["legacy_graph_shift_warning_reference"],
+                             "odometry_graph_to_lidar_loop")
+            comparisons=row["trajectory_comparisons"]
+            self.assertAlmostEqual(
+                comparisons["ceres_frontend_to_lidar_loop"]["translation_m"]["max"], .2)
+            self.assertAlmostEqual(
+                comparisons["ceres_frontend_to_lidar_loop"]["yaw_deg"]["max"],
+                0.2 * 180 / 3.141592653589793)
+            self.assertAlmostEqual(
+                comparisons["odometry_graph_to_lidar_loop"]["translation_m"]["max"], .3)
+            self.assertAlmostEqual(
+                comparisons["ceres_frontend_to_odometry_graph"]["translation_m"]["max"], .1)
+            self.assertEqual(
+                comparisons["ceres_frontend_to_lidar_loop"]["translation_m"]["median"],0.)
+            self.assertAlmostEqual(
+                comparisons["ceres_frontend_to_lidar_loop"]["translation_m"]["p95"], .18)
+            self.assertEqual(
+                comparisons["ceres_frontend_to_lidar_loop"]["translation_m"]["max_scan_index"],1)
+            from fr079_loop_compare import scorecard_csv_row
+            flattened=scorecard_csv_row(row)
+            self.assertAlmostEqual(flattened[
+                "ceres_frontend_to_lidar_loop_translation_m_max"],.2)
+            self.assertAlmostEqual(flattened[
+                "odometry_graph_to_lidar_loop_translation_m_max"],.3)
+            self.assertAlmostEqual(flattened[
+                "ceres_frontend_to_odometry_graph_translation_m_max"],.1)
 
     def test_refuses_changing_matching_map_and_source(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -125,6 +151,38 @@ class Fr079LoopPairingTest(unittest.TestCase):
             report_file.write_text(json.dumps(report))
             self.assertEqual(compare(base,loop)["comparison_status"],
                              "NO_ACCEPTED_LOOP_CLOSURES")
+
+
+    def test_wrapped_yaw_quantiles_and_reject_nonfinite(self):
+        import math
+        from fr079_loop_compare import trajectory_differences
+        a=[[0.,0.,math.radians(179)],
+           [1.,0.,math.radians(-179)],
+           [2.,0.,math.radians(179)]]
+        b=[[0.,0.,math.radians(-179)],
+           [1.,0.,math.radians(179)],
+           [2.,0.,math.radians(-177)]]
+        summary=trajectory_differences(a,b)
+        self.assertAlmostEqual(summary["yaw_deg"]["max"],4.)
+        self.assertAlmostEqual(summary["yaw_deg"]["median"],2.)
+        self.assertAlmostEqual(summary["yaw_deg"]["p95"],3.8)
+        self.assertEqual(summary["yaw_deg"]["max_scan_index"],2)
+        with self.assertRaisesRegex(ValueError,"nonfinite"):
+            trajectory_differences([[0.,0.,float("nan")]],[[0.,0.,0.]])
+        with self.assertRaisesRegex(ValueError,"pose count"):
+            trajectory_differences([[0.,0.,0.]],[])
+        with self.assertRaisesRegex(ValueError,"malformed"):
+            trajectory_differences([[0.,0.]],[[0.,0.,0.]])
+
+    def test_graph_diagnostic_mismatch_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base,loop=self.make(Path(temp))
+            path=loop/"loop.loops.json"
+            obj=json.loads(path.read_text())
+            obj["maximum_graph_shift_m"]=33.98
+            path.write_text(json.dumps(obj))
+            with self.assertRaisesRegex(ValueError,"inconsistent with saved loop diagnostics"):
+                compare(base,loop)
 
 
 if __name__ == "__main__":
