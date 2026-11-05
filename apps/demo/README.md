@@ -276,7 +276,7 @@ docker compose run --rm \
   -v "$PWD/apps/demo/maps:/output" \
   --entrypoint ./build-docker/slam_fr079_offline \
   test /input/fr079.log.gz /output/fr079-slam
-docker compose up -d demo
+docker compose up --build demo  # foreground; Ctrl+C stops
 ~~~
 
 Open / and select fr079-slam.slammap. Open /replay and select

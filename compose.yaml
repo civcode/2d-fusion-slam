@@ -6,7 +6,7 @@ services:
       args:
         SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-28}
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:${SLAM_DEMO_PORT:-8765}:8765"
     volumes:
       - ./apps/demo/maps:/maps:ro
       # Point at a completed sweep to browse all its runs directly.

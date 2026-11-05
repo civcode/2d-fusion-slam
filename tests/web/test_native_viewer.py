@@ -255,7 +255,7 @@ class NativeViewerApi(unittest.TestCase):
         self.assertEqual(self.api("/api/maps/fr079-demo-001%40fr079-demo-001.slammap"),
                          self.api("/api/maps/record.slammap"))
         with self.get("/api/maps/fr079-demo-001%40fr079-demo-001.slammap/image.png") as image:
-            self.assertEqual(image.read(8), b"\\x89PNG\\r\\n\\x1a\\n")
+            self.assertEqual(image.read(8), b"\x89PNG\r\n\x1a\n")
         self.assertEqual(
             self.api("/api/maps/fr079-demo-001%40fr079-demo-001.slammap/cell?x=3&y=2"),
             self.api("/api/maps/record.slammap/cell?x=3&y=2"))

@@ -57,7 +57,7 @@ def main():
             assert nested_map in [m["id"] for m in maps["maps"]]
             nested_meta = json.loads(get("/api/maps/fr079-folder%40fr079-folder.slammap")[0])
             nested_img, _ = get("/api/maps/fr079-folder%40fr079-folder.slammap/image.png")
-            assert nested_img.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+            assert nested_img.startswith(b"\x89PNG\r\n\x1a\n")
             assert nested_meta["truth_class"] == "estimated_trajectory_no_independent_ground_truth"
             meta = json.loads(get("/api/maps/fr079-estimated.slammap")[0])
             assert meta["truth_class"] == \

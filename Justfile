@@ -48,15 +48,15 @@ fusion-warehouse: build
         --entrypoint ./build-docker/slam_offline_fusion \
         test warehouse /fusion/warehouse-001
 
-# Start demo in background
-demo: build
-    docker compose up -d demo
+# Run only the demo in the foreground. Ctrl+C stops the container.
+demo:
+    docker compose up --build demo
 
-# Follow demo logs
+# Follow logs for a separately detached demo, if one was started manually
 demo-logs:
     docker compose logs -f demo
 
-# Stop and remove demo containers
+# Remove stopped demo containers or clean up a legacy detached demo
 demo-down:
     docker compose down
 

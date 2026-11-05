@@ -268,7 +268,7 @@ docker compose run --rm \
   /input/fr079.log.gz /output/fr079-slam
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker -R fr079_offline_slam --output-on-failure
-docker compose up -d demo
+docker compose up --build demo  # foreground; Ctrl+C stops
 ~~~
 
 See the full [FR079 offline SLAM protocol](docs/fr079-offline-slam.md)
@@ -300,7 +300,7 @@ docker compose build demo test
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker -R 'map_selector_browser|fusion_replay_http|native_web_api' \
   --output-on-failure
-docker compose up -d --force-recreate demo
+docker compose up --build --force-recreate demo  # Ctrl+C stops
 ~~~
 
 The scene/method browser test is registered when Node is installed;

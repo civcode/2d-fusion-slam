@@ -56,9 +56,29 @@ modifying that file.
 ## Native browser demo
 
 ```sh
-docker compose up --build demo  # 28 build jobs by default
+just demo                       # attached; Ctrl+C stops the demo
+# Equivalent without just:
+docker compose up --build demo  # 28 compilation jobs by default
 # Open http://127.0.0.1:8765
 ```
+
+Unlike the old detached `just demo` recipe, this runs Compose in the
+foreground (no `-d`) and builds **only the lightweight demo**; the
+full Ceres/GTSAM test image is not rebuilt. Ctrl+C stops the running demo
+without requiring `docker compose down`. Use `docker compose down`
+once if you need to remove a container left by an older detached invocation.
+
+Both this project and `hybrid-astar-cpp` use host port 8765 by default.
+To run both at once, choose another **host-only** port for this demo:
+
+```sh
+SLAM_DEMO_PORT=8766 just demo   # Open http://127.0.0.1:8766
+```
+
+The container still listens on port 8765; only its loopback-bound host
+port changes. If port 8765 is already allocated, inspect the conflicting
+container with `docker ps --filter publish=8765`, or select a free port
+instead of stopping an unrelated project.
 
 Compose publishes loopback only and mounts `apps/demo/maps` read-only. With
 no maps, the viewer serves a labeled synthetic example without writing to the
