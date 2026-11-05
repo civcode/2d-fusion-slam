@@ -287,7 +287,8 @@ recognition. It does the following:
    and a compact spatial likelihood kernel allows discretization error.
 2. Discover keyframe pairs **without filtering by relative heading**.
    Retain the old Ceres proximity gate of 2.8 m, exclusion window, at most
-   six registrations per current keyframe and at most 24 proposed loops.
+   six registrations per current keyframe and a safety ceiling of 1000
+   proposed loops (formerly 24; the earlier benchmark is historical).
    Reserve candidate slots for large heading differences, as in
    `pose-prior-scan`.
 3. Run a deterministic **coarse-to-fine correlation search** around the
@@ -296,7 +297,7 @@ recognition. It does the following:
    correction to 0.18 rad; unlike direct scan-to-scan registration, there
    is no absolute rotation cap of 40 degrees. Score on a sparse beam set
    during search and recheck all current LiDAR hits at the final pose.
-4. Accept a geometric match only if it has at least 80 supported current
+4. As the **first stage only**, accept submap correlation if it has at least 80 supported current
    LiDAR hits, at least 58% current-scan support from the frozen historical
    map, a normalized correlation score >=0.48, and a raster-distance
    proxy RMS <=0.22 m. In addition, use the **smallest eigenvalue and
@@ -304,7 +305,13 @@ recognition. It does the following:
    four-sided 0.40 m score-peak checks to reject flat, ambiguous corridor
    ridges. These are deterministic observability **heuristics**, not a
    calibrated covariance or a proof of correct place recognition.
-5. Feed verified submap-to-current relative pose measurements into the
+5. Before graph admission, verify the two original LiDAR scans reciprocally
+   using pose-prior's strict gates: at least 80 inliers in each direction,
+   >=82% reciprocal scan overlap, a forward registration error <=0.11 m,
+   correspondence rank, forward/reverse cycle <=0.14 m / 0.07 rad, and
+   bounded pose corrections. A successful one-way submap correlation
+   alone must **never** enter GTSAM.
+6. Feed strictly verified *scan-to-scan* relative pose measurements into the
    existing **GTSAM pose graph**, represented in the anchor scan's frame.
    They carry the explicit correlated
    `lidar_scan_to_submap_registration` evidence type and nominal
@@ -312,10 +319,10 @@ recognition. It does the following:
    separate gates, robust loss and the same first-pose anchor. The
    **Ceres-derived sequential factors and frontend maps do not change**.
 
-Unlike the previous 82% *reciprocal scan-to-scan* overlap, the new 58%
-criterion is **support of a current scan in an accumulated historical
-submap**, not a symmetric two-scan overlap value. It must never be
-misrepresented as an equivalent relaxed scan-to-scan gate.
+The 58% historical submap support score is a *candidate gate*, not
+symmetric scan-pair overlap. Every proposed submap loop additionally needs
+the same strict >=82% reciprocal original-scan overlap as pose-prior.
+This may reject genuine revisits with too little single-scan common view.
 
 ### Reproduce with Docker
 
@@ -397,9 +404,11 @@ this new mode on the real dataset.
 
 ## Fourth and fifth experimental arms: full-trajectory selection and global retrieval
 
-These opt-in additions deliberately **preserve** the previous
-`--loop-registration scan-to-submap` implementation and its
-24-loop FR079 benchmark. They do not alter the Ceres frontend or
+These opt-in additions originally **preserved** the previous
+`--loop-registration scan-to-submap` matcher and produced the historical
+24-loop FR079 benchmark. On the current branch all submap modes now
+require strict reciprocal raw-scan verification with a 1000-loop ceiling;
+the published 24-loop results describe the earlier experiment. They do not alter the Ceres frontend or
 frontend-relative sequential factors. The published `fr079-sm`
 poses remain evaluation-only and are never used to recognize or validate
 loop candidates.
@@ -409,22 +418,23 @@ loop candidates.
 Select `--loop-registration scan-to-submap-distributed`.
 
 The old scan-to-submap experiment quit candidate discovery as soon as
-24 loops had been proposed (on FR079, after scan 1768). This mode
-**processes all keyframes** through the end of the log, collects the
-best geometrically verified candidate per current keyframe, then
-chooses **at most 24 globally distributed factors**:
+24 loops had been proposed (on FR079, after scan 1768). The current mode
+**processes all keyframes** through the end of the log, collects the best
+*strictly reciprocal-verified* candidate per current keyframe, and allows
+up to **1000 factors**, which is nonbinding for fewer than 400 keyframe
+indices in this 3118-scan recording:
 
-- Partition the full scan-index range into **24 narrow time slots**
-  (eight bins with three slots each), so high-scoring early visits cannot
-  use the entire 24-factor budget.
-- Allocate up to one factor per slot by current-scan support followed by
-  registration error.
+- Partition the scan-index range into up to 1000 narrow slots (eight
+  bins of 125 slots each). The slots no longer exclude candidates on FR079.
+- Allocate up to one factor per slot by reciprocal original-scan overlap
+  followed by scan-registration error.
 - Fill any unused slots from other verified candidates. Two constraints
   are considered redundant **only when both their historical anchors
   and current indices are within 24 scans**. This preserves separate
   later traversals returning to the same historical anchor.
 - Keep the historical 2.8m Ceres-relative position gate, 0.54m/0.18rad
-  local search and all original submap observability checks unchanged.
+  local search and all submap observability checks, **plus** the strict
+  reciprocal original-scan gate and local pose-prior innovation limits.
 
 This makes the effects of **full-pass temporal coverage** independently
 measurable, without conflating them with place recognition.
@@ -453,8 +463,10 @@ LiDAR submaps at every 16th current scan:
   >=0.60, the same 2D score-curvature and four-sided score-peak
   observability tests, and **agreement within 0.55m / 0.12rad between
   two neighboring historical anchor matches** before it can become a
-  loop proposal. These neighboring scans are correlated, not independent
-  truth; agreement is a conservative heuristic.
+  loop proposal. The candidate must additionally pass the same strict
+  reciprocal original-scan gate as pose-prior, with its initial transform
+  supplied by the submap. The neighboring historical observations remain
+  correlated, not independent truth.
 - GTSAM receives global matches under a **distinct correlated evidence
   type** and stronger 0.60m/0.60m/0.30rad factor sigmas. Only this
   provenance can tolerate up to 4.6m / 0.60rad discrepancy from the
@@ -467,8 +479,11 @@ recognition, nor Cartographer's exhaustive branch-and-bound matcher.
 Spatial retrieval and larger search windows do not prove that a loop is
 correct. Adjacent historical submaps share most of their observations,
 so cross-anchor agreement is not independent validation. Large-drift
-events outside 4.5m/0.55rad can still be missed; factor budgets may
-still exclude meaningful matches. **Do not** interpret an increase in
+events outside 4.5m/0.55rad can still be missed; the reciprocal scanner's
+3m relative-translation envelope can also reject some valid
+submap-only registrations. The 1000-factor ceiling is nonbinding for
+FR079, though candidate discovery and redundancy suppression still limit
+which loop pairs reach the graph. **Do not** interpret an increase in
 loop count as a guaranteed improvement in physical map accuracy.
 
 ### Reproducible evaluation
@@ -495,7 +510,7 @@ docker compose run --rm \
   -v "$PWD/apps/demo/maps:/output" \
   -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
   --entrypoint ./build-docker/slam_fr079_offline test \
-  /input/fr079.log.gz /output/fr079-ceresgraph-distributed-002 \
+  /input/fr079.log.gz /output/fr079-ceresgraph-distributed-strict-003 \
   --run-directory --continuous-cost --match-every 5 --field-every 15 \
   --map-stride 1 --match-stride 4 --distance-truncation 0.5 \
   --lidar-loop-closure --frontend-sequential-graph \
@@ -504,8 +519,8 @@ docker compose run --rm \
 python3 tools/fr079_reference_benchmark.py \
   --raw-log "$FR079_LOG" --reference-sm-log "$FR079_SM_LOG" \
   --baseline apps/demo/maps/fr079-continuous-noloop-001 \
-  --optimized apps/demo/maps/fr079-ceresgraph-distributed-002 \
-  --out reports/fr079-reference-distributed-002
+  --optimized apps/demo/maps/fr079-ceresgraph-distributed-strict-003 \
+  --out reports/fr079-reference-distributed-strict-003
 
 # B: Full-trajectory selection + appearance-retrieved global proposals
 docker compose run --rm \
@@ -513,7 +528,7 @@ docker compose run --rm \
   -v "$PWD/apps/demo/maps:/output" \
   -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
   --entrypoint ./build-docker/slam_fr079_offline test \
-  /input/fr079.log.gz /output/fr079-ceresgraph-global-002 \
+  /input/fr079.log.gz /output/fr079-ceresgraph-global-strict-003 \
   --run-directory --continuous-cost --match-every 5 --field-every 15 \
   --map-stride 1 --match-stride 4 --distance-truncation 0.5 \
   --lidar-loop-closure --frontend-sequential-graph \
@@ -522,8 +537,8 @@ docker compose run --rm \
 python3 tools/fr079_reference_benchmark.py \
   --raw-log "$FR079_LOG" --reference-sm-log "$FR079_SM_LOG" \
   --baseline apps/demo/maps/fr079-continuous-noloop-001 \
-  --optimized apps/demo/maps/fr079-ceresgraph-global-002 \
-  --out reports/fr079-reference-global-002
+  --optimized apps/demo/maps/fr079-ceresgraph-global-strict-003 \
+  --out reports/fr079-reference-global-strict-003
 ```
 
 The `*.loops.json` records `last_keyframe_searched`,
@@ -616,3 +631,45 @@ python3 tools/slammap_to_pgm.py \
 This emits `*.graph_optimized.pgm` and `*.graph_optimized.yaml` from
 the verified authoritative graph map. The export is a lossy visualization
 and does not modify `*.slammap`.
+
+## Current strict reciprocal-loop experiment and large factor ceiling
+
+The current `scan-to-submap`, `scan-to-submap-distributed`, and
+`scan-to-submap-global` arms keep their submap discovery, registration,
+and observability gates **as candidate proposals only**. Successful
+submap matches initialize `register_scans_from_pose_prior` on the
+original anchor and current scan points; the forward match and inverse
+match must satisfy the same 80-inlier, 82%-overlap, rank, error,
+correction and 0.14m/0.07rad cycle limits as pose-prior. The
+`LoopCandidate` carries the reciprocally verified scan transform,
+support, symmetric overlap and measured scan registration error, not
+the one-way raster support score. Local submap matches additionally
+retain the original Ceres-relative pose-prior innovation gate; global
+retrieval preserves its separate provenance, wider frontend-drift
+gate and cross-anchor corroboration. The GTSAM factor sigmas remain
+conservative (0.40m/0.24rad local and 0.60m/0.30rad global).
+
+`kMaxLoops` has been raised from 24 to **1000** as a safety ceiling,
+not a desired count. At keyframe stride 8, FR079 has fewer than
+400 current keyframes, so the budget cannot truncate its pool of
+one candidate per keyframe. Duplicate and temporal-neighbor
+suppression, limited per-keyframe registration attempts, and
+all geometric gates still apply. Thus 1000 does not mean 1000
+accepted factors or that every verified anchor pair is used.
+
+The new `*.loops.json` counters are `maximum_loop_budget`,
+`submap_reciprocal_attempts`, `submap_reciprocal_verified`,
+`submap_reciprocal_forward_rejected`, and
+`submap_reciprocal_cycle_rejected`. The per-decision record now
+exposes raw scan overlap, forward/reverse inliers, raw-scan
+registration RMS, correction from the submap seed, and cycle
+disagreement. Submap support and raster RMS are still retained
+separately as diagnostics; do not equate these values with
+scan-to-scan overlap or metric residuals.
+
+**Rebenchmark required.** The old `poseprior-001`,
+`distributed-002` and `global-002` outputs and their scores are
+historical. The reproducible distributed/global commands above use
+the new `-strict-003` run names and produce new unique benchmark
+reports. No claim of FR079 map-quality improvement is made until
+those runs and actual occupancy-map comparisons are reviewed.
