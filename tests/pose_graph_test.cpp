@@ -135,7 +135,31 @@ int main(){
           submap_bad_provenance.loop_decisions[0]==
               LoopDecision::unverified_or_correlated_evidence,
           "submap matcher cannot claim independent trajectory evidence");
-    in.odometry[0].provenance.source=EvidenceClass::unverified;
+    auto global_input=submap_input;
+  global_input.loops[0].edge.provenance={
+      EvidenceClass::lidar_global_scan_to_submap_registration,
+      "global_submap_shape_v2",true,false};
+  global_input.loops[0].edge.sigma_x_m=.60;
+  global_input.loops[0].edge.sigma_y_m=.60;
+  global_input.loops[0].edge.sigma_yaw_rad=.30;
+  global_input.loops[0].overlap=.84;
+  global_input.loops[0].edge.from_to.translation.x()=1.5;
+  const auto global_accept=optimize_pose_graph(global_input);
+  require(global_accept.accepted_loops==1,
+          "corroborated global submap measurement may correct Ceres drift");
+  auto global_low_support=global_input;
+  global_low_support.loops[0].overlap=.68;
+  require(optimize_pose_graph(global_low_support).accepted_loops==0,
+          "global submap support needs stricter quality gate");
+  auto global_excessive=global_input;
+  global_excessive.loops[0].edge.from_to.translation.x()=10.;
+  require(optimize_pose_graph(global_excessive).accepted_loops==0,
+          "global submap correction still needs bounded graph innovation");
+  auto global_claims_truth=global_input;
+  global_claims_truth.loops[0].edge.provenance.independent_of_initial_trajectory=true;
+  require(optimize_pose_graph(global_claims_truth).accepted_loops==0,
+          "global LiDAR place recognition cannot claim independent truth");
+  in.odometry[0].provenance.source=EvidenceClass::unverified;
   bool denied=false;try{(void)optimize_pose_graph(in);}catch(const std::invalid_argument&){denied=true;}
   require(denied,"unverified odometry cannot become a graph factor");
   std::cout<<"Pose2 batch graph and false-loop guards passed\n";

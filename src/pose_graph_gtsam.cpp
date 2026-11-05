@@ -108,7 +108,9 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
         EvidenceClass::lidar_scan_registration;
     const bool submap_loop=e.provenance.source==
         EvidenceClass::lidar_scan_to_submap_registration;
-    const bool lidar_loop=scan_loop||submap_loop;
+    const bool global_submap_loop=e.provenance.source==
+        EvidenceClass::lidar_global_scan_to_submap_registration;
+    const bool lidar_loop=scan_loop||submap_loop||global_submap_loop;
     const bool common_lidar_evidence=lidar_loop &&
         !e.provenance.source_id.empty() &&
         e.provenance.source_id.size()<=256 &&
@@ -127,7 +129,16 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
         e.sigma_x_m>=.35 && e.sigma_y_m>=.35 &&
         e.sigma_yaw_rad>=.20 && candidate.overlap>=.58 &&
         candidate.registration_error_m<=.22;
-    if (!(scan_verified||submap_verified||verified(e.provenance)) ||
+    // Global retrieval can correct substantial Ceres XY drift, but its
+    // factor needs strong current-scan support and conservative weights.
+    // A second adjacent historical submap must already have agreed; this
+    // is enforced by the caller, never treated as independent ground truth.
+    const bool global_verified=common_lidar_evidence && global_submap_loop &&
+        e.sigma_x_m>=.55 && e.sigma_y_m>=.55 &&
+        e.sigma_yaw_rad>=.28 && candidate.overlap>=.70 &&
+        candidate.registration_error_m<=.22;
+    if (!(scan_verified||submap_verified||global_verified||
+          verified(e.provenance)) ||
         ((lidar_loop ||
           e.provenance.source==EvidenceClass::independently_measured) &&
          odometry_sources.contains(e.provenance.source_id))) {
@@ -141,8 +152,12 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
     const auto predicted=slam::compose(slam::inverse(input.initial_map_from_base[e.from]),
                                         input.initial_map_from_base[e.to]);
     const auto discrepancy=slam::compose(slam::inverse(e.from_to),predicted);
-    if (discrepancy.translation.norm() > options.maximum_loop_residual_translation_m ||
-        std::abs(discrepancy.yaw_rad) > options.maximum_loop_residual_yaw_rad) {
+    const double translation_limit=global_submap_loop?4.6:
+        options.maximum_loop_residual_translation_m;
+    const double yaw_limit=global_submap_loop?.60:
+        options.maximum_loop_residual_yaw_rad;
+    if (discrepancy.translation.norm()>translation_limit ||
+        std::abs(discrepancy.yaw_rad)>yaw_limit) {
       out.loop_decisions.push_back(LoopDecision::inconsistent_with_initial_path);continue;
     }
     auto robust=gtsam::noiseModel::Robust::Create(

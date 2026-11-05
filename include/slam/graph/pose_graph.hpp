@@ -13,6 +13,7 @@ namespace slam::graph {
 enum class EvidenceClass { unverified, synthetic_exact, independently_measured,
                            lidar_scan_registration,
                            lidar_scan_to_submap_registration,
+                           lidar_global_scan_to_submap_registration,
                            frontend_scanmatched_correlated };
 struct FactorProvenance {
   EvidenceClass source{EvidenceClass::unverified};

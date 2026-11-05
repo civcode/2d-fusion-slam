@@ -148,6 +148,47 @@ def main():
         assert submap_trajectory["poses"] == new_trajectory["poses"]
         assert submap_report["map"]["fingerprint"] == new_report["map"]["fingerprint"]
         assert (submaps/(submaps.name+".graph_optimized.slammap")).is_file()
+        # Full-log selection mode: independent of whether 24 loops happen
+        # to be discoverable on this small deterministic fixture.
+        distributed = root / "distributed"
+        run(binary,log,distributed,*flags,
+            "--lidar-loop-closure","--frontend-sequential-graph",
+            "--loop-registration","scan-to-submap-distributed")
+        distributed_graph=json.loads(
+            (distributed/(distributed.name+".loops.json")).read_text())
+        distributed_traj=json.loads(
+            (distributed/(distributed.name+".trajectory.json")).read_text())
+        assert distributed_graph["registration_mode"] == (
+            "distributed_scan_to_submap_v2")
+        assert distributed_graph["last_keyframe_searched"] == 176
+        assert distributed_graph["verified_candidate_pool"] >= (
+            distributed_graph["accepted_loops"])
+        assert distributed_graph["late_selected_loops"] <= (
+            distributed_graph["accepted_loops"])
+        assert distributed_graph["appearance_registration_attempts"] == 0
+        assert len(distributed_graph["loop_graph_poses"]) == 184
+        assert distributed_traj["poses"] == new_trajectory["poses"]
+
+        # No Ceres-XY proximity requirement for descriptor retrieval.
+        global_run = root / "global-submap"
+        run(binary,log,global_run,*flags,
+            "--lidar-loop-closure","--frontend-sequential-graph",
+            "--loop-registration","scan-to-submap-global")
+        global_graph=json.loads(
+            (global_run/(global_run.name+".loops.json")).read_text())
+        global_traj=json.loads(
+            (global_run/(global_run.name+".trajectory.json")).read_text())
+        assert global_graph["registration_mode"] == "global_scan_to_submap_v2"
+        assert global_graph["last_keyframe_searched"] == 176
+        assert global_graph["appearance_registration_attempts"] <= (
+            global_graph["appearance_retrieved_candidates"])
+        assert global_graph["appearance_accepted_loops"] <= (
+            global_graph["accepted_loops"])
+        assert global_graph["appearance_corrob_rejected"] <= (
+            global_graph["appearance_geometry_verified"])
+        assert global_graph["first_pose_fixed"] is True
+        assert len(global_graph["loop_graph_poses"]) == 184
+        assert global_traj["poses"] == new_trajectory["poses"]
         print("FR079 loop/native graph-control integration and pairing passed")
         print("Loop closures on toy CARMEN fixture (not Freiburg):",
               graph["accepted_loops"])

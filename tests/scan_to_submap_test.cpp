@@ -59,6 +59,15 @@ int main() {
     }
     const auto submap=build_frozen_lidar_submap(sweeps);
     check(submap.valid() && submap.contributing_scans==21);
+    const auto fingerprint=slam::matching::describe_frozen_lidar_submap(submap);
+    check(fingerprint.valid);
+    check(std::abs(slam::matching::submap_descriptor_similarity(
+        fingerprint,fingerprint)-1.)<1e-10);
+    check(slam::matching::submap_descriptor_similarity(
+        fingerprint,{})==0.);
+    // Descriptor generation and ranking must be deterministic.
+    const auto again=slam::matching::describe_frozen_lidar_submap(submap);
+    check(fingerprint.pair_distance_histogram==again.pair_distance_histogram);
     const auto current=half_scan(world,reverse_truth);
     const auto first=register_scan_to_frozen_submap(
         submap,current,reverse_prior);
@@ -78,6 +87,18 @@ int main() {
           submap,current,{{10.,10.},1.}).accepted);
       check(!register_scan_to_frozen_submap(
           submap,current,reverse_prior,{.54,.18,.58,.48,.08,.12,5000}).accepted);
+      // A large initial XY error needs the separate global-search budget;
+      // the original local matcher must stay bounded.
+      const slam::Pose2 drifted_prior{{3.2,-.05},
+                                     reverse_truth.yaw_rad-.18};
+      check(!register_scan_to_frozen_submap(
+          submap,current,drifted_prior).accepted);
+      const auto global=register_scan_to_frozen_submap(
+          submap,current,drifted_prior,
+          {4.5,.55,.58,.48,.08,.12,80,true});
+      check(global.correlation_score>.40);
+      check(global.innovation_m>.54);
+      check(global.supported_hits>=80);
     } else {
       check(!first.accepted);
       check(!first.observable);

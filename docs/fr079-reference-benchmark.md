@@ -391,3 +391,154 @@ ATE RMSE relative to the published scan-matched estimate** (which is not
 surveyed ground truth). No new FR079 score is claimed without running
 this new mode on the real dataset.
 
+
+## Fourth and fifth experimental arms: full-trajectory selection and global retrieval
+
+These opt-in additions deliberately **preserve** the previous
+`--loop-registration scan-to-submap` implementation and its
+24-loop FR079 benchmark. They do not alter the Ceres frontend or
+frontend-relative sequential factors. The published `fr079-sm`
+poses remain evaluation-only and are never used to recognize or validate
+loop candidates.
+
+### A: Distributed scan-to-submap closure
+
+Select `--loop-registration scan-to-submap-distributed`.
+
+The old scan-to-submap experiment quit candidate discovery as soon as
+24 loops had been proposed (on FR079, after scan 1768). This mode
+**processes all keyframes** through the end of the log, collects the
+best geometrically verified candidate per current keyframe, then
+chooses **at most 24 globally distributed factors**:
+
+- Partition the full scan-index range into **24 narrow time slots**
+  (eight bins with three slots each), so high-scoring early visits cannot
+  use the entire 24-factor budget.
+- Allocate up to one factor per slot by current-scan support followed by
+  registration error.
+- Fill any unused slots from other verified candidates. Two constraints
+  are considered redundant **only when both their historical anchors
+  and current indices are within 24 scans**. This preserves separate
+  later traversals returning to the same historical anchor.
+- Keep the historical 2.8m Ceres-relative position gate, 0.54m/0.18rad
+  local search and all original submap observability checks unchanged.
+
+This makes the effects of **full-pass temporal coverage** independently
+measurable, without conflating them with place recognition.
+
+### B: Global descriptor-retrieved scan-to-submap closure
+
+Select `--loop-registration scan-to-submap-global`.
+
+In addition to the distributed local search, an **appearance-based**
+candidate generator compares shape signatures built from frozen local
+LiDAR submaps at every 16th current scan:
+
+- A normalized 16-bin histogram of pairwise distances between
+  geometry-driven, farthest-point-sampled occupied endpoints provides a
+  compact **translation- and rotation-invariant (up to rasterization)**
+  geometric descriptor. It does not consume Ceres
+  global XY or heading to rank candidate places.
+- Keep only descriptor similarity >=0.82; retrieve up to two
+  temporally separated historical clusters, with a nearby second anchor
+  where available. This small budget limits expensive global matching.
+- Each retrieved hypothesis can begin **outside the 2.8m gate**. A
+  coarse-to-fine occupancy correlation searches up to **4.5m** and
+  **0.55rad** around the full Ceres relative pose; the local matcher
+  remains unchanged.
+- A retrieved match needs >=70% current-scan submap support, correlation
+  >=0.60, the same 2D score-curvature and four-sided score-peak
+  observability tests, and **agreement within 0.55m / 0.12rad between
+  two neighboring historical anchor matches** before it can become a
+  loop proposal. These neighboring scans are correlated, not independent
+  truth; agreement is a conservative heuristic.
+- GTSAM receives global matches under a **distinct correlated evidence
+  type** and stronger 0.60m/0.60m/0.30rad factor sigmas. Only this
+  provenance can tolerate up to 4.6m / 0.60rad discrepancy from the
+  frontend trajectory. The original local graph gates remain unchanged.
+  Robust loss and the first-pose anchor remain active.
+
+**Limitations:** The pair-distance histogram is inexpensive but can
+confuse similarly shaped corridors; it is not semantic or learned place
+recognition, nor Cartographer's exhaustive branch-and-bound matcher.
+Spatial retrieval and larger search windows do not prove that a loop is
+correct. Adjacent historical submaps share most of their observations,
+so cross-anchor agreement is not independent validation. Large-drift
+events outside 4.5m/0.55rad can still be missed; factor budgets may
+still exclude meaningful matches. **Do not** interpret an increase in
+loop count as a guaranteed improvement in physical map accuracy.
+
+### Reproducible evaluation
+
+Reuse the *same* FR079 source logs and all frontend flags for both arms.
+Do not overwrite the old `fr079-ceresgraph-submap-001` or
+`fr079-ceresgraph-poseprior-001` runs.
+
+```bash
+git switch experiment/fr079-ceres-ablation-beam-sweep
+git pull --ff-only
+docker compose build test demo
+docker compose run --rm --entrypoint ctest test \
+  --test-dir build-docker --output-on-failure \
+  -R '^(scan_to_submap_correlative|scan_to_scan_bootstrap|pose_graph|fr079_loop_experiment|fr079_reference_benchmark_tools)$'
+
+export FR079_LOG="$PWD/.build/datasets/fr079.log.gz"
+export FR079_SM_LOG="$PWD/.build/datasets/fr079-sm.log.gz"
+mkdir -p apps/demo/maps reports
+
+# A: Full trajectory discovery, original pose-based candidate search
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-ceresgraph-distributed-002 \
+  --run-directory --continuous-cost --match-every 5 --field-every 15 \
+  --map-stride 1 --match-stride 4 --distance-truncation 0.5 \
+  --lidar-loop-closure --frontend-sequential-graph \
+  --loop-registration scan-to-submap-distributed
+
+python3 tools/fr079_reference_benchmark.py \
+  --raw-log "$FR079_LOG" --reference-sm-log "$FR079_SM_LOG" \
+  --baseline apps/demo/maps/fr079-continuous-noloop-001 \
+  --optimized apps/demo/maps/fr079-ceresgraph-distributed-002 \
+  --out reports/fr079-reference-distributed-002
+
+# B: Full-trajectory selection + appearance-retrieved global proposals
+docker compose run --rm \
+  -v "$FR079_LOG:/input/fr079.log.gz:ro" \
+  -v "$PWD/apps/demo/maps:/output" \
+  -e SLAM_HOST_OUTPUT_DIR="$PWD/apps/demo/maps" \
+  --entrypoint ./build-docker/slam_fr079_offline test \
+  /input/fr079.log.gz /output/fr079-ceresgraph-global-002 \
+  --run-directory --continuous-cost --match-every 5 --field-every 15 \
+  --map-stride 1 --match-stride 4 --distance-truncation 0.5 \
+  --lidar-loop-closure --frontend-sequential-graph \
+  --loop-registration scan-to-submap-global
+
+python3 tools/fr079_reference_benchmark.py \
+  --raw-log "$FR079_LOG" --reference-sm-log "$FR079_SM_LOG" \
+  --baseline apps/demo/maps/fr079-continuous-noloop-001 \
+  --optimized apps/demo/maps/fr079-ceresgraph-global-002 \
+  --out reports/fr079-reference-global-002
+```
+
+The `*.loops.json` records `last_keyframe_searched`,
+`verified_candidate_pool`, `late_verified_candidates`,
+`late_selected_loops` (current scan index >=1769), global
+appearance retrieval/registration/corroboration/acceptance counts,
+per-decision descriptor similarity and corroboration results, and
+the original submap curvature diagnostics. A mode with zero late
+accepted loops is not considered a success just because it processed
+later scans: inspect per-phase candidates and map alignment.
+
+Compare each new run against the *existing* results of
+`fr079-reference-submap-001` (24 loops, 0.7832m first-pose
+ATE RMSE, 0.6261m rigid XY RMSE; 0.1792 first-pose occupied
+endpoint IoU and 0.1747 rigid XY IoU) and the heading-aware
+13-loop baseline (1.1727m/0.8462m ATE RMSE; 0.2100/0.1325 IoU).
+These metrics compare to the published scan-matched reference, **not**
+surveyed ground truth. Local 10- and 50-scan RPE, large graph-shift
+warnings, actual loop locations and the visual map remain necessary
+checks for false or overly strong constraints.
+

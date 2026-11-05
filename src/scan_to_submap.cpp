@@ -66,6 +66,74 @@ struct Score {
 }
 } // namespace
 
+SubmapDescriptor describe_frozen_lidar_submap(const FrozenLidarSubmap& map) {
+  SubmapDescriptor descriptor;
+  if(!map.valid() || map.occupied_cells<40)return descriptor;
+  // Use geometric farthest-point sampling rather than row-major raster
+  // subsampling. The seed is closest to the point centroid and subsequent
+  // samples maximize distance from the already selected set. This keeps
+  // the pair-distance distribution comparatively stable under SE(2) change
+  // of local coordinates (up to the 10cm raster quantization).
+  constexpr std::size_t max_samples=96;
+  std::vector<Eigen::Vector2d> all;
+  all.reserve(map.occupied_cells);
+  Eigen::Vector2d centroid=Eigen::Vector2d::Zero();
+  for(std::size_t y=0;y<map.height;++y)
+    for(std::size_t x=0;x<map.width;++x)
+      if(map.likelihood[y*map.width+x]==255) {
+        all.emplace_back((double(x)+.5)*map.resolution_m,
+                         (double(y)+.5)*map.resolution_m);
+        centroid+=all.back();
+      }
+  if(all.size()<40)return descriptor;
+  centroid/=double(all.size());
+  std::size_t seed=0;
+  double best_distance=std::numeric_limits<double>::infinity();
+  for(std::size_t i=0;i<all.size();++i) {
+    const double d=(all[i]-centroid).squaredNorm();
+    if(d<best_distance){best_distance=d;seed=i;}
+  }
+  std::vector<double> nearest(all.size(),
+                              std::numeric_limits<double>::infinity());
+  std::vector<Eigen::Vector2d> samples;
+  samples.reserve(max_samples);
+  for(std::size_t k=0;k<std::min(max_samples,all.size());++k) {
+    samples.push_back(all[seed]);
+    double farthest=-1.;
+    std::size_t next=seed;
+    for(std::size_t i=0;i<all.size();++i) {
+      nearest[i]=std::min(nearest[i],
+                         (all[i]-all[seed]).squaredNorm());
+      if(nearest[i]>farthest) {farthest=nearest[i];next=i;}
+    }
+    seed=next;
+  }
+  if(samples.size()<30)return descriptor;
+  for(std::size_t i=0;i<samples.size();++i)
+    for(std::size_t j=i+1;j<samples.size();++j) {
+      const double dist=(samples[i]-samples[j]).norm();
+      const std::size_t bin=std::min<std::size_t>(
+          descriptor.pair_distance_histogram.size()-1,
+          static_cast<std::size_t>(dist/1.0));
+      ++descriptor.pair_distance_histogram[bin];
+    }
+  double sq=0.;
+  for(double v:descriptor.pair_distance_histogram)sq+=v*v;
+  if(sq<=0)return descriptor;
+  const double inv=1./std::sqrt(sq);
+  for(double& v:descriptor.pair_distance_histogram)v*=inv;
+  descriptor.valid=true;
+  return descriptor;
+}
+double submap_descriptor_similarity(const SubmapDescriptor& a,
+                                    const SubmapDescriptor& b) noexcept {
+  if(!a.valid||!b.valid)return 0.;
+  double score=0.;
+  for(std::size_t i=0;i<a.pair_distance_histogram.size();++i)
+    score+=a.pair_distance_histogram[i]*b.pair_distance_histogram[i];
+  return std::clamp(score,0.,1.);
+}
+
 bool FrozenLidarSubmap::valid() const noexcept {
   return width>0 && height>0 && width*height==likelihood.size() &&
          std::isfinite(origin_x) && std::isfinite(origin_y) &&
@@ -152,8 +220,10 @@ SubmapMatchResult register_scan_to_frozen_submap(
      hits.size()>4096 || !finite(prior) ||
      !std::isfinite(limits.translation_window_m) ||
      !std::isfinite(limits.rotation_window_rad) ||
-     limits.translation_window_m<=0 || limits.translation_window_m>.8 ||
-     limits.rotation_window_rad<=0 || limits.rotation_window_rad>.35 ||
+     limits.translation_window_m<=0 ||
+     limits.translation_window_m>(limits.global_search?5.0:.8) ||
+     limits.rotation_window_rad<=0 ||
+     limits.rotation_window_rad>(limits.global_search?.65:.35) ||
      !std::isfinite(limits.minimum_support_fraction) ||
      limits.minimum_support_fraction<=0 || limits.minimum_support_fraction>1 ||
      !std::isfinite(limits.minimum_score) || limits.minimum_score<=0 ||
@@ -185,9 +255,24 @@ SubmapMatchResult register_scan_to_frozen_submap(
         }
   };
   best=score_pose(map,hits,prior,step).value;
-  search(prior,.16,3,.06,3);
-  const Pose2 coarse_best=best_pose;
-  search(coarse_best,.04,3,.015,3);
+  if(limits.global_search) {
+    // Wide, orientation-aware coarse grid: search displacement even when
+    // Ceres poses differ by more than the normal spatial candidate radius.
+    // Multi-peak ambiguity is checked below, never trusted on score alone.
+    const int n=static_cast<int>(std::ceil(
+        limits.translation_window_m/.50));
+    const int yaw_n=static_cast<int>(std::ceil(
+        limits.rotation_window_rad/.10));
+    search(prior,.50,n,.10,yaw_n);
+    const Pose2 wide_best=best_pose;
+    search(wide_best,.12,4,.025,4);
+    const Pose2 middle_best=best_pose;
+    search(middle_best,.04,3,.01,3);
+  } else {
+    search(prior,.16,3,.06,3);
+    const Pose2 coarse_best=best_pose;
+    search(coarse_best,.04,3,.015,3);
+  }
   const Score final=score_pose(map,hits,best_pose);
   result.anchor_from_current=best_pose;
   result.correlation_score=final.value;

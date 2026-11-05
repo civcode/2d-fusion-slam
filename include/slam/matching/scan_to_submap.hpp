@@ -3,6 +3,7 @@
 #include "slam/core/se2.hpp"
 
 #include <Eigen/Core>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -31,6 +32,17 @@ struct FrozenLidarSubmap {
 [[nodiscard]] FrozenLidarSubmap build_frozen_lidar_submap(
     const std::vector<SubmapSweep>& sweeps, double resolution_m = 0.10);
 
+// Translation/heading-invariant *retrieval* fingerprint from occupied
+// endpoint separations. This proposes places, it never verifies a loop.
+struct SubmapDescriptor {
+  std::array<double,16> pair_distance_histogram{};
+  bool valid{};
+};
+[[nodiscard]] SubmapDescriptor describe_frozen_lidar_submap(
+    const FrozenLidarSubmap& submap);
+[[nodiscard]] double submap_descriptor_similarity(
+    const SubmapDescriptor& a,const SubmapDescriptor& b) noexcept;
+
 struct SubmapSearchLimits {
   double translation_window_m{0.54};
   double rotation_window_rad{0.18};
@@ -39,6 +51,9 @@ struct SubmapSearchLimits {
   double minimum_translation_curvature{0.08}; // normalized score per m^2
   double minimum_curvature_ratio{0.12};
   std::size_t minimum_supported_hits{80};
+  // Only for appearance-retrieved hypotheses. Allows larger Ceres drift,
+  // with a wide coarse search and separate graph provenance.
+  bool global_search{false};
 };
 
 struct SubmapMatchResult {
