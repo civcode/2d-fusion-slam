@@ -277,6 +277,10 @@ Fr079LoopResult run_fr079_loop_experiment(
             input.initial_map_from_base[k]);
         query_sweeps.push_back({relative,scan_hits(scans[k],options.max_hit_range_m)});
       }
+      // Keep the current observation itself in the place descriptor even
+      // when the 3-scan sampling phase ends at i-1 or i-2.
+      if((i-first)%kSubmapSampleStride!=0)
+        query_sweeps.push_back({Pose2{},current});
       const auto query_map=slam::matching::build_frozen_lidar_submap(query_sweeps);
       const auto descriptor=slam::matching::describe_frozen_lidar_submap(query_map);
       std::vector<AppearanceProposal> ranked;

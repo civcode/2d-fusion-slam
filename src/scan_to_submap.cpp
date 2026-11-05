@@ -258,7 +258,8 @@ SubmapMatchResult register_scan_to_frozen_submap(
   if(limits.global_search) {
     // Wide, orientation-aware coarse grid: search displacement even when
     // Ceres poses differ by more than the normal spatial candidate radius.
-    // Multi-peak ambiguity is checked below, never trusted on score alone.
+    // Score is never sufficient alone: later guards check the curvature
+    // and local distinctiveness of the correlation peak.
     const int n=static_cast<int>(std::ceil(
         limits.translation_window_m/.50));
     const int yaw_n=static_cast<int>(std::ceil(
