@@ -19,6 +19,7 @@ struct Fr079SlamOptions {
   double map_margin_m{21.0};
   std::size_t map_beam_stride{3};
   std::size_t match_beam_stride{4};
+  std::size_t match_beam_phase{0}; // original-ray index offset; < match_beam_stride
   std::size_t match_every{5};
   std::size_t rebuild_field_every{15};
   double distance_truncation_m{0.70};
@@ -27,6 +28,9 @@ struct Fr079SlamOptions {
   bool use_ceres{true};
   bool continuous_cost_ceres{false}; // opt-in finite residuals for unknown EDT cells
   bool support_aware_ceres{false}; // opt-in; legacy Ceres remains the default
+  // none, finite-seed-legacy, finite-all-legacy, finite-seed-continuous.
+  // Experimental only; the two stable matcher paths remain unchanged.
+  std::string ablation_mode{"none"};
   // Optional diagnostic observer: receives only the last accepted estimated
   // pose, query scan, and a *previously built* immutable map snapshot.
   // Never influences SLAM state, and never supplies ground-truth poses.
@@ -40,6 +44,12 @@ struct Fr079SlamFrame {
   Pose2 estimated;      // accepted correction or predicted
   double scan_time_s{};
   std::size_t beam_count{}, valid_hits{}, mapped_hits{};
+  std::size_t match_input_beams{}, solver_residual_blocks{};
+  bool candidate_evaluated{};
+  std::size_t seed_supported_hits{}, candidate_supported_hits{};
+  double seed_strict_cost{}, candidate_strict_cost{};
+  double seed_finite_cost{}, candidate_finite_cost{};
+  double candidate_translation_m{}, candidate_rotation_rad{};
   bool matched{}, accepted{}, map_inserted{};
   std::string match_status{"not_attempted"};
   std::size_t supported_hits{};

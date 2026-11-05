@@ -140,6 +140,33 @@ async function main(){
   assert.equal(radio(nodes,"fusion@apartment-001@graph_optimized").checked,true);
   assert.equal(radio(nodes,"fusion@apartment-001@lidar_only").checked,false);
   assert.equal(a.methodDisplay("graph_optimized").label,"Graph optimized");
+  // Seven distinct synthetic scenes are identified by their provenance,
+  // not by a run-name heuristic (asymmetric warehouse is NOT warehouse).
+  const newScenes=[
+    ["office","Office"],["loft","Loft"],["atrium","Atrium"],
+    ["industrial","Industrial"],
+    ["warehouse_asymmetric","Asymmetric warehouse"],
+    ["apartment_explore","Apartment Explore"],["workshop","Workshop"]
+  ];
+  const extras=newScenes.map(([scene])=>({
+    id:"fusion@"+scene+"-continuous-s01@lidar_only",
+    name:scene+"-continuous-s01 / lidar_only",role:"fusion",
+    scene:"synthetic-"+scene+"-v1",
+    run_id:scene+"-continuous-s01",method:"lidar_only"
+  }));
+  const expanded=a.groupMaps([...a.listed,...extras]);
+  assert.equal(expanded.groups.length,10);
+  for(const [scene,label] of newScenes){
+    const run=expanded.groups.find(g=>g.run===scene+"-continuous-s01");
+    assert.equal(run.title,label);
+  }
+  const replayLinks=a.node("map-list").children[0].children[1].children.at(-1);
+  assert.equal(replayLinks.className,"scene-replay-links");
+  assert.equal(replayLinks.children.length,2);
+  assert.equal(replayLinks.children[0].href,
+    "/fusion?run=apartment-001&view=lidar");
+  assert.equal(replayLinks.children[1].href,
+    "/fusion?run=apartment-001&view=slam");
   const future=a.groupMaps([{
     id:"fusion@warehouse-002@experimental_refine",
     role:"fusion",name:"warehouse-002 / experimental_refine",

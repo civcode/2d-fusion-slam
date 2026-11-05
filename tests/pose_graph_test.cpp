@@ -60,6 +60,105 @@ int main(){
   require(weak_result.loop_decisions[0]==LoopDecision::insufficient_geometry &&
           weak_result.loop_decisions[1]==LoopDecision::accepted,
           "unsupported proposal must not poison subsequent valid loop");
+  // Experimental LiDAR closure is scan-derived and explicitly NOT
+  // independent of the scan-seeded trajectory. Its robust factor can be
+  // admitted only under stricter noise/support/provenance requirements.
+  auto scan_input=measured;
+  scan_input.loops.clear();
+  auto scan_factor=edge(0,4,{{0,0},0},.20);
+  scan_factor.sigma_yaw_rad=.14;
+  scan_factor.provenance={
+      EvidenceClass::lidar_scan_registration,"lidar_pair_v1",true,false};
+  scan_input.loops.push_back({scan_factor,120,.94,true});
+  const auto scan_result=optimize_pose_graph(scan_input);
+  require(scan_result.accepted_loops==1&&
+          scan_result.loop_decisions[0]==LoopDecision::accepted,
+          "well-constrained, explicitly correlated LiDAR loop admitted");
+  auto too_certain=scan_input;
+  too_certain.loops[0].edge.sigma_x_m=.03;
+  const auto weak_sigma=optimize_pose_graph(too_certain);
+  require(weak_sigma.accepted_loops==0&&
+          weak_sigma.loop_decisions[0]==LoopDecision::unverified_or_correlated_evidence,
+          "LiDAR-derived closure cannot claim independent-sensor confidence");
+  auto false_provenance=scan_input;
+  false_provenance.loops[0].edge.provenance.independent_of_initial_trajectory=true;
+  const auto wrong_claim=optimize_pose_graph(false_provenance);
+  require(wrong_claim.accepted_loops==0&&
+          wrong_claim.loop_decisions[0]==LoopDecision::unverified_or_correlated_evidence,
+          "scan-conditioned factor must not claim independence");
+  auto weak_geom=scan_input;
+  weak_geom.loops[0].supported_hits=30;
+  const auto weak_support=optimize_pose_graph(weak_geom);
+  require(weak_support.accepted_loops==0&&
+          weak_support.loop_decisions[0]==LoopDecision::unverified_or_correlated_evidence,
+          "LiDAR loop requires stronger geometry than independently measured factor");
+  // Frozen scan-to-submap factors carry a separate source class. Their
+  // current-scan support fraction is not symmetric pairwise scan overlap.
+  auto submap_input=scan_input;
+  submap_input.loops[0].edge.provenance={
+      EvidenceClass::lidar_scan_to_submap_registration,
+      "frozen_submap_correlative_v1",true,false};
+  submap_input.loops[0].edge.sigma_x_m=.40;
+  submap_input.loops[0].edge.sigma_y_m=.40;
+  submap_input.loops[0].edge.sigma_yaw_rad=.24;
+  submap_input.loops[0].overlap=.72;
+  submap_input.loops[0].registration_error_m=.12;
+  const auto submap_ok=optimize_pose_graph(submap_input);
+  require(submap_ok.accepted_loops==1 &&
+          submap_ok.loop_decisions[0]==LoopDecision::accepted,
+          "correlated frozen-submap factor accepted with explicit geometry");
+  auto submap_weak=submap_input;
+  submap_weak.loops[0].overlap=.56;
+  const auto submap_low_support=optimize_pose_graph(submap_weak);
+  require(submap_low_support.accepted_loops==0 &&
+          submap_low_support.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "low submap support must not be promoted");
+  auto submap_flat=submap_input;
+  submap_flat.loops[0].full_rank=false;
+  const auto submap_unobservable=optimize_pose_graph(submap_flat);
+  require(submap_unobservable.accepted_loops==0 &&
+          submap_unobservable.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "unobservable corridor match rejected by graph");
+  auto submap_overconfident=submap_input;
+  submap_overconfident.loops[0].edge.sigma_x_m=.10;
+  const auto submap_bad_sigma=optimize_pose_graph(submap_overconfident);
+  require(submap_bad_sigma.accepted_loops==0 &&
+          submap_bad_sigma.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "submap evidence cannot use overly certain factors");
+  auto submap_independent=submap_input;
+  submap_independent.loops[0].edge.provenance.independent_of_initial_trajectory=true;
+  const auto submap_bad_provenance=optimize_pose_graph(submap_independent);
+  require(submap_bad_provenance.accepted_loops==0 &&
+          submap_bad_provenance.loop_decisions[0]==
+              LoopDecision::unverified_or_correlated_evidence,
+          "submap matcher cannot claim independent trajectory evidence");
+    auto global_input=submap_input;
+  global_input.loops[0].edge.provenance={
+      EvidenceClass::lidar_global_scan_to_submap_registration,
+      "global_submap_shape_v2",true,false};
+  global_input.loops[0].edge.sigma_x_m=.60;
+  global_input.loops[0].edge.sigma_y_m=.60;
+  global_input.loops[0].edge.sigma_yaw_rad=.30;
+  global_input.loops[0].overlap=.84;
+  global_input.loops[0].edge.from_to.translation.x()=1.5;
+  const auto global_accept=optimize_pose_graph(global_input);
+  require(global_accept.accepted_loops==1,
+          "corroborated global submap measurement may correct Ceres drift");
+  auto global_low_support=global_input;
+  global_low_support.loops[0].overlap=.68;
+  require(optimize_pose_graph(global_low_support).accepted_loops==0,
+          "global submap support needs stricter quality gate");
+  auto global_excessive=global_input;
+  global_excessive.loops[0].edge.from_to.translation.x()=10.;
+  require(optimize_pose_graph(global_excessive).accepted_loops==0,
+          "global submap correction still needs bounded graph innovation");
+  auto global_claims_truth=global_input;
+  global_claims_truth.loops[0].edge.provenance.independent_of_initial_trajectory=true;
+  require(optimize_pose_graph(global_claims_truth).accepted_loops==0,
+          "global LiDAR place recognition cannot claim independent truth");
   in.odometry[0].provenance.source=EvidenceClass::unverified;
   bool denied=false;try{(void)optimize_pose_graph(in);}catch(const std::invalid_argument&){denied=true;}
   require(denied,"unverified odometry cannot become a graph factor");

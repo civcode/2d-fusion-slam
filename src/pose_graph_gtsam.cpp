@@ -26,9 +26,18 @@ bool valid_sigma(const PoseEdge& e) {
          std::isfinite(e.sigma_yaw_rad) && e.sigma_yaw_rad >= 1e-6 && e.sigma_yaw_rad < 3.15;
 }
 bool verified(const FactorProvenance& p) {
-  return p.source != EvidenceClass::unverified && !p.source_id.empty() &&
-         p.source_id.size() <= 256 && p.clock_and_frame_verified &&
-         p.independent_of_initial_trajectory;
+  return (p.source == EvidenceClass::independently_measured ||
+          p.source == EvidenceClass::synthetic_exact) &&
+         !p.source_id.empty() && p.source_id.size() <= 256 &&
+         p.clock_and_frame_verified && p.independent_of_initial_trajectory;
+}
+bool correlated_frontend_factor(const PoseEdge& e) {
+  const auto& p=e.provenance;
+  return p.source == EvidenceClass::frontend_scanmatched_correlated &&
+         !p.source_id.empty() && p.source_id.size() <= 256 &&
+         p.clock_and_frame_verified && !p.independent_of_initial_trajectory &&
+         e.sigma_x_m >= .05 && e.sigma_y_m >= .05 &&
+         e.sigma_yaw_rad >= .04;
 }
 gtsam::Pose2 gpose(const Pose2& p) {
   return {p.translation.x(),p.translation.y(),p.yaw_rad};
@@ -74,8 +83,9 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
   for(std::size_t i=0;i<input.odometry.size();++i){
     const auto& e=input.odometry[i];
     valid_edge_shape(e,n);
-    if(e.from!=i || e.to!=i+1 || !verified(e.provenance))
-      throw std::invalid_argument("odometry edges must be consecutive and independently verified");
+    if(e.from!=i || e.to!=i+1 ||
+       !(verified(e.provenance)||correlated_frontend_factor(e)))
+      throw std::invalid_argument("sequential graph factors need verified independent or explicitly correlated-frontend provenance");
     odometry_sources.insert(e.provenance.source_id);
     graph.emplace_shared<gtsam::BetweenFactor<gtsam::Pose2>>(
         e.from,e.to,gpose(e.from_to),diagonal(e));
@@ -90,8 +100,47 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
        used.contains({e.from,e.to})){
       out.loop_decisions.push_back(LoopDecision::duplicate_or_nearby_nodes);continue;
     }
-    if (!verified(e.provenance) ||
-        (e.provenance.source == EvidenceClass::independently_measured &&
+    // Both LiDAR loop detector modes share raw LiDAR evidence with the
+    // frontend and seed registration with estimated poses. Neither is
+    // independent ground truth. Use distinct provenance and conservative
+    // gates; do not admit them as verified independent sequential factors.
+    const bool scan_loop=e.provenance.source==
+        EvidenceClass::lidar_scan_registration;
+    const bool submap_loop=e.provenance.source==
+        EvidenceClass::lidar_scan_to_submap_registration;
+    const bool global_submap_loop=e.provenance.source==
+        EvidenceClass::lidar_global_scan_to_submap_registration;
+    const bool lidar_loop=scan_loop||submap_loop||global_submap_loop;
+    const bool common_lidar_evidence=lidar_loop &&
+        !e.provenance.source_id.empty() &&
+        e.provenance.source_id.size()<=256 &&
+        e.provenance.clock_and_frame_verified &&
+        !e.provenance.independent_of_initial_trajectory &&
+        !odometry_sources.contains(e.provenance.source_id) &&
+        candidate.supported_hits>=80 && candidate.full_rank;
+    // The two modes have separate quality gates. The submap hit support
+    // fraction is NOT symmetric scan-to-scan overlap, so it must carry
+    // explicit provenance, stronger positional sigmas, and 2D observability
+    // verified by the submap matcher before factor construction.
+    const bool scan_verified=common_lidar_evidence && scan_loop &&
+        e.sigma_x_m>=.18 && e.sigma_y_m>=.18 &&
+        e.sigma_yaw_rad>=.12 && candidate.overlap>=.82;
+    const bool submap_verified=common_lidar_evidence && submap_loop &&
+        e.sigma_x_m>=.35 && e.sigma_y_m>=.35 &&
+        e.sigma_yaw_rad>=.20 && candidate.overlap>=.58 &&
+        candidate.registration_error_m<=.22;
+    // Global retrieval can correct substantial Ceres XY drift, but its
+    // factor needs strong current-scan support and conservative weights.
+    // A second adjacent historical submap must already have agreed; this
+    // is enforced by the caller, never treated as independent ground truth.
+    const bool global_verified=common_lidar_evidence && global_submap_loop &&
+        e.sigma_x_m>=.55 && e.sigma_y_m>=.55 &&
+        e.sigma_yaw_rad>=.28 && candidate.overlap>=.70 &&
+        candidate.registration_error_m<=.22;
+    if (!(scan_verified||submap_verified||global_verified||
+          verified(e.provenance)) ||
+        ((lidar_loop ||
+          e.provenance.source==EvidenceClass::independently_measured) &&
          odometry_sources.contains(e.provenance.source_id))) {
       out.loop_decisions.push_back(LoopDecision::unverified_or_correlated_evidence);continue;
     }
@@ -103,8 +152,12 @@ BatchGraphResult optimize_pose_graph(const BatchGraphInput& input,
     const auto predicted=slam::compose(slam::inverse(input.initial_map_from_base[e.from]),
                                         input.initial_map_from_base[e.to]);
     const auto discrepancy=slam::compose(slam::inverse(e.from_to),predicted);
-    if (discrepancy.translation.norm() > options.maximum_loop_residual_translation_m ||
-        std::abs(discrepancy.yaw_rad) > options.maximum_loop_residual_yaw_rad) {
+    const double translation_limit=global_submap_loop?4.6:
+        options.maximum_loop_residual_translation_m;
+    const double yaw_limit=global_submap_loop?.60:
+        options.maximum_loop_residual_yaw_rad;
+    if (discrepancy.translation.norm()>translation_limit ||
+        std::abs(discrepancy.yaw_rad)>yaw_limit) {
       out.loop_decisions.push_back(LoopDecision::inconsistent_with_initial_path);continue;
     }
     auto robust=gtsam::noiseModel::Robust::Create(

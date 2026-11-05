@@ -19,6 +19,9 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from review_artifacts import review_files
+
 FIELDS = (
     "scene", "trial", "frames", "process_wall_ms", "profiled",
     "input_rate_fps", "fusion_compute_ms", "effective_processing_fps",
@@ -115,7 +118,11 @@ def main() -> int:
             writer.writeheader()
             writer.writerows(rows)
         print(f"CSV: {args.csv}", file=sys.stderr)
+        review_files(args.csv.with_suffix(".review.json"), "fusion_profiling", [
+            ("profiling_scorecard_csv", args.csv, True),
+        ])
     else:
+        print("No artifact saved: pass --csv reports/<new-name>.csv to get a review file.", file=sys.stderr)
         writer = csv.DictWriter(sys.stdout, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows)

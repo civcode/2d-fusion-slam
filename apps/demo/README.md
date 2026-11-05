@@ -177,6 +177,47 @@ totals and map fingerprints, and verifies corrupted files, symlinks and
 writes fail closed. See [Fusion Replay protocol](../../docs/fusion-replay.md).
 
 
+### Browse the seven synthetic maps and their LiDAR / SLAM replays
+
+From the repository root, select an existing completed benchmark sweep
+as the demo's read-only run source (no reprocessing and no file copying):
+
+```sh
+FUSION_DEMO_RUNS_DIR="$PWD/benchmarks/fusion-beams-diverse-001" \
+  docker compose up --build demo
+```
+
+Open **http://127.0.0.1:8765/** and expand any synthetic scene:
+Apartment, Warehouse, Asymmetric warehouse, Office, Loft, Atrium or
+Industrial. Each run exposes its saved methods as occupancy-map options
+and includes **LiDAR replay** and **SLAM replay** links.
+
+In **http://127.0.0.1:8765/fusion**, the replay-mode selector offers:
+
+- **Raw LiDAR replay:** raw, *not* gyro/wheel-deskewed scan endpoints,
+  projected at the LiDAR-only **estimated** midpoint pose. This is a
+  visualization of sensor measurements, not oracle world coordinates.
+- **SLAM replay:** gyro/wheel-deskewed scan endpoints on the estimated
+  scan-matched trajectory, with wheel, fused, LiDAR-only and optional
+  graph comparison paths, replay timeline and post-run map overlays.
+
+An explicit deep link such as
+`/fusion?run=office-continuous-s01&view=lidar` selects that run and
+mode. Existing replay artifacts remain readable: legacy traces without
+`raw_points_laser` show available deskewed hit samples in the LiDAR
+view, labeled as legacy and projected on the scan-matched estimate.
+Regenerate the run with the current CLI to obtain genuine raw,
+non-deskewed LiDAR playback.
+
+To inspect beam-phase experiments, select
+`benchmarks/fusion-beams-diverse-phases-001` in
+`FUSION_DEMO_RUNS_DIR` instead. The demo expects the root directory
+to contain direct-child native fusion run folders; the original
+`apps/demo/fusion` location is still the default. The native HTTP
+server reads from a bounded, non-symlinked directory without write
+operations. The recorded `/replay` route remains separate because its
+FUSREPLAY1 CARMEN/FR079 format is not a synthetic FUSFUSREPLAY1 run.
+
 ## Fusion results in the Map Explorer and SLAM profiling
 
 The main / Map Explorer now lists the final authoritative occupancy
@@ -235,7 +276,7 @@ docker compose run --rm \
   -v "$PWD/apps/demo/maps:/output" \
   --entrypoint ./build-docker/slam_fr079_offline \
   test /input/fr079.log.gz /output/fr079-slam
-docker compose up -d demo
+docker compose up --build demo  # foreground; Ctrl+C stops
 ~~~
 
 Open / and select fr079-slam.slammap. Open /replay and select

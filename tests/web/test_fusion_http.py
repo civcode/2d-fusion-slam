@@ -7,6 +7,7 @@ against the native viewer, without starting any solver in the HTTP process.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -108,6 +109,10 @@ class FusionHTTP(unittest.TestCase):
             self.assertGreater(frame["hits"], 0)
             self.assertGreater(len(frame["points_laser"]), 0)
             self.assertLessEqual(len(frame["points_laser"]), frame["hits"])
+            self.assertIn("raw_points_laser", frame)
+            self.assertGreater(len(frame["raw_points_laser"]), 0)
+            self.assertLessEqual(len(frame["raw_points_laser"]), frame["hits"])
+            self.assertTrue(all(len(p) == 2 for p in frame["raw_points_laser"]))
             self.assertEqual(frame["matching"]["attempted"], i % 2 == 1)
             self.assertTrue(frame["mapping"]["fused_scan_matched_inserted"])
             if i % 2 == 1:
@@ -123,6 +128,120 @@ class FusionHTTP(unittest.TestCase):
         last = report["frames"] - 1
         self.assertEqual(self.get_json(base + f"/frame/{last}"),
                          replay["frames"][last])
+
+    def test_new_scene_replays_and_maps(self):
+        # Check historical scenes AND the two diverse_v2 additions. A stale
+        # viewer allowlist previously admitted these into run discovery but
+        # rejected GET /api/fusion/runs/<id> with HTTP 422, also silently
+        # omitting their maps from Map Explorer.
+        for scene in ("office", "warehouse_asymmetric",
+                      "apartment_explore", "workshop"):
+            run_id = "web_" + scene
+            folder = self.root / run_id
+            try:
+                generated = subprocess.run(
+                    [self.cli, scene, str(folder), "--match-stride", "4",
+                     "--match-offset", "1", "--lidar-only-bootstrap",
+                     "--lidar-only-predict-first"],
+                    capture_output=True, text=True, timeout=360)
+                self.assertEqual(generated.returncode, 0, generated.stderr)
+                base = "/api/fusion/runs/" + run_id
+                report = self.get_json(base)
+                poses = self.get_json(base + "/trajectories")
+                replay = self.get_json(base + "/replay")
+                self.assertEqual(report["scene"], "synthetic-" + scene + "-v1")
+                self.assertEqual(replay["scene"], report["scene"])
+                self.assertEqual(report["match_offset"], 1)
+                self.assertEqual(replay["match_offset"], 1)
+                self.assertEqual(len(replay["frames"]), report["frames"])
+                self.assertEqual(len(poses["paths"]["lidar_only"]), report["frames"])
+                self.assertTrue(all("raw_points_laser" in f
+                                    for f in replay["frames"]))
+                listing = self.get_json("/api/maps")["maps"]
+                self.assertTrue(any(item["id"] == "fusion@" + run_id + "@lidar_only"
+                                    and item["scene"] == report["scene"]
+                                    for item in listing))
+                metadata = self.get_json(base + "/maps/lidar_only")
+                self.assertEqual(metadata["source_id"], report["scene"])
+                self.assertEqual(metadata["fingerprint"],
+                                 str(report["results"]["lidar_only"]["map"]["map_fingerprint"]))
+                # Explorer and replay must resolve to the same verified map.
+                explorer = "/api/maps/" + quote(
+                    "fusion@" + run_id + "@lidar_only", safe="")
+                self.assertEqual(self.get_json(explorer), metadata)
+                with request.urlopen(self.base + base + "/maps/lidar_only/image.png") as img:
+                    self.assertEqual(img.read(8), b"\x89PNG\r\n\x1a\n")
+            finally:
+                if folder.exists():
+                    shutil.rmtree(folder)
+
+    def test_reject_corrupted_raw_scan_and_phase_mismatch(self):
+        base = "/api/fusion/runs/apartment_001"
+        path = self.run_dir / "fusion_replay.json"
+        before = path.read_bytes()
+        try:
+            trace = json.loads(before)
+            trace["frames"][0]["raw_points_laser"] = [[999999, 0]]
+            path.write_text(json.dumps(trace))
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + base + "/replay")
+            self.assertEqual(raised.exception.code, 422)
+            path.write_bytes(before)
+            trace = json.loads(before)
+            trace["frames"][0].pop("raw_points_laser")
+            path.write_text(json.dumps(trace))
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + base + "/replay")
+            self.assertEqual(raised.exception.code, 422)
+            path.write_bytes(before)
+            trace = json.loads(before)
+            trace["match_offset"] = 63
+            path.write_text(json.dumps(trace))
+            with self.assertRaises(error.HTTPError) as raised:
+                request.urlopen(self.base + base + "/replay")
+            self.assertEqual(raised.exception.code, 422)
+        finally:
+            path.write_bytes(before)
+        self.assertEqual(self.get_json(base + "/replay")["format"],
+                         "FUSFUSREPLAY1")
+        # Existing benchmark artifacts predate raw_points_laser. The
+        # validated native endpoint must still serve their deskewed replay.
+        try:
+            old = json.loads(before)
+            for frame in old["frames"]:
+                frame.pop("raw_points_laser", None)
+            path.write_text(json.dumps(old))
+            self.assertEqual(len(self.get_json(base + "/replay")["frames"]),
+                             old["frame_count"])
+        finally:
+            path.write_bytes(before)
+
+    def test_tuned_matching_cadence_replay_is_readable(self):
+        # The viewer must distinguish skipped odd-index matching queries
+        # from both training scans and matcher rejections.
+        tuned = self.root / "cadence_tuned"
+        try:
+            result = subprocess.run([
+                self.cli, "apartment", str(tuned),
+                "--match-every", "3", "--field-every", "5",
+                "--map-stride", "2", "--match-stride", "2"],
+                capture_output=True, text=True, timeout=180)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = self.get_json("/api/fusion/runs/cadence_tuned")
+            replay = self.get_json("/api/fusion/runs/cadence_tuned/replay")
+            self.assertEqual(report["match_every"], 3)
+            self.assertEqual(replay["match_every"], 3)
+            self.assertEqual(replay["field_every"], 5)
+            self.assertEqual(replay["map_stride"], 2)
+            self.assertEqual(replay["match_stride"], 2)
+            skipped = [f for f in replay["frames"]
+                       if f["matching"]["status"] == "skipped"]
+            self.assertEqual(len(skipped), report["heldout_skipped"])
+            self.assertTrue(all(f["index"] % 2 == 1 and
+                                not f["matching"]["attempted"] for f in skipped))
+        finally:
+            if tuned.exists():
+                shutil.rmtree(tuned)
 
     def test_map_fingerprint_png_assets_and_no_mutation(self):
         base = "/api/fusion/runs/apartment_001"

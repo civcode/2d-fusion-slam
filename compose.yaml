@@ -4,12 +4,14 @@ services:
       context: .
       target: demo
       args:
-        SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-2}
+        SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-28}
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:${SLAM_DEMO_PORT:-8765}:8765"
     volumes:
       - ./apps/demo/maps:/maps:ro
-      - ./apps/demo/fusion:/fusion:ro
+      # Point at a completed sweep to browse all its runs directly.
+      # No files are copied and the native server remains read-only.
+      - ${FUSION_DEMO_RUNS_DIR:-./apps/demo/fusion}:/fusion:ro
     init: true
     restart: "no"
 
@@ -20,9 +22,10 @@ services:
       context: .
       target: test
       args:
-        SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-2}
+        SLAM_DOCKER_JOBS: ${SLAM_DOCKER_JOBS:-28}
         SLAM_PROFILE_FUSION: ${SLAM_PROFILE_FUSION:-ON}
     environment:
-      CTEST_PARALLEL_LEVEL: ${SLAM_DOCKER_JOBS:-2}
+      # Build jobs and test concurrency are intentionally independent.
+      CTEST_PARALLEL_LEVEL: ${SLAM_CTEST_JOBS:-2}
     init: true
     restart: "no"

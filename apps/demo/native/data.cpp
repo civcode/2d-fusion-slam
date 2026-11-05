@@ -54,8 +54,37 @@ bool clean(std::string_view filename,std::string_view suffix,std::size_t max_bas
          c=='-'||c=='_'||c=='.'))return false;
   return true;
 }
-bool map_name(std::string_view n) {return clean(n,".slammap",181);}
-bool replay_name(std::string_view n) {return clean(n,".slamreplay.json",141);}
+// One-level, explicitly named run folders. The '@' is an API-only
+// separator: it never appears in a real file/directory name.
+bool run_folder(std::string_view n) {return clean(n,"",80);}
+bool namespaced_name(std::string_view n,std::string_view suffix,std::size_t limit) {
+  const auto sep=n.find('@');
+  if(sep==std::string_view::npos)return clean(n,suffix,limit);
+  return n.find('@',sep+1)==std::string_view::npos &&
+         run_folder(n.substr(0,sep)) && clean(n.substr(sep+1),suffix,limit);
+}
+bool map_name(std::string_view n) {
+  return namespaced_name(n,".slammap",181);
+}
+bool replay_name(std::string_view n) {
+  return namespaced_name(n,".slamreplay.json",141);
+}
+bool plain_directory(const std::filesystem::path& p) {
+  std::error_code ec;
+  return std::filesystem::is_directory(std::filesystem::symlink_status(p,ec));
+}
+// Must only be called after validating the virtual name. Parent must be
+// a real directory, not a symlink to some other filesystem subtree.
+std::filesystem::path viewer_file(const std::filesystem::path& root,
+                                  std::string_view name) {
+  const auto sep=name.find('@');
+  if(sep==std::string_view::npos)return root/std::string(name);
+  const auto folder=name.substr(0,sep);
+  need(run_folder(folder),"invalid run folder name");
+  const auto parent=root/std::string(folder);
+  need(plain_directory(parent),"missing or symlinked run folder");
+  return parent/std::string(name.substr(sep+1));
+}
 
 std::string read_safe(const std::filesystem::path& path,std::size_t limit) {
 #ifdef __unix__
@@ -96,9 +125,21 @@ bool safe_exists(const std::filesystem::path& p) {
 std::vector<std::string> names(const std::filesystem::path& root,
                                bool(*valid)(std::string_view)) {
   std::vector<std::string> list;
+  std::size_t inspected_folders=0;
   for(const auto& f:std::filesystem::directory_iterator(root)){
     const auto name=f.path().filename().string();
     if(valid(name)&&safe_exists(f.path()))list.push_back(name);
+    if(run_folder(name)&&plain_directory(f.path())){
+      if(++inspected_folders>128)
+        throw std::invalid_argument("too many viewer run folders");
+      for(const auto& nested:std::filesystem::directory_iterator(f.path())){
+        const auto leaf=nested.path().filename().string();
+        if(valid(leaf)&&safe_exists(nested.path()))
+          list.push_back(name+"@"+leaf);
+        if(list.size()>kMaxEntries)
+          throw std::invalid_argument("too many files in viewer directory");
+      }
+    }
     if(list.size()>kMaxEntries)throw std::invalid_argument("too many files in viewer directory");
   }
   std::sort(list.begin(),list.end());
@@ -389,13 +430,8 @@ ViewerData::ViewerData(std::filesystem::path maps,std::filesystem::path replays,
   need(std::filesystem::is_directory(maps_)&&std::filesystem::is_directory(replays_),
        "viewer map/replay directory must exist");
   if(example_if_empty && maps_==replays_){
-    bool any=false;
-    for(const auto& p:std::filesystem::directory_iterator(maps_)){
-      const auto n=p.path().filename().string();
-      if(n=="CURRENT"||n.ends_with(".slammap")||n.ends_with(".slamreplay.json")){
-        any=true;break;
-      }
-    }
+    const bool any=safe_exists(maps_/"CURRENT") ||
+      !names(maps_,map_name).empty() || !names(replays_,replay_name).empty();
     if(!any){synthetic_map_=sample_map();synthetic_replay_=sample_replay(*synthetic_map_->snapshot);}
   }
 }
@@ -403,7 +439,7 @@ mapping::MapBundle ViewerData::map(const std::string& name) const {
   need(map_name(name),"invalid map filename");
   if(synthetic_map_ && name==kExample)return *synthetic_map_;
 #ifdef __unix__
-  const auto file=maps_/name;
+  const auto file=viewer_file(maps_,name);
   struct stat st{};
   // lstat on each request means a swapped-in symlink cannot hit the cache.
   need(::lstat(file.c_str(),&st)==0 && S_ISREG(st.st_mode) && st.st_size>=0 &&
@@ -418,7 +454,7 @@ mapping::MapBundle ViewerData::map(const std::string& name) const {
   };
   if(map_cache_ && same(*map_cache_))return map_cache_->bundle;
 #endif
-  const auto bytes=read_safe(maps_/name,150*1024*1024);
+  const auto bytes=read_safe(viewer_file(maps_,name),150*1024*1024);
   std::istringstream stream(bytes,std::ios::binary);
   auto bundle=mapping::read_map_bundle(stream);
 #ifdef __unix__
@@ -509,7 +545,10 @@ Json ViewerData::list_maps() const {
       if(j.kind==Json::Kind::object&&j.at("file").str()==name)role=pointer;
     }
     Json item=Json::dict();
-    item.object={{"id",string(name)},{"name",string(name)},{"role",string(role)}};
+    const auto sep=name.find('@');
+    const auto label=sep==std::string::npos?name:
+        name.substr(0,sep)+" / "+name.substr(sep+1);
+    item.object={{"id",string(name)},{"name",string(label)},{"role",string(role)}};
     maps.array.push_back(std::move(item));
   }
   Json out=Json::dict();out.object={{"maps",maps},{"registry",registry_value},
@@ -554,15 +593,15 @@ Json ViewerData::list_replays() const {
 ViewerData::ReplaySession ViewerData::replay(const std::string& name) const {
   need(replay_name(name),"invalid replay filename");
   const bool synthetic=synthetic_replay_&&name==kReplayExample;
-  const std::string bytes=synthetic?"":read_safe(replays_/name,32*1024*1024);
+  const std::string bytes=synthetic?"":read_safe(viewer_file(replays_,name),32*1024*1024);
   Json session=synthetic?*synthetic_replay_:parse_json(bytes);
   validate_replay(session);
   Json info=no_ceres();
   std::map<std::size_t,Json> accepted_rows;
   if(!synthetic && std::filesystem::exists(std::filesystem::symlink_status(
-        replays_/(name+".ceres.json")))) {
+        viewer_file(replays_,name+".ceres.json")))) {
     try{
-      const auto side_text=read_safe(replays_/(name+".ceres.json"),4*1024*1024);
+      const auto side_text=read_safe(viewer_file(replays_,name+".ceres.json"),4*1024*1024);
       const Json side=parse_json(side_text);
       // The existing Ceres file is visualization ONLY. Never assume its
       // producer has verified registration or independent reference truth.

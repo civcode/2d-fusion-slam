@@ -52,8 +52,7 @@ std::string source_text(const std::string& path) {
   }
   return result;
 }
-std::size_t posint(const char* arg,std::size_t max) {
-  std::string_view v(arg);
+std::size_t posint(std::string_view v,std::size_t max) {
   if(v.empty()||v.front()=='0' || v.find_first_not_of("0123456789")!=v.npos)
     throw std::invalid_argument("strides must be positive decimal integers");
   const auto n=std::stoull(std::string(v));

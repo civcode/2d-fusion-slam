@@ -43,7 +43,74 @@ LD19 frame/CRC/rollover tests use **synthetically constructed packets**, not ver
 - **slam_fr079_map_export** (zlib required) builds a map from the training-only FR079 split and writes a verified .slammap bundle plus visualization-only .pgm and .yaml files. The original logged-laser map frame is explicitly **unverified**, not calibrated ground truth.
 - See [map bundle format and usage](docs/map-bundle-v1.md) and [FR079 reproduction](datasets/fr079/README.md).
 
+## Python virtual environment and local analysis
+
+Python analysis scripts should run in a project-local virtual environment.
+From the repository root:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+On Debian/Ubuntu, if Python reports that `ensurepip` is unavailable, install
+the matching `python3-venv` OS package first. The pip upgrade is optional and
+requires package-index access; **`tools/fusion_mapping_ablation.py` uses only
+the Python standard library**, so it needs no `requirements.txt` or third-party
+pip installation. The `.venv/` directory is ignored by Git. When finished,
+run `deactivate`.
+
+To analyze an existing completed synthetic warehouse mapping experiment:
+
+```sh
+mkdir -p reports
+python tools/fusion_mapping_ablation.py \
+  --run apps/demo/fusion/warehouse_asymmetric-map-ablation-001 \
+  --csv reports/warehouse_asymmetric_mapping_ablation_summary.csv
+```
+
+The Docker test container often writes generated fusion run directories
+as `root` on the host. Treat those run folders as **read-only inputs** and
+save analysis CSVs to a host-user-owned directory such as `reports/`, not
+inside `apps/demo/fusion/<run>/`, to avoid `PermissionError`. The CSV is
+an optional output; the summary prints to the terminal even without it.
+See [fixed-graph mapping ablation](docs/fusion-mapping-ablation.md) for
+the full run and scoring protocol.
+
+The same documentation now includes an **opt-in seven-scene 3×3 mapping
+evidence sweep**: `tools/fusion_mapping_sweep.py run` uses the same
+LiDAR-loop/Ceres configuration for apartment, warehouse, asymmetric
+warehouse, office, loft, atrium and industrial scenes. Each scene's
+fixed graph poses are tested with all nine combinations of hit
+log-odds **+0.85/+1.00/+1.20** and free log-odds
+**−0.40/−0.30/−0.20**. The `summarize` command writes 63 full-scene
+rows, 189 early/late observation-footprint-masked rows and a
+**nine-setting cross-scene IoU ranking** with explicit worst-scene
+precision penalties (`--ranking-csv`). Old four-setting reports remain
+readable. The explicit `--suite diverse_v2` replaces Office with native
+Workshop and uses `apartment_explore` for a multi-room Apartment route,
+while `legacy_v1` (the default) preserves old IDs and results. See
+the trajectory-diverse suite section in the mapping ablation guide.
+No production mapping defaults are changed, no runs are
+overwritten, and no GitHub Actions are used.
+
+Run the sweep with a **new prefix** (`mapping-grid-001`) to avoid
+reusing the earlier four-setting experiment; see
+[the full Docker, venv and analysis commands](docs/fusion-mapping-ablation.md#seven-scene-generalization-sweep-same-detector-fixed-poses-per-scene).
+
 ## Build and test
+
+**Docker builds default to 28 parallel CMake/Ninja compilation jobs** in
+both `docker compose build test demo` and direct `docker build` targets.
+This is stored in `compose.yaml` and both Dockerfile build stages, so no
+shell export is required for future builds. To limit compilation parallelism
+on a smaller machine, use `SLAM_DOCKER_JOBS=8 docker compose build test`.
+
+Build concurrency is separate from CTest execution: Compose defaults
+to two concurrent tests, controlled by `SLAM_CTEST_JOBS`.
+The `Justfile` independently defaults to `BUILD_JOBS=28` and
+`TEST_JOBS=16`. See [Docker development](docs/docker-development.md).
 
 Install CMake 3.25+, C++20 compiler, Eigen3 (3.3+), Ninja (recommended). Network-free smoke tests:
 
@@ -104,6 +171,16 @@ when available, or FetchContent pinned to `v3.3.1`. Docker keeps its
 offline CMake build by installing Ubuntu's `libcxxopts-dev`; all CLIs
 support `--help` and reject unknown flags. See
 [CLI migration, options and local tests](docs/native-cli-cxxopts.md).
+
+## Experimental FR079 matcher ablation and matching-beam benchmark
+
+The opt-in [factorial Ceres and beam-count benchmark](docs/fr079-matcher-beam-ablation.md)
+compares legacy, finite residuals with identical seed-supported cohorts,
+all-beam residuals, and two acceptance gates. It varies only matching-beam
+stride/phase while keeping map insertion and other parameters fixed, and
+records first-divergence and per-frame candidate evidence. It does **not**
+change default matching behavior or assert that more beams must always
+improve map accuracy.
 
 ## Experimental finite-cost Ceres matching
 
@@ -191,7 +268,7 @@ docker compose run --rm \
   /input/fr079.log.gz /output/fr079-slam
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker -R fr079_offline_slam --output-on-failure
-docker compose up -d demo
+docker compose up --build demo  # foreground; Ctrl+C stops
 ~~~
 
 See the full [FR079 offline SLAM protocol](docs/fr079-offline-slam.md)
@@ -223,7 +300,7 @@ docker compose build demo test
 docker compose run --rm --entrypoint ctest test \
   --test-dir build-docker -R 'map_selector_browser|fusion_replay_http|native_web_api' \
   --output-on-failure
-docker compose up -d --force-recreate demo
+docker compose up --build --force-recreate demo  # Ctrl+C stops
 ~~~
 
 The scene/method browser test is registered when Node is installed;
@@ -297,6 +374,32 @@ New CTest **fusion_replay_http** runs the real native pipeline and checks
 run discovery, replay/timeline parity, map fingerprints, corruption and
 symlink refusal. Full workstation verification remains required;
 see [Fusion Replay protocol](docs/fusion-replay.md).
+
+## Tunable synthetic fusion matching
+
+The `slam_offline_fusion` command supports `--match-every`,
+`--field-every`, `--map-stride`, `--match-stride`,
+`--distance-truncation` and `--continuous-cost` in both the apartment
+and warehouse scenes. These options apply to the held-out and LiDAR-only
+matching paths, and map insertion across all generated map variants.
+The [synthetic fusion beam sweep](docs/fusion-matching-options.md) uses
+independently simulated poses and walls for scoring and keeps matching-beam
+selection separate from map-beam insertion. The opt-in
+`--lidar-only-bootstrap` flag adds gated LiDAR-to-LiDAR scan registration
+when the incremental map cannot yet supply sufficient strict EDT support,
+with strict Ceres refinement when observed geometry becomes usable.
+For the LiDAR-predicted Ceres experiment, add
+`--lidar-only-predict-first` together with `--lidar-only-bootstrap`;
+this mode seeds EDT/Ceres with a LiDAR-derived relative pose and rejects
+inconsistent Ceres corrections rather than optimizing from a stale pose.
+The default remains unchanged; any bootstrap gain must be validated
+against independent synthetic trajectory and map scores.
+For robustness beyond the two original scenes, the
+[seven-map/beam-phase generalization protocol](docs/fusion-matching-options.md#generalization-suite-varied-maps-routes-and-beam-phases)
+adds five asymmetric or non-repetitive synthetic geometries, matched
+warehouse/asymmetric-warehouse motion and multiple subsampling phases.
+It explicitly reports regressions across maps rather than assuming
+that more beams must always reduce nonlinear SLAM error.
 
 ## Moving-scan offline gyro/wheel SLAM experiment
 
@@ -486,6 +589,10 @@ On Ubuntu 24.04 it installs Eigen3, Ceres 2.2.0 and zlib, uses the pinned Catch2
 - [Offline dependency bundle, restore and Release setup](docs/dependency-cache.md)
 - [Docker build/test using Ubuntu APT packages](docs/docker-development.md)
 - [Offline GTSAM 4.3 pose-graph integration](docs/offline-pose-graph.md)
+
+- [FR079 continuous-cost Ceres + real LiDAR loop-closure GTSAM A/B experiment](docs/fr079-loop-closure-experiment.md)
+- [FR079 reference benchmark: Ceres vs Ceres-preserving GTSAM, compared with published scan-matched estimate](docs/fr079-reference-benchmark.md)
+- [Experiment result directories, Docker host paths, and ChatGPT review manifests](docs/experiment-artifacts.md)
 - [Offline map candidate rebuilding, comparison and rollback](docs/offline-map-generation.md)
 - [Persistent map-generation registry and recovery](docs/map-generation-registry.md)
 - [Offline map Web UI: launch, Docker and API](docs/web-ui.md)

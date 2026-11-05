@@ -1,4 +1,5 @@
 #include <cxxopts.hpp>
+#include "slam/cli/review_artifacts.hpp"
 #include "slam/evaluation/map_accuracy.hpp"
 #include "slam/fixtures/synthetic.hpp"
 #include "slam/fusion/gyro_wheel.hpp"
@@ -6,11 +7,14 @@
 #include "slam/graph/pose_graph.hpp"
 #include "slam/mapping/map_bundle.hpp"
 #include "slam/matching/geometry.hpp"
+#include "slam/matching/scan_to_scan.hpp"
 #include "slam/motion/trajectory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +25,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -32,6 +37,30 @@ constexpr slam::TimeNs kTickNs=25'000'000LL;
 constexpr slam::TimeNs kScanNs=300'000'000LL;
 constexpr slam::TimeNs kInitialNs=1'000'000'000LL;
 constexpr double kPi=std::numbers::pi;
+struct FusionMatchOptions {
+  std::size_t match_every{1};     // every eligible held-out / LiDAR-only query
+  std::size_t field_every{1};     // incremental LiDAR-only EDT refresh
+  std::size_t map_stride{1};     // occupancy insertion in every map
+  std::size_t match_stride{1};   // every Nth valid deskewed/raw hit
+  std::size_t match_offset{0};   // start offset modulo stride (0 preserves baseline)
+  double distance_truncation_m{0.7};
+  bool continuous_cost{};
+  // Read-only bounded diagnostic around the stalled LiDAR-only seed.
+  bool lidar_only_support_probe{};
+  bool lidar_only_bootstrap{};
+  // Alternate A/B path: LiDAR relative motion predicts pose before EDT.
+  bool lidar_only_predict_first{};
+  bool lidar_loop_closure{}; // opt-in correlated LiDAR closure for fused graph
+  bool mapping_ablation{}; // separate fixed-graph mapping experiment
+};
+std::size_t posint(std::string_view value,std::size_t max) {
+  if(value.empty()||value.front()=='0'||
+     value.find_first_not_of("0123456789")!=std::string_view::npos)
+    throw std::invalid_argument("option must be a positive decimal integer");
+  const auto number=std::stoull(std::string(value));
+  if(number<1||number>max)throw std::invalid_argument("option exceeds allowed limit");
+  return static_cast<std::size_t>(number);
+}
 const Pose2 kBaseFromLaser{{.12,.01},.02};
 
 // Truth is used in the synthetic sensor GENERATOR and in independent scoring,
@@ -57,40 +86,227 @@ struct Motion {
   Pose2 pose;
   double forward{}, yaw_rate{};
 };
-Motion at_time(bool warehouse,double seconds_after_start) {
+struct RouteConfig {
+  double cx{},cy{},rx{},ry{},period{};
+  std::size_t scans{};
+  bool large{};
+  int spline{}; // 0: historical ellipse; 1: multiroom apartment; 2: workshop
+};
+// The original two routes remain bit-for-bit unchanged. New routes provide
+// different speeds, curvature, observed spaces, and trajectory lengths; the
+// corresponding exact poses never enter any matcher, only the simulator and
+// final independent scoring.
+RouteConfig route_config(const std::string& name) {
+  if(name=="apartment")return {2.5,3.0,1.35,1.35,20.0,130,false};
+  if(name=="warehouse")return {15.0,10.0,14.0,9.0,56.0,195,true};
+  if(name=="office")return {3.1,3.0,1.6,1.0,24.0,150,false};
+  if(name=="loft")return {7.5,6.0,3.5,2.5,34.0,168,false};
+  if(name=="atrium")return {15.0,10.0,10.6,6.4,60.0,200,true};
+  if(name=="industrial")return {15.0,10.0,13.2,8.2,57.0,195,true};
+  if(name=="warehouse_asymmetric")return {15.0,10.0,14.0,9.0,56.0,195,true};
+  // Versioned routes: preserve the original apartment/office fixtures verbatim.
+  if(name=="apartment_explore")return {0,0,0,0,84.0,360,false,1};
+  if(name=="workshop")return {0,0,0,0,63.0,280,false,2};
+  throw std::invalid_argument("unknown fusion synthetic scene: "+name);
+}
+
+struct SplineSample {
+  Eigen::Vector2d position=Eigen::Vector2d::Zero();
+  Eigen::Vector2d tangent=Eigen::Vector2d::Zero();
+  Eigen::Vector2d acceleration=Eigen::Vector2d::Zero();
+};
+struct ClosedSpline {
+  std::vector<Eigen::Vector2d> knots;
+  std::vector<double> distance; // cumulative, uniform 1/100 knot steps
+  double length{};
+};
+constexpr int kSplineStepsPerKnot=100;
+
+// Periodic cubic B-spline has continuous position, tangent and curvature,
+// including at the repeated start/end. Its evaluated points, not raw
+// control knots, are the collision-checked robot path.
+SplineSample spline_at(const std::vector<Eigen::Vector2d>& p,double phase) {
+  const auto n=p.size();
+  const double floor_phase=std::floor(phase);
+  const auto i=static_cast<std::size_t>(floor_phase)%n;
+  const double t=phase-floor_phase, t2=t*t,t3=t2*t;
+  const std::array<double,4> b{
+      (1-3*t+3*t2-t3)/6,
+      (4-6*t2+3*t3)/6,
+      (1+3*t+3*t2-3*t3)/6,
+      t3/6};
+  const std::array<double,4> d{
+      -.5*(1-t)*(1-t), 1.5*t2-2*t,
+      -1.5*t2+t+.5, .5*t2};
+  const std::array<double,4> dd{
+      1-t, 3*t-2, 1-3*t, t};
+  SplineSample out;
+  for(std::size_t j=0;j<4;++j) {
+    const auto& point=p[(i+j+n-1)%n];
+    out.position+=b[j]*point;
+    out.tangent+=d[j]*point;
+    out.acceleration+=dd[j]*point;
+  }
+  return out;
+}
+ClosedSpline make_spline(std::vector<Eigen::Vector2d> knots) {
+  if(knots.size()<4)throw std::invalid_argument("not enough spline knots");
+  ClosedSpline result{std::move(knots),{0.0},0.0};
+  auto previous=spline_at(result.knots,0.0).position;
+  const auto intervals=result.knots.size()*kSplineStepsPerKnot;
+  for(std::size_t k=1;k<=intervals;++k) {
+    const double phase=double(k)/kSplineStepsPerKnot;
+    const auto current=spline_at(result.knots,phase).position;
+    result.length+=(current-previous).norm();
+    result.distance.push_back(result.length);
+    previous=current;
+  }
+  if(!std::isfinite(result.length)||result.length<=1.)
+    throw std::invalid_argument("degenerate synthetic route");
+  return result;
+}
+const ClosedSpline& apartment_explore_path() {
+  static const auto path=make_spline({
+      {3.0,2.2},{4.0,3.4},{3.8,4.5},{3.7,6.1},{3.6,7.5},
+      {2.9,8.6},{1.5,8.8},{1.1,10.0},{2.0,10.9},{3.8,10.8},
+      {4.25,9.3},{4.0,8.2},{3.5,7.4},{3.1,6.0},
+      {3.9,4.75},{5.0,4.75},{6.3,4.6},{8.3,5.4},{9.0,6.6},
+      {9.4,7.7},{10.3,7.75},{11.7,8.1},{12.6,9.7},{13.9,9.2},
+      {13.9,7.5},{12.6,5.5},{11.0,6.8},{10.0,7.75},
+      {8.9,8.0},{7.5,7.0},{6.3,5.4},{5.0,4.7},
+      {3.7,4.9},{2.0,5.2},{1.0,4.3},{1.2,2.9},{2.1,1.9}});
+  return path;
+}
+const ClosedSpline& workshop_path() {
+  // Adapted from apps/demo/web/replay.py; smoothed and resampled with
+  // analytic derivatives rather than replaying scan-level exact poses.
+  static const auto path=make_spline({
+      {2.5,1.3},{5.3,1.2},{8.4,1.35},{8.6,2.6},
+      {8.45,5.7},{9.6,5.95},{9.5,7.6},{8.2,7.8},
+      {6.5,7.65},{6.45,5.9},{4.5,5.75},{2.5,5.65},
+      {1.1,4.9},{1.2,2.7}});
+  return path;
+}
+Motion spline_motion(const ClosedSpline& spline,double active,
+                     double period,bool moving) {
+  const double travel=std::fmod(active,period)/period*spline.length;
+  const auto upper=std::lower_bound(spline.distance.begin(),
+                                    spline.distance.end(),travel);
+  const auto idx=static_cast<std::size_t>(upper-spline.distance.begin());
+  double phase=0.0;
+  if(idx>0) {
+    const double low=spline.distance[idx-1],high=spline.distance[idx];
+    const double alpha=(travel-low)/(high-low);
+    phase=(double(idx-1)+alpha)/kSplineStepsPerKnot;
+  }
+  const auto sample=spline_at(spline.knots,phase);
+  const double tangent_norm=sample.tangent.norm();
+  if(tangent_norm<1e-6)throw std::invalid_argument("spline tangent too small");
+  const double yaw=std::atan2(sample.tangent.y(),sample.tangent.x());
+  const double speed=spline.length/period;
+  const double cross=sample.tangent.x()*sample.acceleration.y()-
+                     sample.tangent.y()*sample.acceleration.x();
+  const double rate=speed*cross/(tangent_norm*tangent_norm*tangent_norm);
+  return {{sample.position,yaw},moving?speed:0.0,moving?rate:0.0};
+}
+Motion at_time(const RouteConfig& route,double seconds_after_start) {
   const double active=std::max(0.0,seconds_after_start-.30);
-  const double period=warehouse?56.0:20.0;
-  // Keep the warehouse ellipse outside the shelf solids (y=4..16).
-  // The old 13x8 m radii cut through the outer shelves near the corners.
-  const double rx=warehouse?14.0:1.35,ry=warehouse?9.0:1.35;
-  const double cx=warehouse?15.0:2.5,cy=warehouse?10.0:3.0;
-  const double w=2*kPi/period,phase=w*active;
-  const double s=std::sin(phase),c=std::cos(phase);
-  const double length=std::hypot(rx*s,ry*c);
+  if(route.spline) {
+    const auto& path=route.spline==1?apartment_explore_path():workshop_path();
+    return spline_motion(path,active,route.period,seconds_after_start>=.30);
+  }
+  const double w=2*kPi/route.period,phase=w*active;
+  const double sn=std::sin(phase),cs=std::cos(phase);
+  const double length=std::hypot(route.rx*sn,route.ry*cs);
   Motion m;
-  m.pose={{cx+rx*c,cy+ry*s},std::atan2(ry*c,-rx*s)};
+  m.pose={{route.cx+route.rx*cs,route.cy+route.ry*sn},
+          std::atan2(route.ry*cs,-route.rx*sn)};
   m.forward=seconds_after_start>=.30?w*length:0.0;
   m.yaw_rate=seconds_after_start>=.30?
-    w*rx*ry/(rx*rx*s*s+ry*ry*c*c):0.0;
+    w*route.rx*route.ry/(route.rx*route.rx*sn*sn+
+                         route.ry*route.ry*cs*cs):0.0;
   return m;
 }
+double distance_to_wall(Eigen::Vector2d p,
+                        const slam::fixtures::Segment& wall) {
+  const Eigen::Vector2d direction=wall.end-wall.start;
+  const double denom=direction.squaredNorm();
+  if(denom<=1e-12)return (p-wall.start).norm();
+  const double u=std::clamp((p-wall.start).dot(direction)/denom,0.0,1.0);
+  return (p-wall.start-u*direction).norm();
+}
+void validate_generated_route(const slam::fixtures::Scene& scene,
+                              const RouteConfig& route) {
+  // Generator-only independent safety check: reject invented trajectories
+  // crossing walls or putting the laser origin into simulated obstacles.
+  const double total_time=.6+.3*double(route.scans-1);
+  const std::size_t steps=std::size_t(std::ceil(total_time/.02));
+  std::array<bool,3> apartment_doors{};
+  std::array<bool,4> coverage{};
+  Pose2 previous{};
+  bool has_previous=false;
+  auto crossed=[](const Eigen::Vector2d& a,const Eigen::Vector2d& b,
+                  int axis,double line,double minimum,double maximum) {
+    const double start=a[axis],end=b[axis];
+    if((start-line)*(end-line)>=0.0 || std::abs(end-start)<1e-12)
+      return false;
+    const double t=(line-start)/(end-start);
+    const double other=a[1-axis]+t*(b[1-axis]-a[1-axis]);
+    return other>minimum+.12 && other<maximum-.12;
+  };
+  for(std::size_t i=0;i<=steps;++i) {
+    const auto motion=at_time(route,total_time*double(i)/double(steps));
+    const auto pose=motion.pose;
+    if(route.spline &&
+       (motion.forward>.85 || std::abs(motion.yaw_rate)>1.25 ||
+        !std::isfinite(motion.yaw_rate)))
+      throw std::invalid_argument("synthetic spline exceeds motion limits");
+    if(route.spline==1) {
+      const auto& p=pose.translation;
+      coverage[0]|=p.x()<4.7 && p.y()<6.0;
+      coverage[1]|=p.x()<4.7 && p.y()>8.0;
+      coverage[2]|=p.x()>6.0 && p.x()<9.0;
+      coverage[3]|=p.x()>11.0;
+      if(has_previous) {
+        const auto& a=previous.translation;
+        apartment_doors[0]|=crossed(a,p,0,5.0,4.0,5.5);
+        apartment_doors[1]|=crossed(a,p,0,10.0,7.0,8.5);
+        apartment_doors[2]|=crossed(a,p,1,7.0,2.5,4.0);
+      }
+    }
+    const auto laser=slam::compose(pose,kBaseFromLaser);
+    for(const auto& wall:scene.walls)
+      if(distance_to_wall(pose.translation,wall)<.20||
+         distance_to_wall(laser.translation,wall)<.08)
+        throw std::invalid_argument(
+            "synthetic route intersects a scene wall: "+scene.id);
+    previous=pose;
+    has_previous=true;
+  }
+  if(route.spline==1 &&
+     (!std::all_of(apartment_doors.begin(),apartment_doors.end(),
+                   [](bool value){return value;}) ||
+      !std::all_of(coverage.begin(),coverage.end(),
+                   [](bool value){return value;})))
+    throw std::invalid_argument("multi-room apartment route misses required rooms or doors");
+}
 Simulation generate(const std::string& label) {
-  if(label!="apartment"&&label!="warehouse")
-    throw std::invalid_argument("expected apartment or warehouse");
+  const auto route=route_config(label);
   Simulation d;
-  d.warehouse=label=="warehouse";
-  d.scene=d.warehouse?slam::fixtures::warehouse():slam::fixtures::apartment();
-  d.grid.width=d.warehouse?621:321;
-  d.grid.height=d.warehouse?421:261;
+  d.warehouse=route.large;
+  d.scene=slam::fixtures::named_scene(label);
+  d.grid.width=route.large?621:321;
+  d.grid.height=route.large?421:261;
   d.grid.resolution_m=.05;
   d.grid.map_from_grid={{-.5,-.5},0};
-  d.initial_anchor=at_time(d.warehouse,0).pose;
-  const std::size_t scans=d.warehouse?195:130;
+  d.initial_anchor=at_time(route,0).pose;
+  validate_generated_route(d.scene,route);
+  const std::size_t scans=route.scans;
   const std::size_t ticks=12*(scans+4)+32;
   d.sensors.ticks.reserve(ticks);
   for(std::size_t i=0;i<ticks;++i) {
     const double t=double(i)*.025;
-    const Motion exact=at_time(d.warehouse,t);
+    const Motion exact=at_time(route,t);
     slam::fusion::SensorTick sample;
     sample.time={kInitialNs+static_cast<slam::TimeNs>(i)*kTickNs,101,1};
     sample.gyro_valid=true;sample.wheel_valid=true;
@@ -109,7 +325,7 @@ Simulation generate(const std::string& label) {
     const auto ns=kInitialNs+600'000'000LL+
       static_cast<slam::TimeNs>(i)*kScanNs;
     const double seconds_after_start=double(ns-kInitialNs)*1e-9;
-    const Motion exact=at_time(d.warehouse,seconds_after_start);
+    const Motion exact=at_time(route,seconds_after_start);
     const Timestamp stamp{ns,101,1};
     const auto simulated=slam::fixtures::simulate_scan(
       d.scene,exact.pose,{exact.forward,0,exact.yaw_rate},
@@ -219,12 +435,12 @@ Prepared prepare(const Observations& obs,Pose2 initial,
   return p;
 }
 void insert(slam::mapping::OccupancyGrid& grid,Pose2 base,
-            const std::vector<Eigen::Vector2d>& hits) {
+            const std::vector<Eigen::Vector2d>& hits,std::size_t map_stride) {
   const auto laser=slam::compose(base,kBaseFromLaser);
   std::vector<slam::mapping::WorldRay> rays;
   rays.reserve(hits.size());
-  for(const auto& pt:hits)
-    rays.push_back({laser.translation,slam::transform(laser,pt),
+  for(std::size_t i=0;i<hits.size();i+=map_stride)
+    rays.push_back({laser.translation,slam::transform(laser,hits[i]),
                     slam::sensors::ReturnKind::hit});
   (void)grid.integrate_rays(rays);
 }
@@ -232,15 +448,17 @@ slam::mapping::MapBundle make_map(const Simulation& sim,
                                   const std::vector<Pose2>& poses,
                                   const Points& scans,
                                   const Mask& use,
-                                  slam::fusion::PipelineProfiler* profiler=nullptr) {
+                                  const FusionMatchOptions& options,
+                                  slam::fusion::PipelineProfiler* profiler=nullptr,
+                                  const slam::mapping::GridConfig* grid_override=nullptr) {
   if(poses.size()!=scans.size()||poses.size()!=use.size())
     throw std::invalid_argument("map pose/ray size mismatch");
-  slam::mapping::OccupancyGrid grid(sim.grid);
+  slam::mapping::OccupancyGrid grid(grid_override?*grid_override:sim.grid);
   for(std::size_t i=0;i<poses.size();++i)if(use[i]) {
     if(profiler) {
       slam::fusion::PipelineProfiler::Scope sample(*profiler,"fused_map_insert",i,true);
-      insert(grid,poses[i],scans[i]);
-    } else insert(grid,poses[i],scans[i]);
+      insert(grid,poses[i],scans[i],options.map_stride);
+    } else insert(grid,poses[i],scans[i],options.map_stride);
   }
   return {slam::mapping::MapSnapshot::capture(grid),
     {"map",sim.scene.id,"synthetic_estimated",true}};
@@ -250,7 +468,8 @@ struct Matched {
   std::vector<Pose2> poses;
   std::vector<slam::matching::MatchResult> outcomes;
   Mask accepted_mask; // passed *all* source/rank/innovation gates
-  std::size_t attempted{},accepted{},rejected{};
+  std::size_t attempted{},accepted{},rejected{},skipped{};
+  std::size_t matching_input_hits_total{};
   std::string backend;
   std::map<std::string,std::size_t> rejections;
 };
@@ -275,9 +494,20 @@ void write_rejections(std::ostream& out,const char* name,
   }
   out<<"},";
 }
+std::vector<Eigen::Vector2d> sample_matching_hits(
+    const std::vector<Eigen::Vector2d>& points,std::size_t stride,
+    std::size_t offset) {
+  std::vector<Eigen::Vector2d> sampled;
+  sampled.reserve((points.size()+stride-1)/stride);
+  // Offset is measured among valid hits, not original raw angular bins.
+  for(std::size_t i=offset%stride;i<points.size();i+=stride)
+    sampled.push_back(points[i]);
+  return sampled;
+}
 slam::matching::MatchResult match(
     std::shared_ptr<const slam::mapping::DistanceField> field,
-    const std::vector<Eigen::Vector2d>& points,Pose2 seed) {
+    const std::vector<Eigen::Vector2d>& points,Pose2 seed,
+    const FusionMatchOptions& options) {
   slam::matching::MatchSettings settings;
   settings.min_supported_hits=18;
   settings.minimum_overlap=.45;
@@ -285,8 +515,12 @@ slam::matching::MatchResult match(
   settings.maximum_step_translation_m=.12;
   settings.maximum_step_yaw_rad=.075;
 #ifdef SLAM_FUSION_WITH_CERES
+  if(options.continuous_cost)
+    return slam::matching::match_ceres_continuous(field,points,seed,settings);
   return slam::matching::match_ceres(field,points,seed,settings);
 #else
+  if(options.continuous_cost)
+    throw std::invalid_argument("--continuous-cost requires a Ceres-enabled fusion build");
   return slam::matching::match_reference(field,points,seed,settings);
 #endif
 }
@@ -302,19 +536,21 @@ bool qualified(const slam::matching::MatchResult& m,
     std::abs(slam::wrap_yaw(m.map_from_laser.yaw_rad-seed.yaw_rad))<=.16;
 }
 Matched match_heldout(const Simulation& sim,const Prepared& p,
-                      slam::fusion::PipelineProfiler& profiler) {
+                      slam::fusion::PipelineProfiler& profiler,
+                      const FusionMatchOptions& options) {
   Mask even(p.gyro_wheel.size(),false);
   for(std::size_t i=0;i<even.size();i+=2)even[i]=true;
   const auto prepared=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"training_map_build");
-    const auto frozen=make_map(sim,p.gyro_wheel,p.gyro_deskewed,even);
-    return std::pair{frozen,slam::mapping::DistanceField::build(frozen.snapshot,.7)};
+    const auto frozen=make_map(sim,p.gyro_wheel,p.gyro_deskewed,even,options);
+    return std::pair{frozen,slam::mapping::DistanceField::build(
+        frozen.snapshot,options.distance_truncation_m)};
   }();
   const auto& frozen=prepared.first;
   const auto& field=prepared.second;
   Matched result;
 #ifdef SLAM_FUSION_WITH_CERES
-  result.backend="ceres";
+  result.backend=options.continuous_cost?"ceres_continuous_cost":"ceres";
 #else
   result.backend="geometry_reference_fallback";
 #endif
@@ -322,9 +558,13 @@ Matched match_heldout(const Simulation& sim,const Prepared& p,
   result.outcomes.resize(p.gyro_wheel.size());
   result.accepted_mask.assign(p.gyro_wheel.size(),false);
   for(std::size_t i=1;i<result.poses.size();i+=2) {
+    if(((i-1)/2)%options.match_every!=0){++result.skipped;continue;}
     slam::fusion::PipelineProfiler::Scope timing(profiler,"heldout_scan_match",i,true);
     const Pose2 seed=slam::compose(p.gyro_wheel[i],kBaseFromLaser);
-    auto candidate=match(field,p.gyro_deskewed[i],seed);
+    const auto matching_hits=sample_matching_hits(
+        p.gyro_deskewed[i],options.match_stride,options.match_offset);
+    result.matching_input_hits_total+=matching_hits.size();
+    auto candidate=match(field,matching_hits,seed,options);
     ++result.attempted;
     if(qualified(candidate,*frozen.snapshot,seed)){
       // Convert matched laser pose back into map-from-base exactly.
@@ -340,41 +580,288 @@ Matched match_heldout(const Simulation& sim,const Prepared& p,
   }
   return result;
 }
+struct LidarMatchAudit {
+  std::size_t frame{}, input_beams{}, seed_supported_hits{};
+  std::size_t candidate_supported_hits{}, residual_blocks{}, map_revision{};
+  std::size_t solver_invalid_residuals{};
+  double seed_overlap{}, candidate_translation_m{};
+  bool seed_full_rank{}, candidate_evaluated{}, accepted{}, has_obstacles{};
+  std::string reason,registration_method{"none"};
+  bool used_scan_prediction{},edt_prediction_disagreed{};
+  double predicted_edt_translation_delta_m{},predicted_edt_yaw_delta_rad{};
+  std::size_t registration_forward_inliers{},registration_reverse_inliers{};
+  double registration_forward_overlap{},registration_reverse_overlap{};
+  double registration_error_m{},registration_translation_m{},registration_yaw_rad{};
+  // All probe measurements are read-only against the historical map.
+  std::size_t probe_poses{}, probe_supported_poses{}, probe_ranked_poses{};
+  std::size_t probe_best_supported_hits{};
+  double probe_best_overlap{};
+  double probe_best_dx_m{},probe_best_dy_m{},probe_best_dyaw_rad{};
+};
 struct LidarOnly {
+  std::vector<LidarMatchAudit> audit;
   std::vector<Pose2> poses;
   Mask mapped;
-  std::size_t accepted{},rejected{};
+  std::size_t accepted{},rejected{},skipped{},field_rebuilds{};
+  std::size_t matching_input_hits_total{};
+  std::size_t bootstrap_attempted{},bootstrap_accepted{},bootstrap_rejected{};
+  std::size_t edt_accepted{},edt_refined_accepted{};
+  std::size_t predicted_edt_accepted{},edt_prediction_disagreements{};
   std::map<std::string,std::size_t> rejections;
 };
 LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
-                     slam::fusion::PipelineProfiler& profiler) {
+                     slam::fusion::PipelineProfiler& profiler,
+                     const FusionMatchOptions& options) {
   LidarOnly out;
   out.poses.reserve(p.raw_lidar.size());
+  out.audit.reserve(p.raw_lidar.size()-1);
   out.mapped.assign(p.raw_lidar.size(),false);
   slam::mapping::OccupancyGrid rolling(sim.grid);
   out.poses.push_back(first_anchor);out.mapped[0]=true;
   {
     slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_only_baseline",0,true);
-    insert(rolling,first_anchor,p.raw_lidar[0]);
+    insert(rolling,first_anchor,p.raw_lidar[0],options.map_stride);
   }
+  std::shared_ptr<const slam::mapping::MapSnapshot> cached_snapshot;
+  std::shared_ptr<const slam::mapping::DistanceField> cached_field;
+  std::size_t last_field_frame=0;
+  std::size_t last_accepted_scan=0;
+  slam::Pose2 last_relative_scan{};
+  bool has_relative_scan=false;
   for(std::size_t i=1;i<p.raw_lidar.size();++i) {
+    if((i-1)%options.match_every!=0) {
+      // A skipped scan is neither a rejection nor a trusted insertion.
+      out.poses.push_back(out.poses.back());
+      ++out.skipped;
+      continue;
+    }
     slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_only_baseline",i,true);
-    auto snapshot=slam::mapping::MapSnapshot::capture(rolling);
-    const auto field=slam::mapping::DistanceField::build(snapshot,.7);
-    // No wheel, gyro or ground-truth seed; only previous accepted laser pose.
-    const auto seed=slam::compose(out.poses.back(),kBaseFromLaser);
-    const auto candidate=match(field,p.raw_lidar[i],seed);
-    if(qualified(candidate,*snapshot,seed,.65)) {
-      const auto base=slam::compose(candidate.map_from_laser,
-                                   slam::inverse(kBaseFromLaser));
+    if(!cached_field||i-last_field_frame>=options.field_every) {
+      cached_snapshot=slam::mapping::MapSnapshot::capture(rolling);
+      cached_field=slam::mapping::DistanceField::build(
+          cached_snapshot,options.distance_truncation_m);
+      last_field_frame=i;
+      ++out.field_rebuilds;
+    }
+    // All prediction data comes from accepted raw LiDAR scans alone.
+    const Pose2 previous_laser=slam::compose(out.poses.back(),kBaseFromLaser);
+    // Preserve the bootstrap motion seed for the Ceres-first path. A stale
+    // stationary seed can let the growing EDT accept near-zero motion.
+    const Pose2 bootstrap_seed=options.lidar_only_bootstrap&&has_relative_scan?
+        slam::compose(previous_laser,last_relative_scan):previous_laser;
+    const auto matching_hits=sample_matching_hits(
+        p.raw_lidar[i],options.match_stride,options.match_offset);
+    out.matching_input_hits_total+=matching_hits.size();
+    std::optional<slam::matching::ScanToScanResult> scan_prediction;
+    if(options.lidar_only_predict_first) {
+      const auto previous_hits=sample_matching_hits(
+          p.raw_lidar[last_accepted_scan],options.match_stride,options.match_offset);
+      auto predicted=slam::matching::register_consecutive_scans(
+          previous_hits,matching_hits,
+          has_relative_scan?last_relative_scan:Pose2{},
+          !has_relative_scan||i-last_accepted_scan>1);
+      if(!predicted.accepted&&has_relative_scan) {
+        const auto recovery=slam::matching::register_consecutive_scans(
+            previous_hits,matching_hits,Pose2{},true);
+        if(recovery.accepted)predicted=recovery;
+      }
+      scan_prediction=predicted;
+    }
+    const Pose2 seed=scan_prediction&&scan_prediction->accepted?
+        slam::compose(previous_laser,scan_prediction->previous_from_current):
+        bootstrap_seed;
+    // With a failed LiDAR-only prediction, do not optimize around a stale
+    // previous pose: its Ceres correction box is much smaller than the scan
+    // displacement. A failed prediction is a rejected/unmapped scan.
+    const auto candidate=(!options.lidar_only_predict_first||
+                          (scan_prediction&&scan_prediction->accepted))?
+        match(cached_field,matching_hits,seed,options):
+        slam::matching::MatchResult{};
+    LidarMatchAudit evidence;
+    evidence.frame=i;
+    evidence.input_beams=matching_hits.size();
+    evidence.seed_supported_hits=candidate.seed_supported_hits;
+    evidence.candidate_supported_hits=candidate.candidate_supported_hits;
+    evidence.residual_blocks=candidate.solver_residual_blocks;
+    evidence.map_revision=cached_snapshot->revision();
+    evidence.solver_invalid_residuals=candidate.ceres_invalid_residual_evaluations;
+    // Diagnostic fields describe the original seed, even after an
+    // accepted match replaces the result's final geometry diagnostics.
+    evidence.seed_overlap=candidate.seed_overlap;
+    evidence.seed_full_rank=candidate.seed_full_rank;
+    evidence.candidate_evaluated=candidate.candidate_evaluated;
+    evidence.candidate_translation_m=candidate.candidate_translation_m;
+    evidence.has_obstacles=cached_field->has_obstacles();
+    // The same LiDAR registration must be auditable whether Ceres accepts
+    // its predicted pose or the scan-pair fallback is applied.
+    if(scan_prediction) {
+      evidence.registration_forward_inliers=scan_prediction->forward_inliers;
+      evidence.registration_reverse_inliers=scan_prediction->reverse_inliers;
+      evidence.registration_forward_overlap=scan_prediction->forward_overlap;
+      evidence.registration_reverse_overlap=scan_prediction->reverse_overlap;
+      evidence.registration_error_m=scan_prediction->mean_error_m;
+      evidence.registration_translation_m=scan_prediction->translation_m;
+      evidence.registration_yaw_rad=scan_prediction->rotation_rad;
+    }
+    // Probe only scan frames 1-3 when selected by match cadence; never
+    // apply a candidate, insert a ray, or use it to seed a later frame.
+    // The probe never consults simulated truth, wheel or gyro estimates.
+    if(options.lidar_only_support_probe&&i<=3) {
+      slam::matching::MatchSettings probe_settings;
+      probe_settings.min_supported_hits=18;
+      probe_settings.minimum_overlap=.45;
+      const auto centre=seed;
+      for(int ix=-6;ix<=6;++ix)
+        for(int iy=-6;iy<=6;++iy)
+          for(int ia=-4;ia<=4;++ia) {
+            const double dx=double(ix)*.10,dy=double(iy)*.10;
+            const double da=double(ia)*.06;
+            const Pose2 trial{{centre.translation.x()+dx,
+                               centre.translation.y()+dy},
+                              slam::wrap_yaw(centre.yaw_rad+da)};
+            const auto d=slam::matching::evaluate_geometry(
+                *cached_field,matching_hits,trial,probe_settings);
+            ++evidence.probe_poses;
+            if(d.supported_hits>=probe_settings.min_supported_hits&&
+               d.overlap>=probe_settings.minimum_overlap) {
+              ++evidence.probe_supported_poses;
+              if(d.full_rank)++evidence.probe_ranked_poses;
+            }
+            // Select the most-supported probe strictly as a diagnostic,
+            // with no claim this candidate is a true motion estimate.
+            if(d.supported_hits>evidence.probe_best_supported_hits) {
+              evidence.probe_best_supported_hits=d.supported_hits;
+              evidence.probe_best_overlap=d.overlap;
+              evidence.probe_best_dx_m=dx;
+              evidence.probe_best_dy_m=dy;
+              evidence.probe_best_dyaw_rad=da;
+            }
+          }
+    }
+    evidence.accepted=qualified(candidate,*cached_snapshot,seed,.65);
+    evidence.reason=evidence.accepted?"accepted":rejection_reason(candidate.status);
+    if(scan_prediction) {
+      evidence.used_scan_prediction=true;
+      if(!scan_prediction->accepted) {
+        evidence.accepted=false;
+        evidence.reason="scan_to_scan_rejected";
+      } else if(evidence.accepted) {
+        // EDT must agree with LiDAR-derived motion in the previous laser
+        // frame; a geometrically valid *local* map correction is not
+        // automatically an admissible new relative movement.
+        const auto refined_relative=slam::compose(
+            slam::inverse(previous_laser),candidate.map_from_laser);
+        evidence.predicted_edt_translation_delta_m=(
+            refined_relative.translation-
+            scan_prediction->previous_from_current.translation).norm();
+        evidence.predicted_edt_yaw_delta_rad=std::abs(slam::wrap_yaw(
+            refined_relative.yaw_rad-
+            scan_prediction->previous_from_current.yaw_rad));
+        if(evidence.predicted_edt_translation_delta_m>.12||
+           evidence.predicted_edt_yaw_delta_rad>.075) {
+          evidence.accepted=false;
+          evidence.edt_prediction_disagreed=true;
+          evidence.reason="edt_scan_disagreement";
+          ++out.edt_prediction_disagreements;
+        }
+      }
+    }
+    Pose2 chosen_laser=candidate.map_from_laser;
+    if(evidence.accepted) {
+      evidence.registration_method=scan_prediction?"edt_predicted":"edt";
+      ++out.edt_accepted;
+      if(scan_prediction)++out.predicted_edt_accepted;
+    } else if(options.lidar_only_bootstrap) {
+      ++out.bootstrap_attempted;
+      // For predict-first, reuse the same independently gated registration
+      // that seeded Ceres. Otherwise use the motion-seeded Ceres-first
+      // bootstrap path for A/B comparison.
+      auto registered=scan_prediction.value_or(
+          slam::matching::ScanToScanResult{});
+      if(!scan_prediction) {
+        const auto previous_scan=sample_matching_hits(
+            p.raw_lidar[last_accepted_scan],options.match_stride,options.match_offset);
+        registered=slam::matching::register_consecutive_scans(
+            previous_scan,matching_hits,
+            has_relative_scan?last_relative_scan:Pose2{},
+            !has_relative_scan||i-last_accepted_scan>1);
+        if(!registered.accepted&&has_relative_scan) {
+          const auto recovery=slam::matching::register_consecutive_scans(
+              previous_scan,matching_hits,Pose2{},true);
+          if(recovery.accepted)registered=recovery;
+        }
+      }
+      evidence.registration_forward_inliers=registered.forward_inliers;
+      evidence.registration_reverse_inliers=registered.reverse_inliers;
+      evidence.registration_forward_overlap=registered.forward_overlap;
+      evidence.registration_reverse_overlap=registered.reverse_overlap;
+      evidence.registration_error_m=registered.mean_error_m;
+      evidence.registration_translation_m=registered.translation_m;
+      evidence.registration_yaw_rad=registered.rotation_rad;
+      if(registered.accepted) {
+        const Pose2 previous_laser=slam::compose(
+            out.poses.back(),kBaseFromLaser);
+        const Pose2 proposed_laser=slam::compose(
+            previous_laser,registered.previous_from_current);
+        // Prefer strict Ceres refinement when the new laser pose has
+        // independent real EDT support. A finite unknown cost alone never
+        // authorizes a pose, and the registered pose remains the fallback.
+        slam::matching::MatchSettings gate;
+        gate.min_supported_hits=18;
+        gate.minimum_overlap=.45;
+        const auto support=slam::matching::evaluate_geometry(
+            *cached_field,matching_hits,proposed_laser,gate);
+        // Predict-first already evaluated EDT at this registered pose.
+        // Do not re-run it here: that would bypass the explicit disagreement
+        // gate and silently apply a correction we just rejected.
+        if(!options.lidar_only_predict_first&&
+           support.supported_hits>=gate.min_supported_hits&&
+           support.overlap>=gate.minimum_overlap&&support.full_rank) {
+          const auto refined=match(cached_field,matching_hits,proposed_laser,options);
+          if(qualified(refined,*cached_snapshot,proposed_laser,.32)&&
+             (refined.map_from_laser.translation-
+              proposed_laser.translation).norm()<=.25&&
+             std::abs(slam::wrap_yaw(refined.map_from_laser.yaw_rad-
+                                     proposed_laser.yaw_rad))<=.12) {
+            chosen_laser=refined.map_from_laser;
+            evidence.registration_method="edt_refined";
+            ++out.edt_refined_accepted;
+          } else {
+            chosen_laser=proposed_laser;
+            evidence.registration_method="scan_to_scan";
+          }
+        } else {
+          chosen_laser=proposed_laser;
+          evidence.registration_method="scan_to_scan";
+        }
+        evidence.accepted=true;
+        evidence.reason="accepted";
+        ++out.bootstrap_accepted;
+      } else {
+        evidence.reason=scan_prediction?
+            "scan_to_scan_rejected":evidence.reason;
+        ++out.bootstrap_rejected;
+      }
+    }
+    out.audit.push_back(evidence);
+    if(evidence.accepted) {
+      const Pose2 previous_laser=slam::compose(
+          out.poses.back(),kBaseFromLaser);
+      const Pose2 relative=slam::compose(
+          slam::inverse(previous_laser),chosen_laser);
+      const auto base=slam::compose(chosen_laser,
+                                    slam::inverse(kBaseFromLaser));
       out.poses.push_back(base);
       out.mapped[i]=true;
-      insert(rolling,base,p.raw_lidar[i]);
+      insert(rolling,base,p.raw_lidar[i],options.map_stride);
+      last_relative_scan=relative;
+      has_relative_scan=true;
+      last_accepted_scan=i;
       ++out.accepted;
     } else {
       out.poses.push_back(out.poses.back());
       ++out.rejected;
-      ++out.rejections[rejection_reason(candidate.status)];
+      ++out.rejections[evidence.reason];
       // An unlocalized moving scan is never inserted into the occupancy map.
     }
   }
@@ -383,18 +870,167 @@ LidarOnly lidar_only(const Simulation& sim,const Prepared& p,Pose2 first_anchor,
 struct GraphLoopEvent {
   std::size_t from{},to{};
   std::string decision;
+  std::string source{"independently_simulated_relative_pose"};
+  double overlap{},registration_error_m{};
 };
 struct GraphOutput {
   std::vector<Pose2> poses;
   std::vector<GraphLoopEvent> events;
   std::size_t accepted_loops{},loop_candidates{};
+  std::size_t lidar_registration_attempted{},lidar_registration_verified{};
+  std::size_t lidar_nearby_pairs{},lidar_geometry_verified{},
+              lidar_redundant_suppressed{};
   std::string status;
 };
+struct LiDARLoopProposals {
+  std::vector<slam::graph::LoopCandidate> candidates;
+  std::vector<GraphLoopEvent> rejected;
+  std::size_t attempted{},nearby_pairs{},geometry_verified{},redundant_suppressed{};
+};
+// Estimated poses shortlist nonadjacent places, never supply a loop
+// measurement. Only aligned LiDAR scan geometry creates its relative
+// transform. Repeated hits across nearby keyframes are correlated evidence:
+// avoid densely stacking factors on the same two stretches of trajectory.
+LiDARLoopProposals detect_lidar_loops(const Prepared& p,const Matched& matched,
+                                      const FusionMatchOptions& options) {
+  constexpr std::size_t kKeyframeStep=2;
+  constexpr std::size_t kMinimumTemporalSeparation=40;
+  constexpr std::size_t kMinimumDistinctKeyframeGap=6;
+  constexpr std::size_t kMaxRegistrationHypotheses=6;
+  constexpr std::size_t kMaxClosures=8;
+  constexpr double kSearchDistanceM=2.8;
+  constexpr double kSearchYawRad=.50;
+  LiDARLoopProposals found;
+  const auto& poses=matched.poses;
+  for(std::size_t i=48;i<poses.size();i+=kKeyframeStep) {
+    if(found.candidates.size()==kMaxClosures)break;
+    struct Nearby {std::size_t j;double distance;};
+    std::vector<Nearby> nearby;
+    for(std::size_t j=0;j+kMinimumTemporalSeparation<i;
+        j+=kKeyframeStep) {
+      const Pose2 relative=slam::compose(slam::inverse(poses[j]),poses[i]);
+      if(relative.translation.norm()<=kSearchDistanceM &&
+         std::abs(slam::wrap_yaw(relative.yaw_rad))<=kSearchYawRad)
+        nearby.push_back({j,relative.translation.norm()});
+    }
+    found.nearby_pairs+=nearby.size();
+    std::sort(nearby.begin(),nearby.end(),[](const auto& a,const auto& b){
+      if(a.distance!=b.distance)return a.distance<b.distance;
+      return a.j<b.j;
+    });
+    const auto current=sample_matching_hits(
+        p.gyro_deskewed[i],options.match_stride,options.match_offset);
+    struct Verified {
+      slam::graph::LoopCandidate candidate;
+      double rms{};
+    };
+    std::vector<Verified> verified;
+    const auto tries=std::min(kMaxRegistrationHypotheses,nearby.size());
+    for(std::size_t k=0;k<tries;++k) {
+      const auto j=nearby[k].j;
+      const auto previous=sample_matching_hits(
+          p.gyro_deskewed[j],options.match_stride,options.match_offset);
+      const auto previous_laser=slam::compose(poses[j],kBaseFromLaser);
+      const auto current_laser=slam::compose(poses[i],kBaseFromLaser);
+      const Pose2 prior=slam::compose(slam::inverse(previous_laser),
+                                     current_laser);
+      // Broad only for nonconsecutive scans. The normal LiDAR-only
+      // bootstrap retains its strict 0.9 m / 0.32 rad motion envelope.
+      const auto reg=slam::matching::register_consecutive_scans(
+          previous,current,prior,false,
+          {.max_translation_m=3.0,.max_rotation_rad=.6});
+      ++found.attempted;
+      const double overlap=std::min(reg.forward_overlap,reg.reverse_overlap);
+      const double innovation_translation=
+          (reg.previous_from_current.translation-prior.translation).norm();
+      const double innovation_yaw=std::abs(slam::wrap_yaw(
+          reg.previous_from_current.yaw_rad-prior.yaw_rad));
+      if(!reg.accepted||!reg.correspondence_rank||
+         reg.forward_inliers<80||reg.reverse_inliers<80||
+         overlap<.82||reg.mean_error_m>.11||
+         innovation_translation>.55||innovation_yaw>.17) {
+        found.rejected.push_back({j,i,"insufficient_geometry",
+                                  "lidar_scan_registration",overlap,
+                                  reg.mean_error_m});
+        continue;
+      }
+      // Re-register in the opposite direction. A true overlap should
+      // recover the inverse transform, not merely fit one wall/shelf
+      // under a single nearest-neighbor assignment.
+      const auto reverse=slam::matching::register_consecutive_scans(
+          current,previous,slam::inverse(reg.previous_from_current),false,
+          {.max_translation_m=3.0,.max_rotation_rad=.6});
+      const auto cycle=slam::compose(reg.previous_from_current,
+                                     reverse.previous_from_current);
+      const double reverse_overlap=std::min(reverse.forward_overlap,
+                                            reverse.reverse_overlap);
+      if(!reverse.accepted||!reverse.correspondence_rank||
+         reverse.forward_inliers<80||reverse.reverse_inliers<80||
+         reverse_overlap<.82||cycle.translation.norm()>.14||
+         std::abs(slam::wrap_yaw(cycle.yaw_rad))>.07) {
+        found.rejected.push_back({j,i,"insufficient_geometry",
+                                  "lidar_scan_registration",overlap,
+                                  reg.mean_error_m});
+        continue;
+      }
+      ++found.geometry_verified;
+      const Pose2 base_relative=slam::compose(kBaseFromLaser,
+          slam::compose(reg.previous_from_current,
+                        slam::inverse(kBaseFromLaser)));
+      const slam::graph::FactorProvenance provenance{
+          slam::graph::EvidenceClass::lidar_scan_registration,
+          "synthetic_gyro_deskewed_lidar_scan_pair_v1",true,false};
+      // Strongly correlated revisits must not be treated as N
+      // independent high-confidence measurements.
+      slam::graph::LoopCandidate candidate{
+          {j,i,base_relative,.30,.30,.20,provenance},
+          std::min(reg.forward_inliers,reg.reverse_inliers),
+          overlap,true,reg.mean_error_m};
+      verified.push_back({candidate,reg.mean_error_m});
+    }
+    // Prefer strong reciprocal geometry and lower residual, never the
+    // synthetic reference pose or the eventual graph's scoring metric.
+    std::sort(verified.begin(),verified.end(),[](const auto& a,const auto& b) {
+      if(a.candidate.overlap!=b.candidate.overlap)
+        return a.candidate.overlap>b.candidate.overlap;
+      if(a.rms!=b.rms)return a.rms<b.rms;
+      return a.candidate.edge.from<b.candidate.edge.from;
+    });
+    bool selected=false;
+    for(const auto& item:verified) {
+      const auto j=item.candidate.edge.from;
+      // Require BOTH temporal anchor regions to be distinct from all
+      // previously proposed closures. Otherwise six almost-identical
+      // pairs can falsely swamp the gyro/wheel graph.
+      const bool redundant=std::any_of(
+          found.candidates.begin(),found.candidates.end(),
+          [=](const auto& prior) {
+            const auto a=prior.edge.from,b=prior.edge.to;
+            const auto gap=[](std::size_t x,std::size_t y){
+              return x>y?x-y:y-x;
+            };
+            return gap(a,j)<kMinimumDistinctKeyframeGap||
+                   gap(b,i)<kMinimumDistinctKeyframeGap;
+          });
+      if(redundant||selected) {
+        ++found.redundant_suppressed;
+        found.rejected.push_back({
+            j,i,"duplicate_or_nearby","lidar_scan_registration",
+            item.candidate.overlap,item.rms});
+        continue;
+      }
+      found.candidates.push_back(item.candidate);
+      selected=true;
+    }
+  }
+  return found;
+}
 GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
-                           const Matched& matcher,bool synthetic_loops) {
+                           const Matched& matcher,bool synthetic_loops,
+                           const FusionMatchOptions& options) {
   GraphOutput output;
 #ifndef SLAM_FUSION_WITH_GTSAM
-  (void)sim;(void)p;(void)matcher;(void)synthetic_loops;
+  (void)sim;(void)p;(void)matcher;(void)synthetic_loops;(void)options;
   output.status="gtsam_not_built";return output;
 #else
   slam::graph::BatchGraphInput input;
@@ -435,8 +1071,24 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
         result.diagnostics.supported_hits,result.diagnostics.overlap,true});
     }
   }
+  if(options.lidar_loop_closure) {
+    const auto proposals=detect_lidar_loops(p,matcher,options);
+    output.lidar_registration_attempted=proposals.attempted;
+    output.lidar_registration_verified=proposals.candidates.size();
+    output.lidar_nearby_pairs=proposals.nearby_pairs;
+    output.lidar_geometry_verified=proposals.geometry_verified;
+    output.lidar_redundant_suppressed=proposals.redundant_suppressed;
+    output.events=proposals.rejected;
+    for(const auto& candidate:proposals.candidates)
+      input.loops.push_back(candidate);
+  }
   output.loop_candidates=input.loops.size();
-  auto graph=slam::graph::optimize_pose_graph(input);
+  slam::graph::BatchGraphOptions graph_options;
+  if(options.lidar_loop_closure) {
+    graph_options.maximum_loop_residual_translation_m=.8;
+    graph_options.maximum_loop_residual_yaw_rad=.3;
+  }
+  auto graph=slam::graph::optimize_pose_graph(input,graph_options);
   if(graph.loop_decisions.size()!=input.loops.size())
     throw std::runtime_error("GTSAM loop decision cardinality mismatch");
   for(std::size_t k=0;k<input.loops.size();++k) {
@@ -449,13 +1101,19 @@ GraphOutput optimize_graph(const Simulation& sim,const Prepared& p,
       case slam::graph::LoopDecision::inconsistent_with_initial_path:label="inconsistent";break;
       case slam::graph::LoopDecision::duplicate_or_nearby_nodes:label="duplicate_or_nearby";break;
     }
-    output.events.push_back({input.loops[k].edge.from,input.loops[k].edge.to,label});
+    output.events.push_back({
+        input.loops[k].edge.from,input.loops[k].edge.to,label,
+        input.loops[k].edge.provenance.source==
+            slam::graph::EvidenceClass::lidar_scan_registration?
+            "lidar_scan_registration":"independently_simulated_relative_pose",
+        input.loops[k].overlap,input.loops[k].registration_error_m});
   }
   if(!graph.fixed_first_pose)throw std::runtime_error("graph lost gauge anchor");
   output.poses=std::move(graph.optimized_map_from_base);
   output.accepted_loops=graph.accepted_loops;
   output.status=synthetic_loops?"gtsam_with_simulated_independent_loops":
-                                "gtsam_odometry_only_no_verified_loops";
+      options.lidar_loop_closure?"gtsam_with_lidar_scan_loop_closure":
+                                 "gtsam_odometry_only_no_verified_loops";
   return output;
 #endif
 }
@@ -507,6 +1165,229 @@ void write_path(std::ostream& out,const char* name,
   }
   out<<"]"<<(comma?",\n":"\n");
 }
+// A smooth map-frame correction field carries the optimized scan-midpoint
+// poses onto the original high-rate fused gyro/wheel trajectory. It does
+// NOT consult reference poses, sensor simulation motion, or scoring maps.
+// This estimates corrected intra-scan motion (a model), not a new
+// independently measured beam-time trajectory.
+Points redeskew_with_graph(const Simulation& sim,const Prepared& p,
+                           const GraphOutput& graph) {
+  const std::size_t n=sim.sensors.scans.size();
+  if(graph.poses.size()!=n||p.gyro_wheel.size()!=n||n<2)
+    throw std::invalid_argument("graph re-deskew scan count mismatch");
+  std::vector<Pose2> correction;
+  correction.reserve(n);
+  for(std::size_t i=0;i<n;++i)
+    correction.push_back(slam::compose(
+        graph.poses[i],slam::inverse(p.gyro_wheel[i])));
+  const auto& scans=sim.sensors.scans;
+  std::vector<slam::motion::TimedPose> corrected_samples;
+  corrected_samples.reserve(p.integrated.fused.size());
+  for(const auto& sample:p.integrated.fused) {
+    const auto stamp=sample.time.ns;
+    auto upper=std::lower_bound(scans.begin(),scans.end(),stamp,
+        [](const auto& scan,slam::TimeNs ns) {
+          return scan.midpoint.ns<ns;
+        });
+    Pose2 offset;
+    if(upper==scans.begin())offset=correction.front();
+    else if(upper==scans.end())offset=correction.back();
+    else {
+      const auto hi=static_cast<std::size_t>(upper-scans.begin());
+      if(stamp==upper->midpoint.ns)offset=correction[hi];
+      else {
+        const auto lo=hi-1;
+        const auto from=scans[lo].midpoint.ns;
+        const auto to=scans[hi].midpoint.ns;
+        const double alpha=double(stamp-from)/double(to-from);
+        const auto movement=slam::log_se2(slam::compose(
+            slam::inverse(correction[lo]),correction[hi]));
+        offset=slam::compose(correction[lo],slam::exp_se2({
+            alpha*movement.dx,alpha*movement.dy,alpha*movement.dyaw}));
+      }
+    }
+    corrected_samples.push_back({sample.time,
+        slam::compose(offset,sample.odom_from_base)});
+  }
+  const slam::motion::SampledTrajectory track(
+      std::move(corrected_samples),
+      slam::motion::TrajectoryCapability::full_se2);
+  Points points;
+  points.reserve(n);
+  for(std::size_t i=0;i<n;++i) {
+    const auto at_midpoint=track.at(scans[i].midpoint);
+    if(!at_midpoint||
+       (at_midpoint->translation-graph.poses[i].translation).norm()>1e-6||
+       std::abs(slam::wrap_yaw(
+           at_midpoint->yaw_rad-graph.poses[i].yaw_rad))>1e-6)
+      throw std::runtime_error("re-deskew correction lost graph midpoint anchor");
+    const auto result=slam::motion::deskew_hits(
+        scans[i],track,kBaseFromLaser);
+    if(!result||!result->suitable_for_moving_map_insertion()||
+       result->hits.size()!=p.gyro_deskewed[i].size())
+      throw std::runtime_error("graph re-deskew lacks trusted beam coverage");
+    auto& cloud=points.emplace_back();
+    cloud.reserve(result->hits.size());
+    for(const auto& hit:result->hits)cloud.push_back(hit.point_laser_reference);
+  }
+  return points;
+}
+
+// Fixed-trajectory mapping-only ablation. All methods reuse the exact same
+// optimized scan-midpoint graph poses; the optimizer is never rerun and
+// the ground-truth scene is only consulted AFTER each map was reconstructed.
+void export_mapping_ablation(const std::filesystem::path& directory,
+    const Simulation& sim,const Prepared& p,const GraphOutput& graph,
+    const FusionMatchOptions& options) {
+  if(graph.poses.empty())throw std::invalid_argument(
+      "mapping ablation requires an optimized GTSAM trajectory");
+  const auto redeskewed=redeskew_with_graph(sim,p,graph);
+  const auto out_dir=directory/"mapping_ablation";
+  if(!std::filesystem::create_directory(out_dir))
+    throw std::runtime_error("failed creating mapping ablation output directory");
+  std::ofstream out(directory/"mapping_ablation.json");
+  if(!out)throw std::runtime_error("failed opening mapping ablation JSON");
+  out<<std::setprecision(14);
+  const std::size_t n=graph.poses.size();
+  const std::size_t cut=n-static_cast<std::size_t>(std::ceil(.12*double(n)));
+  struct Evidence {const char* id;double hit,free;};
+  // Exhaustive, predeclared 3x3 hit/free log-odds sweep. Retain the
+  // original four IDs so prior 2x3x4 reports remain understandable.
+  // These are experimental map-only settings, never the SLAM defaults.
+  constexpr std::array<Evidence,9> evidence{{
+      {"baseline",.85,-.4},
+      {"h085_f030",.85,-.3},
+      {"gentler_free",.85,-.2},
+      {"h100_f040",1.0,-.4},
+      {"h100_f030",1.0,-.3},
+      {"h100_f020",1.0,-.2},
+      {"stronger_hit",1.2,-.4},
+      {"h120_f030",1.2,-.3},
+      {"combined",1.2,-.2}
+  }};
+  struct Window {const char* id;std::size_t begin,end;};
+  const std::array<Window,3> windows{{
+      {"full",0,n},{"early",0,cut},{"late",cut,n}
+  }};
+  // A single visibility footprint per frame-window is derived from the
+  // ORIGINAL scan rays, independently of hit/free odds and corrected
+  // re-deskew. All eighteen mapping variants in a window share this same
+  // padded spatial mask. Ground-truth walls play no part in its selection.
+  constexpr double kRegionPaddingM=.25;
+  std::array<slam::mapping::MapBundle,3> baseline_maps;
+  std::array<std::vector<std::uint8_t>,3> footprints;
+  std::array<std::size_t,3> footprint_counts{};
+  std::array<std::uint64_t,3> footprint_fingerprints{};
+  for(std::size_t w=0;w<windows.size();++w) {
+    Mask included(n,false);
+    for(std::size_t i=windows[w].begin;i<windows[w].end;++i)
+      included[i]=true;
+    baseline_maps[w]=make_map(sim,graph.poses,p.gyro_deskewed,
+                              included,options);
+    footprints[w]=slam::evaluation::observed_footprint_mask(
+        baseline_maps[w],kRegionPaddingM);
+    footprint_counts[w]=std::count(footprints[w].begin(),
+                                   footprints[w].end(),std::uint8_t{1});
+    // Stable FNV-1a for the binary spatial mask (audit identity, not
+    // cryptographic authentication). Emit as text to avoid JS precision loss.
+    std::uint64_t fingerprint=14695981039346656037ULL;
+    for(const auto cell:footprints[w]) {
+      fingerprint^=cell;
+      fingerprint*=1099511628211ULL;
+    }
+    footprint_fingerprints[w]=fingerprint;
+  }
+  out<<"{\n\"format\":\"FUSMAPABL1\","
+     <<"\n\"evidence_grid\":\"three_by_three_v1\","
+     <<"\n\"evidence_hit_levels\":[0.85,1.0,1.2],"
+     <<"\n\"evidence_free_levels\":[-0.4,-0.3,-0.2],"
+     <<"\n\"region_mask_source\":\"original_deskew_baseline_ray_observation_padded\","
+     <<"\n\"region_padding_m\":"<<kRegionPaddingM<<","
+     <<"\n\"source\":\"graph_optimized_fixed_estimated_poses\","
+     <<"\n\"scene\":\""<<sim.scene.id<<"\","
+     <<"\n\"reference_usage\":\"posthoc_scoring_only\","
+     <<"\n\"original_trajectory_and_maps_unchanged\":true,"
+     <<"\n\"redeskew_model\":\"interpolated_graph_to_gyro_wheel_map_frame_corrections_over_high_rate_fused_track\","
+     <<"\n\"region_note\":\"full_scene_metrics_retained;_region_map_metrics_are_spatially_masked_to_fixed_observation_footprint\","
+     <<"\n\"variants\":[";
+  bool first=true;
+  for(std::size_t method=0;method<2;++method) {
+    const Points& scans=method==0?p.gyro_deskewed:redeskewed;
+    const char* deskew=method==0?"gyro_wheel_original":"graph_corrected_motion_model";
+    for(std::size_t w=0;w<windows.size();++w) {
+      const auto& window=windows[w];
+      Mask included(n,false);
+      for(std::size_t i=window.begin;i<window.end;++i)included[i]=true;
+      for(const auto& odds:evidence) {
+        auto grid=sim.grid;
+        grid.hit_log_odds=odds.hit;
+        grid.free_log_odds=odds.free;
+        // Reuse the authoritative original-deskew baseline map for the
+        // exact-fingerprint regression as well as the region footprint.
+        const auto map=(method==0&&odds.hit==.85&&odds.free==-.4)?
+            baseline_maps[w]:
+            make_map(sim,graph.poses,scans,included,options,nullptr,&grid);
+        const std::string id=std::string(window.id)+"_"+deskew+"_"+odds.id;
+        // Export each reconstructed occupancy map independently for
+        // inspection with existing FUSMAP2D-compatible tooling.
+        const auto map_path=std::string("mapping_ablation/")+id+".slammap";
+        export_bundle(directory/map_path,map);
+        const auto score=slam::evaluation::evaluate_map_accuracy(map,sim.scene);
+        const auto tolerant=slam::evaluation::evaluate_wall_tolerances(
+            map,sim.scene);
+        const auto region_score=slam::evaluation::evaluate_map_accuracy_region(
+            map,sim.scene,footprints[w]);
+        const auto region_tolerant=
+            slam::evaluation::evaluate_wall_tolerances_region(
+                map,sim.scene,footprints[w]);
+        if(!first)out<<",";
+        first=false;
+        out<<"\n{\"id\":\""<<id<<"\","
+           <<"\"window\":\""<<window.id<<"\","
+           <<"\"begin_frame\":"<<window.begin<<","
+           <<"\"end_frame_exclusive\":"<<window.end<<","
+           <<"\"deskew\":\""<<deskew<<"\","
+           <<"\"evidence\":\""<<odds.id<<"\","
+           <<"\"hit_log_odds\":"<<odds.hit<<","
+           <<"\"free_log_odds\":"<<odds.free<<","
+           <<"\"map_path\":\""<<map_path<<"\","
+           <<"\"map\":";
+        slam::evaluation::write_map_accuracy_json(out,score,sim.scene);
+        out<<",\"wall_tolerance_scores\":[";
+        bool first_distance=true;
+        for(const auto& m:tolerant) {
+          if(!first_distance)out<<",";
+          first_distance=false;
+          out<<"{\"tolerance_m\":"<<m.tolerance_m
+             <<",\"precision\":"<<m.predicted_near_reference
+             <<",\"recall\":"<<m.reference_near_predicted
+             <<",\"f1\":"<<m.symmetric_f1<<"}";
+        }
+        out<<"],\"region_footprint\":{\"source\":\"original_baseline_rays\","
+           <<"\"padding_m\":"<<kRegionPaddingM<<","
+           <<"\"cells\":"<<footprint_counts[w]<<","
+           <<"\"total_grid_cells\":"<<footprints[w].size()<<","
+           <<"\"fingerprint\":\""<<footprint_fingerprints[w]<<"\"},"
+           <<"\"region_map\":";
+        slam::evaluation::write_map_accuracy_json(
+            out,region_score,sim.scene);
+        out<<",\"region_wall_tolerance_scores\":[";
+        bool first_region_distance=true;
+        for(const auto& m:region_tolerant) {
+          if(!first_region_distance)out<<",";
+          first_region_distance=false;
+          out<<"{\"tolerance_m\":"<<m.tolerance_m
+             <<",\"precision\":"<<m.predicted_near_reference
+             <<",\"recall\":"<<m.reference_near_predicted
+             <<",\"f1\":"<<m.symmetric_f1<<"}";
+        }
+        out<<"]}";
+      }
+    }
+  }
+  out<<"\n]}\n";
+  if(!out)throw std::runtime_error("failed writing mapping ablation JSON");
+}
 void export_trajectories(const std::filesystem::path& output,
                          const Simulation& sim,const Prepared& p,
                          const LidarOnly& lidar,const Matched& matched,
@@ -544,11 +1425,75 @@ void export_trajectories(const std::filesystem::path& output,
   out<<"]\n}\n";
   if(!out)throw std::runtime_error("failed writing trajectory JSON");
 }
+// A stand-alone diagnostic for the incremental LiDAR-only baseline.
+// Crucially, it includes rejected frames. Neither reference trajectory nor
+// simulation truth is fed into this diagnostic or its optional support probe.
+void export_lidar_match_audit(const std::filesystem::path& output,
+                              const LidarOnly& lidar,
+                              const FusionMatchOptions& options) {
+  std::ofstream out(output);
+  if(!out)throw std::runtime_error("failed opening LiDAR-only matcher audit");
+  out<<std::setprecision(15)
+     <<"{\"format\":\"FUSLIDARAUDIT1\","
+     <<"\"ground_truth_used\":false,"
+     <<"\"support_probe_read_only\":"
+     <<(options.lidar_only_support_probe?"true":"false")
+     <<",\"lidar_only_bootstrap\":"
+     <<(options.lidar_only_bootstrap?"true":"false")
+     <<",\"lidar_only_predict_first\":"
+     <<(options.lidar_only_predict_first?"true":"false")
+     <<",\"match_stride\":"<<options.match_stride
+     <<",\"match_offset\":"<<options.match_offset
+     <<",\"distance_truncation_m\":"<<options.distance_truncation_m
+     <<",\"attempts\":"<<(lidar.accepted+lidar.rejected)
+     <<",\"frames\":[";
+  for(std::size_t j=0;j<lidar.audit.size();++j) {
+    if(j)out<<',';
+    const auto& a=lidar.audit[j];
+    out<<"{\"index\":"<<a.frame
+       <<",\"status\":\""<<a.reason<<"\""
+       <<",\"accepted\":"<<(a.accepted?"true":"false")
+       <<",\"input_beams\":"<<a.input_beams
+       <<",\"seed_supported_hits\":"<<a.seed_supported_hits
+       <<",\"seed_overlap\":"<<a.seed_overlap
+       <<",\"seed_full_rank\":"<<(a.seed_full_rank?"true":"false")
+       <<",\"map_has_obstacles\":"<<(a.has_obstacles?"true":"false")
+       <<",\"map_revision\":"<<a.map_revision
+       <<",\"solver_residual_blocks\":"<<a.residual_blocks
+       <<",\"candidate_evaluated\":"<<(a.candidate_evaluated?"true":"false")
+       <<",\"candidate_supported_hits\":"<<a.candidate_supported_hits
+       <<",\"candidate_translation_m\":"<<a.candidate_translation_m
+       <<",\"solver_invalid_residual_evaluations\":"<<a.solver_invalid_residuals
+       <<",\"registration_method\":\""<<a.registration_method<<"\""
+       <<",\"used_scan_prediction\":"<<(a.used_scan_prediction?"true":"false")
+       <<",\"edt_prediction_disagreed\":"<<(a.edt_prediction_disagreed?"true":"false")
+       <<",\"predicted_edt_translation_delta_m\":"<<a.predicted_edt_translation_delta_m
+       <<",\"predicted_edt_yaw_delta_rad\":"<<a.predicted_edt_yaw_delta_rad
+       <<",\"registration_forward_inliers\":"<<a.registration_forward_inliers
+       <<",\"registration_reverse_inliers\":"<<a.registration_reverse_inliers
+       <<",\"registration_forward_overlap\":"<<a.registration_forward_overlap
+       <<",\"registration_reverse_overlap\":"<<a.registration_reverse_overlap
+       <<",\"registration_error_m\":"<<a.registration_error_m
+       <<",\"registration_translation_m\":"<<a.registration_translation_m
+       <<",\"registration_yaw_rad\":"<<a.registration_yaw_rad
+       <<",\"probe_poses\":"<<a.probe_poses
+       <<",\"probe_supported_poses\":"<<a.probe_supported_poses
+       <<",\"probe_ranked_poses\":"<<a.probe_ranked_poses
+       <<",\"probe_best_supported_hits\":"<<a.probe_best_supported_hits
+       <<",\"probe_best_overlap\":"<<a.probe_best_overlap
+       <<",\"probe_best_offset\":["
+       <<a.probe_best_dx_m<<','<<a.probe_best_dy_m<<','
+       <<a.probe_best_dyaw_rad<<"]}";
+  }
+  out<<"]}\n";
+  if(!out)throw std::runtime_error("failed writing LiDAR-only matcher audit");
+}
 // FUSFUSREPLAY1 contains *actual* events from this run, not browser-side
 // synthesized matcher/graph outcomes. No raw oracle trajectory is included.
 void export_replay(const std::filesystem::path& output,const Simulation& sim,
                    const Prepared& p,const LidarOnly& lidar,
-                   const Matched& matched,const GraphOutput& graph) {
+                   const Matched& matched,const GraphOutput& graph,
+                   const FusionMatchOptions& options) {
   std::ofstream out(output);
   if(!out)throw std::runtime_error("failed opening fusion replay");
   out<<std::setprecision(17);
@@ -556,6 +1501,12 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
      <<"\",\"reference_class\":\"synthetic_exact\","
      <<"\"source\":\"moving_synthetic_lidar_gyro_wheel\","
      <<"\"matcher\":\""<<matched.backend<<"\","
+     <<"\"match_every\":"<<options.match_every<<","
+     <<"\"field_every\":"<<options.field_every<<","
+     <<"\"map_stride\":"<<options.map_stride<<","
+     <<"\"match_stride\":"<<options.match_stride<<","
+     <<"\"match_offset\":"<<options.match_offset<<","
+     <<"\"distance_truncation_m\":"<<options.distance_truncation_m<<","
      <<"\"scan_frame\":\"laser_midpoint_deskewed_full_se2\","
      <<"\"laser_from_base_translation_m\":["
      <<kBaseFromLaser.translation.x()<<","<<kBaseFromLaser.translation.y()<<"],"
@@ -566,12 +1517,16 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
     if(i)out<<",\n";
     const auto& scan=sim.sensors.scans[i];
     const bool query=i%2==1;
+    const bool attempted=query&&(((i-1)/2)%options.match_every==0);
     const auto& result=matched.outcomes[i];
-    const bool approved=query&&matched.accepted_mask[i];
-    if(query){if(approved)++accepted;else ++rejected;}
+    const bool approved=attempted&&matched.accepted_mask[i];
+    if(attempted){if(approved)++accepted;else ++rejected;}
     const char* status="training";
     std::string reason="not_evaluated_training_scan";
-    if(query) {
+    if(query&&!attempted) {
+      status="skipped";
+      reason="match_cadence_skip";
+    }else if(attempted) {
       status=approved?"accepted":"rejected";
       reason=approved?"accepted":rejection_reason(result.status);
     }
@@ -585,15 +1540,24 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
       if(k)out<<",";
       out<<"["<<hits[k].x()<<","<<hits[k].y()<<"]";
     }
-    out<<"],\"matching\":{\"attempted\":"<<(query?"true":"false")
+    out<<"],\"raw_points_laser\":[";
+    // Laser-frame hit endpoints *before* gyro/wheel deskew, sampled only
+    // for the read-only UI. These are not a world-frame point cloud.
+    const auto& raw_hits=p.raw_lidar[i];
+    for(std::size_t k=0;k<raw_hits.size();k+=2){
+      if(k)out<<",";
+      out<<"["<<raw_hits[k].x()<<","<<raw_hits[k].y()<<"]";
+    }
+    out<<"],\"matching\":{\"attempted\":"<<(attempted?"true":"false")
        <<",\"accepted\":"<<(approved?"true":"false")
        <<",\"status\":\""<<status<<"\",\"reason\":\""<<reason<<"\""
        <<",\"cumulative_accepted\":"<<accepted
        <<",\"cumulative_rejected\":"<<rejected;
-    if(query){
+    if(attempted){
       const auto& d=result.diagnostics;
       out<<",\"supported_hits\":"<<d.supported_hits
          <<",\"input_hits\":"<<d.input_hits
+         <<",\"solver_residual_blocks\":"<<result.solver_residual_blocks
          <<",\"overlap\":"<<(std::isfinite(d.overlap)?d.overlap:0)
          <<",\"full_rank\":"<<(d.full_rank?"true":"false")
          <<",\"training_map_fingerprint\":\""<<d.source_fingerprint<<"\"";
@@ -612,7 +1576,10 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
       first=false;
       if(event.decision=="accepted")++accepted_loops;
       out<<"{\"from\":"<<event.from<<",\"to\":"<<event.to
-         <<",\"decision\":\""<<event.decision<<"\"}";
+         <<",\"decision\":\""<<event.decision<<"\""
+         <<",\"source\":\""<<event.source<<"\""
+         <<",\"overlap\":"<<event.overlap
+         <<",\"registration_error_m\":"<<event.registration_error_m<<"}";
     }
     out<<"],\"cumulative_accepted_loops\":"<<accepted_loops<<"}";
   }
@@ -620,45 +1587,47 @@ void export_replay(const std::filesystem::path& output,const Simulation& sim,
   if(!out)throw std::runtime_error("failed writing fusion replay");
 }
 void execute(const Simulation& sim,const std::filesystem::path& directory,
-             bool synthetic_loops,slam::fusion::PipelineProfiler& profiler) {
+             bool synthetic_loops,slam::fusion::PipelineProfiler& profiler,
+             const FusionMatchOptions& options) {
   if(std::filesystem::exists(directory))
     throw std::invalid_argument("output already exists; refuse to overwrite");
   if(!std::filesystem::create_directories(directory))
     throw std::runtime_error("cannot create exclusive output directory");
   const auto p=prepare(sim.sensors,sim.initial_anchor,profiler);
-  const auto matched=match_heldout(sim,p,profiler);
-  const auto lidar=lidar_only(sim,p,p.gyro_wheel.front(),profiler);
+  const auto matched=match_heldout(sim,p,profiler,options);
+  const auto lidar=lidar_only(sim,p,p.gyro_wheel.front(),profiler,options);
   const auto graph=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"graph_optimize");
-    return optimize_graph(sim,p,matched,synthetic_loops);
+    return optimize_graph(sim,p,matched,synthetic_loops,options);
   }();
   const auto wheel_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"wheel_map_build");
-    return make_map(sim,p.wheel_only,p.wheel_deskewed,all(p.wheel_only.size()));
+    return make_map(sim,p.wheel_only,p.wheel_deskewed,all(p.wheel_only.size()),options);
   }();
   const auto lidar_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"lidar_map_build");
-    return make_map(sim,lidar.poses,p.raw_lidar,lidar.mapped);
+    return make_map(sim,lidar.poses,p.raw_lidar,lidar.mapped,options);
   }();
   const auto fused_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"gyro_map_build");
-    return make_map(sim,p.gyro_wheel,p.gyro_deskewed,all(p.gyro_wheel.size()));
+    return make_map(sim,p.gyro_wheel,p.gyro_deskewed,all(p.gyro_wheel.size()),options);
   }();
   const auto matched_map=[&]{
     slam::fusion::PipelineProfiler::Scope timing(profiler,"fused_map_build");
-    return make_map(sim,matched.poses,p.gyro_deskewed,all(matched.poses.size()),&profiler);
+    return make_map(sim,matched.poses,p.gyro_deskewed,all(matched.poses.size()),options,&profiler);
   }();
   export_bundle(directory/"wheel_only.slammap",wheel_map);
   export_bundle(directory/"lidar_only.slammap",lidar_map);
   export_bundle(directory/"gyro_wheel.slammap",fused_map);
   export_bundle(directory/"fused_scan_matched.slammap",matched_map);
   export_trajectories(directory/"trajectories.json",sim,p,lidar,matched,graph);
-  export_replay(directory/"fusion_replay.json",sim,p,lidar,matched,graph);
+  export_replay(directory/"fusion_replay.json",sim,p,lidar,matched,graph,options);
+  export_lidar_match_audit(directory/"lidar_only_match_audit.json",lidar,options);
   std::optional<slam::mapping::MapBundle> graph_map;
   if(!graph.poses.empty()) {
     {
       slam::fusion::PipelineProfiler::Scope timing(profiler,"graph_map_build");
-      graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()));
+      graph_map=make_map(sim,graph.poses,p.gyro_deskewed,all(graph.poses.size()),options);
     }
     export_bundle(directory/"graph_optimized.slammap",*graph_map);
   }
@@ -681,16 +1650,55 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
      <<"\n\"stationary_calibration_ticks\":"<<p.integrated.stationary_ticks<<","
      <<"\n\"full_se2_deskew_verified\":true,"
      <<"\n\"matcher\":\""<<matched.backend<<"\","
+     <<"\n\"match_every\":"<<options.match_every<<","
+     <<"\n\"field_every\":"<<options.field_every<<","
+     <<"\n\"map_stride\":"<<options.map_stride<<","
+     <<"\n\"match_stride\":"<<options.match_stride<<","
+     <<"\n\"match_offset\":"<<options.match_offset<<","
+     <<"\n\"distance_truncation_m\":"<<options.distance_truncation_m<<","
+     <<"\n\"heldout_skipped\":"<<matched.skipped<<","
+     <<"\n\"heldout_matching_input_hits_total\":"<<matched.matching_input_hits_total<<","
+     <<"\n\"lidar_only_matching_input_hits_total\":"<<lidar.matching_input_hits_total<<","
      <<"\n\"heldout_attempted\":"<<matched.attempted<<","
      <<"\n\"heldout_accepted\":"<<matched.accepted<<","
      <<"\n\"heldout_rejected\":"<<matched.rejected<<","
      <<"\n\"lidar_only_accepted\":"<<lidar.accepted<<","
-     <<"\n\"lidar_only_rejected\":"<<lidar.rejected<<",";
+     <<"\n\"lidar_only_rejected\":"<<lidar.rejected<<","
+     <<"\n\"lidar_only_skipped\":"<<lidar.skipped<<","
+     <<"\n\"lidar_only_field_rebuilds\":"<<lidar.field_rebuilds<<","
+     <<"\n\"lidar_only_support_probe\":"<<(options.lidar_only_support_probe?"true":"false")<<","
+     <<"\n\"lidar_only_bootstrap\":"<<(options.lidar_only_bootstrap?"true":"false")<<","
+     <<"\n\"lidar_only_predict_first\":"<<(options.lidar_only_predict_first?"true":"false")<<","
+     <<"\n\"lidar_only_predicted_edt_accepted\":"<<lidar.predicted_edt_accepted<<","
+     <<"\n\"lidar_only_edt_prediction_disagreements\":"<<lidar.edt_prediction_disagreements<<","
+     <<"\n\"lidar_only_bootstrap_attempted\":"<<lidar.bootstrap_attempted<<","
+     <<"\n\"lidar_only_bootstrap_accepted\":"<<lidar.bootstrap_accepted<<","
+     <<"\n\"lidar_only_bootstrap_rejected\":"<<lidar.bootstrap_rejected<<","
+     <<"\n\"lidar_only_edt_accepted\":"<<lidar.edt_accepted<<","
+     <<"\n\"lidar_only_edt_refined_accepted\":"<<lidar.edt_refined_accepted<<","
+     <<"\n\"lidar_only_before_solver_insufficient_support\":"
+     <<std::count_if(lidar.audit.begin(),lidar.audit.end(),
+         [](const LidarMatchAudit& a){
+           return a.reason=="insufficient_support"&&!a.candidate_evaluated&&
+                  a.residual_blocks==0;
+         })<<","
+     <<"\n\"lidar_only_after_solver_insufficient_support\":"
+     <<std::count_if(lidar.audit.begin(),lidar.audit.end(),
+         [](const LidarMatchAudit& a){
+           return a.reason=="insufficient_support"&&a.candidate_evaluated;
+         })<<",";
   write_rejections(out,"heldout_rejection_reasons",matched.rejections);
   write_rejections(out,"lidar_only_rejection_reasons",lidar.rejections);
   out<<"\n\"graph_status\":\""<<graph.status<<"\","
      <<"\n\"loop_measurements\":\""<<(synthetic_loops?
-          "independently_simulated_relative_pose":"none")<<"\","
+          "independently_simulated_relative_pose":options.lidar_loop_closure?
+          "lidar_scan_registration_correlated":"none")<<"\","
+     <<"\n\"lidar_loop_closure\":"<<(options.lidar_loop_closure?"true":"false")<<","
+     <<"\n\"graph_lidar_loop_nearby_pairs\":"<<graph.lidar_nearby_pairs<<","
+     <<"\n\"graph_lidar_loop_geometry_verified\":"<<graph.lidar_geometry_verified<<","
+     <<"\n\"graph_lidar_loop_redundant_suppressed\":"<<graph.lidar_redundant_suppressed<<","
+     <<"\n\"graph_lidar_loop_registration_attempted\":"<<graph.lidar_registration_attempted<<","
+     <<"\n\"graph_lidar_loop_registration_verified\":"<<graph.lidar_registration_verified<<","
      <<"\n\"graph_loop_candidates\":"<<graph.loop_candidates<<","
      <<"\n\"graph_accepted_loops\":"<<graph.accepted_loops<<","
      <<"\n\"results\":{\n";
@@ -704,6 +1712,9 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
   out<<"}\n}\n";
   if(!out)throw std::runtime_error("failed writing fusion report");
   out.close();
+  if(options.mapping_ablation) {
+    export_mapping_ablation(directory,sim,p,graph,options);
+  }
   {
     std::ofstream profile(directory/"fusion_profile.json");
     if(!profile)throw std::runtime_error("failed opening fusion profiler output");
@@ -711,11 +1722,29 @@ void execute(const Simulation& sim,const std::filesystem::path& directory,
                         matched.backend,sim.scene.id);
     if(!profile)throw std::runtime_error("failed writing fusion profiler output");
   }
+  std::vector<slam::cli::ReviewFile> review_files={
+      {"report",directory/"fusion_report.json",true},
+      {"trajectories",directory/"trajectories.json",true},
+      {"matching_audit",directory/"lidar_only_match_audit.json",true},
+      {"replay",directory/"fusion_replay.json",true},
+      {"performance",directory/"fusion_profile.json",true},
+      {"fused_map",directory/"fused_scan_matched.slammap",false},
+  };
+  if(graph_map)review_files.push_back(
+      {"optimized_map",directory/"graph_optimized.slammap",false});
+  if(options.mapping_ablation)review_files.push_back(
+      {"mapping_ablation",directory/"mapping_ablation.json",true});
+  slam::cli::write_review_manifest(
+      directory/"review-manifest.json",sim.scene.id,review_files);
   std::cout<<"scene="<<sim.scene.id
            <<" frames="<<sim.reference.size()
            <<" matcher="<<matched.backend
            <<" accepted="<<matched.accepted<<"/"<<matched.attempted
            <<" graph="<<graph.status
+           <<" loop_nearby="<<graph.lidar_nearby_pairs
+           <<" loop_icp_pairs="<<graph.lidar_registration_attempted
+           <<" loop_geometry_pass="<<graph.lidar_geometry_verified
+           <<" loop_redundant="<<graph.lidar_redundant_suppressed
            <<" loops="<<graph.accepted_loops
            <<"\nreport="<<(directory/"fusion_report.json").string()<<'\n';
 }
@@ -728,9 +1757,21 @@ int main(int argc,char** argv) {
       ("scene","Synthetic scene",cxxopts::value<std::string>())
       ("output","New output directory",cxxopts::value<std::string>())
       ("synthetic-independent-loops","Enable synthetic independent loop constraints")
+      ("lidar-loop-closure","Opt-in LiDAR scan-pair factors in fused GTSAM graph (correlated evidence)")
+      ("mapping-ablation","Opt-in separate fixed-graph occupancy evidence/re-deskew and window diagnostics")
+      ("match-every","Match every N eligible scans (default 1)",cxxopts::value<std::string>())
+      ("field-every","Refresh incremental LiDAR-only EDT every N frames (default 1)",cxxopts::value<std::string>())
+      ("map-stride","Insert every Nth valid LiDAR hit into all maps (default 1)",cxxopts::value<std::string>())
+      ("match-stride","Match every Nth valid LiDAR hit (default 1)",cxxopts::value<std::string>())
+      ("match-offset","Valid-hit subsampling offset 0..63 (default 0)",cxxopts::value<std::string>())
+      ("distance-truncation","EDT cutoff in metres (default 0.7)",cxxopts::value<std::string>())
+      ("continuous-cost","Use experimental finite-cost Ceres for both matchers")
+      ("lidar-only-support-probe","Read-only local support search on first 3 LiDAR-only attempts")
+      ("lidar-only-bootstrap","Opt-in LiDAR scan-pair registration and strict EDT handover")
+      ("lidar-only-predict-first","LiDAR-only scan motion seeds Ceres before map registration (requires bootstrap)")
       ("h,help","Show help");
   cli.parse_positional({"scene","output"});
-  cli.positional_help("<apartment|warehouse> <new-output-directory>");
+  cli.positional_help("<apartment|apartment_explore|warehouse|warehouse_asymmetric|office|workshop|loft|atrium|industrial> <new-output-directory>");
   cxxopts::ParseResult args;
   try { args=cli.parse(argc,argv); }
   catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 2;}
@@ -740,17 +1781,60 @@ int main(int argc,char** argv) {
   try{
     const bool loops=args.count("synthetic-independent-loops")&&
         args["synthetic-independent-loops"].as<bool>();
-
+    FusionMatchOptions options;
+    const auto positive=[&](const char* name,std::size_t fallback,std::size_t max) {
+      return args.count(name)?posint(args[name].as<std::string>(),max):fallback;
+    };
+    options.match_every=positive("match-every",options.match_every,200);
+    options.field_every=positive("field-every",options.field_every,200);
+    options.map_stride=positive("map-stride",options.map_stride,64);
+    options.match_stride=positive("match-stride",options.match_stride,64);
+    if(args.count("match-offset")) {
+      const auto offset=args["match-offset"].as<std::string>();
+      if(offset=="0")options.match_offset=0;
+      else options.match_offset=posint(offset,63);
+    }
+    options.continuous_cost=args.count("continuous-cost")&&
+        args["continuous-cost"].as<bool>();
+    options.lidar_only_support_probe=args.count("lidar-only-support-probe")&&
+        args["lidar-only-support-probe"].as<bool>();
+    options.lidar_only_bootstrap=args.count("lidar-only-bootstrap")&&
+        args["lidar-only-bootstrap"].as<bool>();
+    options.lidar_only_predict_first=args.count("lidar-only-predict-first")&&
+        args["lidar-only-predict-first"].as<bool>();
+    options.lidar_loop_closure=args.count("lidar-loop-closure")&&
+        args["lidar-loop-closure"].as<bool>();
+    options.mapping_ablation=args.count("mapping-ablation")&&
+        args["mapping-ablation"].as<bool>();
+    if(loops&&options.lidar_loop_closure)
+      throw std::invalid_argument(
+          "choose either --synthetic-independent-loops or --lidar-loop-closure");
+    if(options.lidar_only_predict_first&&!options.lidar_only_bootstrap)
+      throw std::invalid_argument(
+          "--lidar-only-predict-first requires --lidar-only-bootstrap");
+    if(args.count("distance-truncation")) {
+      const auto value=args["distance-truncation"].as<std::string>();
+      std::size_t parsed=0;
+      const double cutoff=std::stod(value,&parsed);
+      if(parsed!=value.size()||!std::isfinite(cutoff)||cutoff<0.2||cutoff>3.0)
+        throw std::invalid_argument("distance-truncation must be finite within [0.2,3.0]");
+      options.distance_truncation_m=cutoff;
+    }
+#ifndef SLAM_FUSION_WITH_CERES
+    if(options.continuous_cost)throw std::invalid_argument(
+        "--continuous-cost requires a Ceres-enabled fusion build");
+#endif
 #ifndef SLAM_FUSION_WITH_GTSAM
-    if(loops)throw std::invalid_argument(
-      "independent synthetic loop demonstration requires a GTSAM-enabled build");
+    if(loops||options.lidar_loop_closure||options.mapping_ablation)
+      throw std::invalid_argument(
+        "loop closure or mapping ablation requires a GTSAM-enabled build");
 #endif
     slam::fusion::PipelineProfiler profiler;
     const auto simulation=[&]{
       slam::fusion::PipelineProfiler::Scope timing(profiler,"synthetic_generation");
       return generate(args["scene"].as<std::string>());
     }();
-    execute(simulation,args["output"].as<std::string>(),loops,profiler);
+    execute(simulation,args["output"].as<std::string>(),loops,profiler,options);
     return 0;
   }catch(const std::exception& e){
     std::cerr<<"offline fusion failed: "<<e.what()<<'\n';

@@ -9,15 +9,21 @@
 </head>
 <body><div class="replay-shell">
 <header class="replay-header"><a href="/" class="replay-home">◈ FUSION <strong>SLAM</strong></a>
-<span class="replay-heading">OFFLINE SENSOR FUSION <span class="dot-sep">/</span> PROCESS REPLAY</span>
+<span class="replay-heading">SYNTHETIC SENSOR FUSION <span class="dot-sep">/</span> LIDAR + SLAM REPLAY</span>
 <span class="replay-pill">SYNTHETIC · READ ONLY</span></header>
 <main class="replay-main">
-<div class="replay-intro"><div><span class="replay-eyebrow">BENCHMARK INSPECTION / 03</span><h1>Fusion replay<span class="accent-dot">.</span></h1><p>Explore actual recorded estimation events from an offline fusion run, with synchronized scans, method paths and graph diagnostics.</p></div>
+<div class="replay-intro"><div><span class="replay-eyebrow">BENCHMARK INSPECTION / 03</span><h1>LiDAR &amp; SLAM replay<span class="accent-dot">.</span></h1><p>Inspect seven synthetic scenes as raw LiDAR scans or reconstructed SLAM trajectories, including matching decisions, estimated paths and final maps.</p></div>
 <div class="fusion-links"><a class="back-map" href="/">▦ Maps</a><a class="back-map" href="/replay">▶ LiDAR sessions</a></div></div>
 <div class="replay-alert" id="fusion-alert" role="alert" hidden></div>
 <div class="replay-controls fusion-controls">
+<label>Replay view<select id="fusion-view" aria-label="LiDAR or SLAM replay"><option value="slam" selected>SLAM replay · deskewed</option><option value="lidar">LiDAR replay · scan hits</option></select></label>
 <label>Offline fusion run<select id="fusion-runs"><option value="">Scanning run directory…</option></select></label>
 <label>Final occupancy overlay<select id="fusion-map"><option value="">None — observation trail only</option></select></label>
+<label>Scan-point trajectory<select id="fusion-projection" aria-label="Estimated pose source for scan points">
+<option value="fused_scan_matched" selected>Scan-matched fusion</option>
+<option value="graph_optimized">Graph optimized</option>
+<option value="gyro_wheel">Gyro + wheel</option>
+</select></label>
 <a id="fusion-open-map" class="back-map" href="/" title="Open selected final fusion map in the Map Explorer">▦ Explore fusion map</a>
 <button type="button" id="fusion-fit">Fit scene</button><button type="button" id="fusion-refresh">↻ Refresh</button>
 </div>
@@ -45,6 +51,7 @@
 <label><input type="checkbox" id="fusion-history" checked> Accumulated hit samples</label>
 <label><input type="checkbox" id="fusion-edges" checked> Loop edges</label>
 </div>
+<div class="fusion-map-note" id="fusion-view-note" role="status">SLAM replay: gyro/wheel deskewed hits projected onto the selected estimated trajectory. Choosing a graph-optimized overlay uses its corrected poses.</div>
 <div class="fusion-map-note" id="fusion-map-note">Accumulated points are measured returns, not a reconstructed occupancy snapshot. Final map overlays are post-run results.</div>
 <div class="transport">
 <button type="button" id="fusion-play" disabled>▶ Play</button>
@@ -60,12 +67,15 @@
 <dl class="detail-list">
 <div><dt>Progress</dt><dd id="fusion-frame-no">—</dd></div>
 <div><dt>LiDAR hits / beams</dt><dd id="fusion-scan-hits">—</dd></div>
+<div><dt>Replay geometry</dt><dd id="fusion-scan-kind">—</dd></div>
+<div><dt>Graph vs scan-matched pose offset</dt><dd id="fusion-pose-shift">—</dd></div>
 <div><dt>Match decision</dt><dd id="fusion-match-status">—</dd></div>
 <div><dt>Reason</dt><dd id="fusion-match-reason">—</dd></div>
 <div><dt>Supported hits</dt><dd id="fusion-supported">—</dd></div>
 <div><dt>EDT overlap</dt><dd id="fusion-overlap">—</dd></div>
 <div><dt>Cumulative accepted</dt><dd id="fusion-match-count">—</dd></div>
 <div><dt>LiDAR map insertion</dt><dd id="fusion-insertion">—</dd></div>
+<div><dt>Loop measurement source</dt><dd id="fusion-loop-source">—</dd></div>
 <div><dt>Loop proposals (this frame)</dt><dd id="fusion-loop-status">—</dd></div>
 </dl></section>
 <section class="detail-card"><div class="panel-kicker">COMPLETED RUN SCORE</div><h2>Method comparison</h2>
@@ -80,7 +90,7 @@
 </dl><div id="fusion-profile-stages" class="fusion-scores">No profile loaded.</div>
 <p class="fusion-prof-caveat">Steady-clock measurements from a completed batch run. They exclude synthetic generation, alternative baselines, scoring and file output. Offline throughput and per-frame proxies do <strong>not</strong> validate live real-time deadlines.</p>
 </section>
-<section class="replay-caution">⚠ <strong>Offline synthetic replay.</strong> The fixed occupancy overlay and optimized graph path are <strong>final</strong> post-run results, not intermediate estimates. The scan-matching map was frozen before held-out queries. Synthetic truth is available only for independent after-the-fact scoring. No live robot tracking, controls or map publication.</section>
+<section class="replay-caution">⚠ <strong>Offline synthetic replay.</strong> Experimental LiDAR scan-loop edges reuse LiDAR observations and pose-seeded candidate search. They are correlated evidence, not an independent relative-pose sensor or certified closure. The graph-optimized trajectory and map apply to the <strong>fused gyro/wheel + scan-matched path</strong>, not the independent LiDAR-only baseline. Raw laser-frame scan points are projected at an <em>estimated</em> LiDAR-only pose for visualization; this projection is not motion-deskewed or a ground-truth world scan.  The fixed occupancy overlay and optimized graph path are <strong>final</strong> post-run results, not intermediate estimates. The scan-matching map was frozen before held-out queries. Synthetic truth is available only for independent after-the-fact scoring. No live robot tracking, controls or map publication.</section>
 </aside></div>
 <footer class="replay-footer">DRAG TO PAN · WHEEL TO ZOOM · SPACE TO PLAY/PAUSE <span>FUSFUSREPLAY1 · NO ROBOT COMMANDS</span></footer>
 </main></div></body></html>

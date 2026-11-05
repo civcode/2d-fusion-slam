@@ -69,7 +69,15 @@ bool is_plain_directory(const std::filesystem::path& path) {
   return std::filesystem::is_directory(std::filesystem::symlink_status(path,ec));
 }
 bool valid_scene(const std::string& scene) {
-  return scene=="synthetic-apartment-v1"||scene=="synthetic-warehouse-v1";
+  // Explicitly recognized synthetic fixtures only. Never trust arbitrary
+  // scene IDs from untrusted run directories.
+  static constexpr std::array<std::string_view,9> scenes{
+    "synthetic-apartment-v1", "synthetic-apartment_explore-v1",
+    "synthetic-warehouse-v1", "synthetic-office-v1",
+    "synthetic-workshop-v1", "synthetic-loft-v1",
+    "synthetic-atrium-v1", "synthetic-industrial-v1",
+    "synthetic-warehouse_asymmetric-v1"};
+  return std::find(scenes.begin(),scenes.end(),std::string_view{scene})!=scenes.end();
 }
 std::size_t size_array(const Json& j,std::size_t bound,const char* what) {
   need(j.kind==Json::Kind::array && j.array.size()<=bound,what);
@@ -142,6 +150,35 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
        t.at("scan_frame").str()=="laser_midpoint_deskewed_full_se2"&&
        t.at("frame_count").uint()==n,
        "fusion replay does not match source report");
+  // Older fusion bundles omitted these knobs, meaning match every query.
+  const std::size_t match_every=r.has("match_every")?
+      static_cast<std::size_t>(r.at("match_every").uint()):1;
+  need(match_every>=1&&match_every<=200,
+       "invalid fusion matching cadence");
+  if(t.has("match_every"))
+    need(t.at("match_every").uint()==match_every,
+         "fusion replay matching cadence mismatch");
+  for(const auto key:{"field_every","map_stride","match_stride"}) {
+    if(r.has(key)) {
+      const auto value=r.at(key).uint();
+      need(value>=1&&value<=200,"fusion matching option out of range");
+      need(t.has(key)&&t.at(key).uint()==value,
+           "fusion report/replay matching option mismatch");
+    }
+  }
+  // New beam-subset offset must agree between report and replay.
+  // Old valid phase-zero runs omit this field in both artifacts.
+  if(r.has("match_offset")||t.has("match_offset"))
+    need(r.has("match_offset")&&t.has("match_offset")&&
+         r.at("match_offset").uint()<=63 &&
+         t.at("match_offset").uint()==r.at("match_offset").uint(),
+         "fusion matching offset mismatch");
+  if(r.has("distance_truncation_m"))
+    need(t.has("distance_truncation_m")&&
+         finite(r.at("distance_truncation_m"),3.0)>=0.2&&
+         finite(t.at("distance_truncation_m"),3.0)==
+           finite(r.at("distance_truncation_m"),3.0),
+         "fusion truncation mismatch");
   const auto& result=r.at("results");
   const auto& paths=p.at("paths");
   need(result.kind==Json::Kind::object&&paths.kind==Json::Kind::object&&
@@ -167,6 +204,9 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
   need(size_array(stamps,n,"timestamp series too long")==n&&
        size_array(frames,n,"replay series too long")==n,
        "fusion timestamp and replay frame count mismatch");
+  // Raw samples are an all-or-none export version, never a partial
+  // mixture that would make the UI change sensor provenance mid-replay.
+  const bool has_raw_points=frames.at(std::size_t{0}).has("raw_points_laser");
   const auto& truth=p.at("synthetic_truth_for_scoring");
   need(size_array(truth,n,"invalid scoring-only synthetic truth")==n,
        "reference/trajectory count mismatch");
@@ -177,7 +217,8 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
   for(const auto& value:lever.array)(void)finite(value,5.0);
   (void)finite(t.at("base_from_laser_yaw_rad"),10.0);
   std::int64_t prev=-1;
-  std::size_t accepted=0,rejected=0,accepted_loops=0;
+  std::size_t accepted=0,rejected=0,skipped=0,accepted_loops=0;
+  std::size_t matching_input_hits=0;
   for(std::size_t i=0;i<n;++i) {
     const std::int64_t now=nanosecond(stamps.at(i));
     need(now>prev,"nonmonotonic fusion timeline");prev=now;
@@ -196,20 +237,40 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
       need(size_array(pt,2,"invalid replay hit point")==2,"hit must be XY");
       for(const auto& coord:pt.array)(void)finite(coord,200.0);
     }
+    // Optional raw LiDAR points (new exporter). Older traces carry only
+    // deskewed points and remain readable as SLAM replays.
+    need(frame.has("raw_points_laser")==has_raw_points,
+         "inconsistent raw LiDAR field availability across frames");
+    if(has_raw_points) {
+      const auto& raw=frame.at("raw_points_laser");
+      need(size_array(raw,720,"excessive raw LiDAR replay points")<=hits &&
+           raw.array.size()==points.array.size(),
+           "raw replay sample count does not match deskewed hit cohort");
+      for(const auto& pt:raw.array) {
+        need(size_array(pt,2,"invalid raw LiDAR hit point")==2,
+             "raw hit must be XY");
+        for(const auto& coord:pt.array)(void)finite(coord,200.0);
+      }
+    }
     const auto& m=frame.at("matching");
     const bool attempted=m.at("attempted").flag(),approved=m.at("accepted").flag();
-    need(attempted==(i%2==1)&&(!approved||attempted),
-         "frozen-map source-excluded query partition mismatched");
+    const bool eligible=i%2==1;
+    const bool expected_attempt=eligible&&(((i-1)/2)%match_every==0);
+    need(attempted==expected_attempt&&(!approved||attempted),
+         "frozen-map query matching cadence mismatched");
     const auto state=m.at("status").str();
     const auto reason=m.at("reason").str();
-    need((!attempted&&state=="training"&&
+    need((!eligible&&!attempted&&state=="training"&&
           reason=="not_evaluated_training_scan")||
+         (eligible&&!attempted&&state=="skipped"&&
+          reason=="match_cadence_skip")||
          (attempted&&approved&&state=="accepted"&&reason=="accepted")||
          (attempted&&!approved&&state=="rejected"&&
           (reason=="insufficient_support"||reason=="degenerate"||
            reason=="no_improvement"||reason=="invalid_input"||
            reason=="qualification_gate")),
          "matcher gate reason/status/acceptance mismatch");
+    if(eligible&&!attempted)++skipped;
     if(attempted){if(approved)++accepted;else ++rejected;}
     need(m.at("cumulative_accepted").uint()==accepted &&
          m.at("cumulative_rejected").uint()==rejected,
@@ -218,6 +279,10 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
       const auto overlap=finite(m.at("overlap"),1.);
       need(overlap>=0&&m.at("supported_hits").uint()<=m.at("input_hits").uint()&&
            m.at("input_hits").uint()<=4096,"matcher geometry outside limits");
+      matching_input_hits+=static_cast<std::size_t>(m.at("input_hits").uint());
+      if(m.has("solver_residual_blocks"))
+        need(m.at("solver_residual_blocks").uint()<=m.at("input_hits").uint(),
+             "Ceres objective exceeds matched beam cohort");
       const auto fingerprint=m.at("training_map_fingerprint").str();
       need(!fingerprint.empty()&&fingerprint.size()<=20&&
            (fingerprint.size()==1||fingerprint.front()!='0'),
@@ -243,14 +308,58 @@ FusionRuns::Session FusionRuns::load(const std::string& run) const {
       need(decision=="accepted"||decision=="insufficient_geometry"||
            decision=="unverified_evidence"||decision=="inconsistent"||
            decision=="duplicate_or_nearby","invalid loop status");
+      if(event.has("source")) {
+        const auto source=event.at("source").str();
+        need(source=="lidar_scan_registration"||
+             source=="independently_simulated_relative_pose",
+             "invalid loop observation source");
+        if(r.has("lidar_loop_closure")&&r.at("lidar_loop_closure").flag())
+          need(source=="lidar_scan_registration",
+               "LiDAR loop replay source mismatch");
+        if(event.has("overlap")) {
+          const auto overlap=finite(event.at("overlap"),1.);
+          need(overlap>=0.&&overlap<=1.,"invalid loop scan overlap");
+        }
+        if(event.has("registration_error_m"))
+          need(finite(event.at("registration_error_m"),100.)>=0,
+               "invalid loop scan registration error");
+      }
       if(decision=="accepted")++accepted_loops;
     }
     need(frame.at("cumulative_accepted_loops").uint()==accepted_loops,
          "invalid cumulative accepted loop count");
   }
+  if(r.has("lidar_loop_closure")&&r.at("lidar_loop_closure").flag()) {
+    need(r.at("loop_measurements").str()=="lidar_scan_registration_correlated"&&
+         r.at("graph_status").str()=="gtsam_with_lidar_scan_loop_closure"&&
+         r.at("graph_lidar_loop_registration_verified").uint()==
+             r.at("graph_loop_candidates").uint()&&
+         r.at("graph_lidar_loop_registration_attempted").uint()>=
+             r.at("graph_lidar_loop_registration_verified").uint(),
+         "LiDAR loop source/diagnostics inconsistent");
+    if(r.has("graph_lidar_loop_nearby_pairs")&&
+       r.has("graph_lidar_loop_geometry_verified")&&
+       r.has("graph_lidar_loop_redundant_suppressed")) {
+      const auto nearby=r.at("graph_lidar_loop_nearby_pairs").uint();
+      const auto attempts=r.at("graph_lidar_loop_registration_attempted").uint();
+      const auto geometries=r.at("graph_lidar_loop_geometry_verified").uint();
+      const auto redundant=r.at("graph_lidar_loop_redundant_suppressed").uint();
+      const auto factors=r.at("graph_lidar_loop_registration_verified").uint();
+      need(nearby>=attempts&&attempts>=geometries&&
+           geometries==factors+redundant&&
+           factors<=8&&attempts<=8*n,
+           "LiDAR candidate coverage and redundancy counts inconsistent");
+    }
+  }
   need(accepted==r.at("heldout_accepted").uint() &&
        rejected==r.at("heldout_rejected").uint() &&
        accepted+rejected==r.at("heldout_attempted").uint() &&
+       (!r.has("heldout_skipped")||skipped==r.at("heldout_skipped").uint()) &&
+       (!r.has("heldout_matching_input_hits_total")||
+        matching_input_hits==r.at("heldout_matching_input_hits_total").uint()) &&
+       (!r.has("lidar_only_skipped")||
+        r.at("lidar_only_skipped").uint()+r.at("lidar_only_accepted").uint()+
+        r.at("lidar_only_rejected").uint()==n-1) &&
        accepted_loops==r.at("graph_accepted_loops").uint() &&
        accepted_loops<=r.at("graph_loop_candidates").uint(),
        "replay events disagree with fusion report");

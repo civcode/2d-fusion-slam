@@ -45,6 +45,9 @@ if(BUILD_TESTING)
     add_test(NAME map_selector_browser
       COMMAND "${SLAM_NODE_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/map_selector_browser_test.js")
+    add_test(NAME fusion_replay_browser
+      COMMAND "${SLAM_NODE_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/fusion_replay_browser_test.js")
   endif()
 endif()
 
@@ -298,11 +301,32 @@ if(ZLIB_FOUND AND OpenSSL_FOUND)
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_support_aware_test.py"
           "$<TARGET_FILE:slam_fr079_offline>")
       set_tests_properties(fr079_support_aware PROPERTIES TIMEOUT 240)
+      add_test(NAME fr079_matcher_ablation
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_matcher_ablation_test.py"
+          "$<TARGET_FILE:slam_fr079_offline>")
+      set_tests_properties(fr079_matcher_ablation PROPERTIES TIMEOUT 240)
     endif()
     add_test(NAME fr079_benchmark_tools
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_benchmark_tools_test.py")
     set_tests_properties(fr079_benchmark_tools PROPERTIES TIMEOUT 60)
+    add_test(NAME fr079_matcher_beam_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_matcher_beam_tools_test.py")
+    set_tests_properties(fr079_matcher_beam_tools PROPERTIES TIMEOUT 60)
+    add_test(NAME fr079_loop_compare_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_loop_compare_tools_test.py")
+    set_tests_properties(fr079_loop_compare_tools PROPERTIES TIMEOUT 45)
+    add_test(NAME fr079_reference_benchmark_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_reference_benchmark_tools_test.py")
+    set_tests_properties(fr079_reference_benchmark_tools PROPERTIES TIMEOUT 60)
+    add_test(NAME slammap_to_pgm_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/slammap_to_pgm_tools_test.py")
+    set_tests_properties(slammap_to_pgm_tools PROPERTIES TIMEOUT 60)
     if(SLAM_FR079_LOG)
       if(TARGET slam_match_ceres)
         add_test(NAME fr079_offline_real_data
@@ -477,6 +501,43 @@ endif()
 # Uses the exact same simulator for all baselines, without feeding reference
 # poses to the estimator or rebuilding an oracle-pose map.
 option(SLAM_PROFILE_FUSION "Collect steady-clock native fusion profiling samples" ON)
+# LiDAR-to-LiDAR registration is independent of Ceres, odometry and truth.
+add_library(slam_scan_to_scan STATIC src/scan_to_scan.cpp)
+add_library(slam::scan_to_scan ALIAS slam_scan_to_scan)
+target_compile_features(slam_scan_to_scan PUBLIC cxx_std_20)
+target_include_directories(slam_scan_to_scan PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_scan_to_scan PUBLIC slam::distance_field)
+
+# Frozen local 2D LiDAR submaps and coarse-to-fine correlative matching.
+# Kept independent of the graph backend and of the sequential frontend.
+add_library(slam_scan_to_submap STATIC src/scan_to_submap.cpp)
+add_library(slam::scan_to_submap ALIAS slam_scan_to_submap)
+target_compile_features(slam_scan_to_submap PUBLIC cxx_std_20)
+target_include_directories(slam_scan_to_submap PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+target_link_libraries(slam_scan_to_submap PUBLIC slam::scan_to_scan)
+
+# FR079 post-hoc reciprocal LiDAR loop detection and GTSAM graph control.
+# The incremental frontend is unchanged unless the explicit flag is passed.
+if(TARGET slam_offline_graph AND TARGET slam_fr079_offline)
+  add_library(slam_fr079_loop STATIC src/fr079_loop_closure.cpp)
+  target_compile_features(slam_fr079_loop PUBLIC cxx_std_20)
+  target_include_directories(slam_fr079_loop PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+  target_link_libraries(slam_fr079_loop PUBLIC
+    slam::fr079_offline slam::scan_to_scan slam::scan_to_submap slam::offline_graph)
+  target_link_libraries(slam_fr079_offline PRIVATE slam_fr079_loop)
+  target_compile_definitions(slam_fr079_offline PRIVATE SLAM_FR079_WITH_GTSAM=1)
+  if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    add_test(NAME fr079_loop_experiment
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_loop_experiment_test.py"
+        "$<TARGET_FILE:slam_fr079_offline>")
+    set_tests_properties(fr079_loop_experiment PROPERTIES TIMEOUT 900)
+  endif()
+endif()
+
 add_executable(slam_offline_fusion src/offline_fusion.cpp)
 if(SLAM_PROFILE_FUSION)
   target_compile_definitions(slam_offline_fusion PRIVATE SLAM_PROFILE_FUSION=1)
@@ -484,7 +545,7 @@ endif()
 target_compile_features(slam_offline_fusion PRIVATE cxx_std_20)
 target_link_libraries(slam_offline_fusion PRIVATE
   slam::fusion_frontend slam::mapping slam::map_bundle
-  slam::match_geometry slam::map_accuracy slam_fixtures)
+  slam::match_geometry slam::scan_to_scan slam::map_accuracy slam_fixtures)
 if(TARGET slam_match_ceres)
   target_link_libraries(slam_offline_fusion PRIVATE slam::match_ceres)
   target_compile_definitions(slam_offline_fusion PRIVATE SLAM_FUSION_WITH_CERES=1)
@@ -494,6 +555,12 @@ if(TARGET slam_offline_graph)
   target_compile_definitions(slam_offline_fusion PRIVATE SLAM_FUSION_WITH_GTSAM=1)
 endif()
 if(BUILD_TESTING)
+  add_executable(slam_scan_to_scan_test tests/scan_to_scan_test.cpp)
+  target_link_libraries(slam_scan_to_scan_test PRIVATE slam::scan_to_scan)
+  add_test(NAME scan_to_scan_bootstrap COMMAND slam_scan_to_scan_test)
+  add_executable(slam_scan_to_submap_test tests/scan_to_submap_test.cpp)
+  target_link_libraries(slam_scan_to_submap_test PRIVATE slam::scan_to_submap)
+  add_test(NAME scan_to_submap_correlative COMMAND slam_scan_to_submap_test)
   add_executable(slam_fusion_profiler_test tests/fusion_profiler_test.cpp)
   target_compile_features(slam_fusion_profiler_test PRIVATE cxx_std_20)
   target_include_directories(slam_fusion_profiler_test PRIVATE
@@ -512,14 +579,51 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/offline_fusion_test.py"
         "$<TARGET_FILE:slam_offline_fusion>"
         "$<TARGET_FILE:slam_map_accuracy_cli>")
-    set_tests_properties(offline_fusion PROPERTIES TIMEOUT 240)
+    set_tests_properties(offline_fusion PROPERTIES TIMEOUT 480)
+    add_test(NAME fusion_mapping_ablation
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_mapping_ablation_test.py"
+        "$<TARGET_FILE:slam_offline_fusion>")
+    set_tests_properties(fusion_mapping_ablation PROPERTIES TIMEOUT 1800)
+    add_test(NAME fusion_match_beam_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_match_beam_tools_test.py")
+    set_tests_properties(fusion_match_beam_tools PROPERTIES TIMEOUT 30)
+    add_test(NAME fusion_loop_compare
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_loop_compare_test.py")
+    set_tests_properties(fusion_loop_compare PROPERTIES TIMEOUT 30)
+    add_test(NAME fusion_mapping_ablation_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_mapping_ablation_tools_test.py")
+    set_tests_properties(fusion_mapping_ablation_tools PROPERTIES TIMEOUT 30)
+    add_test(NAME fusion_mapping_sweep_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_mapping_sweep_tools_test.py")
+    set_tests_properties(fusion_mapping_sweep_tools PROPERTIES TIMEOUT 45)
+    add_test(NAME review_artifacts_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/review_artifacts_tools_test.py")
+    set_tests_properties(review_artifacts_tools PROPERTIES TIMEOUT 30)
+    add_test(NAME fusion_scene_diversity
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_scene_diversity_test.py"
+        "$<TARGET_FILE:slam_offline_fusion>"
+        "$<TARGET_FILE:slam_map_accuracy_cli>")
+    set_tests_properties(fusion_scene_diversity PROPERTIES TIMEOUT 480)
+    add_test(NAME fusion_diverse_routes
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fusion_diverse_routes_test.py"
+        "$<TARGET_FILE:slam_offline_fusion>"
+        "$<TARGET_FILE:slam_map_accuracy_cli>")
+    set_tests_properties(fusion_diverse_routes PROPERTIES TIMEOUT 1200)
     if(TARGET fusion_slam_demo)
       add_test(NAME fusion_replay_http
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_fusion_http.py"
           "$<TARGET_FILE:fusion_slam_demo>"
           "$<TARGET_FILE:slam_offline_fusion>")
-      set_tests_properties(fusion_replay_http PROPERTIES TIMEOUT 240)
+      set_tests_properties(fusion_replay_http PROPERTIES TIMEOUT 1200)
       if(TARGET slam_fr079_offline)
         add_test(NAME fr079_offline_http
           COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/web/test_fr079_slam_http.py"
@@ -662,6 +766,21 @@ if(BUILD_TESTING)
   add_executable(slam_fixtures_smoke tests/fixtures_smoke.cpp)
   target_link_libraries(slam_fixtures_smoke PRIVATE slam_fixtures)
   add_test(NAME fixtures_smoke COMMAND slam_fixtures_smoke)
+  add_executable(slam_review_artifacts_test tests/review_artifacts_test.cpp)
+  target_compile_features(slam_review_artifacts_test PRIVATE cxx_std_20)
+  target_include_directories(slam_review_artifacts_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  add_test(NAME review_artifacts_cpp COMMAND slam_review_artifacts_test)
+
+  add_executable(slam_workshop_contour_dump tests/workshop_contour_dump.cpp)
+  target_link_libraries(slam_workshop_contour_dump PRIVATE slam_fixtures)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME workshop_contour_parity
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/workshop_contour_parity_test.py"
+        "$<TARGET_FILE:slam_workshop_contour_dump>")
+    set_tests_properties(workshop_contour_parity PROPERTIES TIMEOUT 30)
+  endif()
 
   add_executable(slam_core_smoke tests/core_smoke.cpp)
   target_link_libraries(slam_core_smoke PRIVATE slam::core)

@@ -24,6 +24,17 @@ def main():
         log.write_text(carmen_fixture())
         run(slam, log, root / "fr079-estimated", "--reference",
             "--match-every", "3", "--field-every", "5")
+        # New directory convention must be indexed without copying maps.
+        run(slam, log, root / "fr079-folder", "--reference",
+            "--run-directory", "--match-every", "3", "--field-every", "5")
+        refused = run(slam, log, root / "fr079-folder", "--reference",
+                      "--run-directory", expected_success=False)
+        assert "already exists" in refused.stderr or "refusing overwrite" in refused.stderr
+        assert (root / "fr079-folder" / "fr079-folder.slammap").is_file()
+        assert (root / "fr079-folder" / "fr079-folder.review.json").is_file()
+        nested_manifest = json.loads((root / "fr079-folder" /
+                                      "fr079-folder.review.json").read_text())
+        assert nested_manifest["format"] == "SLAM_REVIEW1"
         proc = subprocess.Popen(
             [str(viewer), "--data-dir", str(root), "--fusion-dir", str(root),
              "--port", "0"],
@@ -42,6 +53,12 @@ def main():
 
             maps = json.loads(get("/api/maps")[0])
             assert "fr079-estimated.slammap" in [m["id"] for m in maps["maps"]]
+            nested_map = "fr079-folder@fr079-folder.slammap"
+            assert nested_map in [m["id"] for m in maps["maps"]]
+            nested_meta = json.loads(get("/api/maps/fr079-folder%40fr079-folder.slammap")[0])
+            nested_img, _ = get("/api/maps/fr079-folder%40fr079-folder.slammap/image.png")
+            assert nested_img.startswith(b"\x89PNG\r\n\x1a\n")
+            assert nested_meta["truth_class"] == "estimated_trajectory_no_independent_ground_truth"
             meta = json.loads(get("/api/maps/fr079-estimated.slammap")[0])
             assert meta["truth_class"] == \
                 "estimated_trajectory_no_independent_ground_truth"
@@ -50,6 +67,17 @@ def main():
             assert mime == "image/png" and img.startswith(b"\x89PNG\r\n\x1a\n")
             sessions = json.loads(get("/api/replays")[0])
             assert "fr079-estimated.slamreplay.json" in sessions["sessions"]
+            assert ("fr079-folder@fr079-folder.slamreplay.json"
+                    in sessions["sessions"])
+            nested_replay = json.loads(get(
+                "/api/replays/fr079-folder%40fr079-folder.slamreplay.json")[0])
+            assert nested_replay["frame_count"] == 55
+            nested_frames = json.loads(get(
+                "/api/replays/fr079-folder%40fr079-folder.slamreplay.json/frames")[0])
+            assert len(nested_frames["frames"]) == 55
+            assert json.loads(get(
+                "/api/replays/fr079-folder%40fr079-folder.slamreplay.json/frame/10")[0])[
+                "index"] == 10
             replay = json.loads(get(
                 "/api/replays/fr079-estimated.slamreplay.json")[0])
             assert replay["frame_count"] == 55

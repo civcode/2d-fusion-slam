@@ -120,6 +120,28 @@ class OfflineFusionExperiment(unittest.TestCase):
                                                "no_improvement", "invalid_input", "qualification_gate"})
         self.assertEqual(report["lidar_only_accepted"] + report["lidar_only_rejected"],
                          report["frames"] - 1)
+        audit = json.loads((folder / "lidar_only_match_audit.json").read_text())
+        self.assertEqual(audit["format"], "FUSLIDARAUDIT1")
+        self.assertFalse(audit["ground_truth_used"])
+        self.assertFalse(audit["support_probe_read_only"])
+        self.assertEqual(audit["attempts"],
+                         report["lidar_only_accepted"] + report["lidar_only_rejected"])
+        self.assertEqual(len(audit["frames"]), audit["attempts"])
+        self.assertEqual(sum(int(f["accepted"]) for f in audit["frames"]),
+                         report["lidar_only_accepted"])
+        self.assertEqual(
+            sum(f["status"] == "insufficient_support" and
+                not f["candidate_evaluated"] and
+                f["solver_residual_blocks"] == 0 for f in audit["frames"]),
+            report["lidar_only_before_solver_insufficient_support"])
+        self.assertEqual(
+            sum(f["status"] == "insufficient_support" and
+                f["candidate_evaluated"] for f in audit["frames"]),
+            report["lidar_only_after_solver_insufficient_support"])
+        self.assertTrue(all(f["input_beams"] > 0 and
+                            0 <= f["seed_overlap"] <= 1 and
+                            f["seed_supported_hits"] <= f["input_beams"]
+                            for f in audit["frames"]))
         self.assertIn(report["matcher"],
                       ("ceres", "geometry_reference_fallback"))
         self.assertEqual(report["loop_measurements"], "none")
@@ -193,6 +215,253 @@ class OfflineFusionExperiment(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.scene("warehouse", root)
 
+    def test_matching_options_apply_to_all_synthetic_maps(self):
+        # These are both available scenes; mapping stride affects all maps,
+        # matching cadence/stride affects both held-out and LiDAR-only paths.
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                folder = pathlib.Path(root) / "tuned"
+                result = run(
+                    EXE, scene, str(folder),
+                    "--match-every", "3", "--field-every", "7",
+                    "--map-stride", "2", "--match-stride", "2",
+                    "--distance-truncation", "0.5")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads((folder / "fusion_report.json").read_text())
+                trace = json.loads((folder / "fusion_replay.json").read_text())
+                self.assertEqual(report["match_every"], 3)
+                self.assertEqual(report["field_every"], 7)
+                self.assertEqual(report["map_stride"], 2)
+                self.assertEqual(report["match_stride"], 2)
+                self.assertEqual(report["match_offset"], 0)
+                self.assertEqual(report["distance_truncation_m"], 0.5)
+                self.assertEqual(trace["match_every"], 3)
+                self.assertEqual(trace["field_every"], 7)
+                self.assertEqual(trace["map_stride"], 2)
+                self.assertEqual(trace["match_stride"], 2)
+                self.assertEqual(report["heldout_attempted"] +
+                                 report["heldout_skipped"], report["frames"] // 2)
+                self.assertEqual(report["lidar_only_accepted"] +
+                                 report["lidar_only_rejected"] +
+                                 report["lidar_only_skipped"], report["frames"] - 1)
+                self.assertGreater(report["lidar_only_field_rebuilds"], 1)
+                self.assertLess(report["lidar_only_field_rebuilds"],
+                                report["frames"] - 1)
+                for i, frame in enumerate(trace["frames"]):
+                    attempted = i % 2 == 1 and ((i-1)//2) % 3 == 0
+                    self.assertEqual(frame["matching"]["attempted"], attempted)
+                    if i % 2 and not attempted:
+                        self.assertEqual(frame["matching"]["status"], "skipped")
+                profile = json.loads((folder / "fusion_profile.json").read_text())
+                if profile["profiled"]:
+                    self.assertEqual(
+                        profile["stages"]["heldout_scan_match"]["calls"],
+                        report["heldout_attempted"])
+                for name in report["results"]:
+                    self.assertTrue((folder / f"{name}.slammap").is_file())
+
+    def test_lidar_only_support_probe_is_read_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            for tag, flags in (("baseline", ()), ("probed", ("--lidar-only-support-probe",))):
+                result = run(EXE, "apartment", str(pathlib.Path(root) / tag), *flags)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            baseline = json.loads(
+                (pathlib.Path(root) / "baseline" / "fusion_report.json").read_text())
+            probed = json.loads(
+                (pathlib.Path(root) / "probed" / "fusion_report.json").read_text())
+            self.assertFalse(baseline["lidar_only_support_probe"])
+            self.assertTrue(probed["lidar_only_support_probe"])
+            self.assertEqual(baseline["lidar_only_accepted"],probed["lidar_only_accepted"])
+            self.assertEqual(baseline["lidar_only_rejected"],probed["lidar_only_rejected"])
+            for name in baseline["results"]:
+                self.assertEqual(
+                    baseline["results"][name]["map"]["map_fingerprint"],
+                    probed["results"][name]["map"]["map_fingerprint"])
+            audit = json.loads(
+                (pathlib.Path(root) / "probed" / "lidar_only_match_audit.json").read_text())
+            self.assertTrue(audit["support_probe_read_only"])
+            self.assertEqual(len(audit["frames"]),probed["frames"]-1)
+            self.assertTrue(all(f["probe_poses"] == 13*13*9
+                                for f in audit["frames"][:3]))
+            self.assertTrue(all(f["probe_poses"] == 0
+                                for f in audit["frames"][3:]))
+            self.assertTrue(all(f["probe_ranked_poses"] <=
+                                f["probe_supported_poses"] <= f["probe_poses"]
+                                for f in audit["frames"]))
+
+    def test_lidar_only_scan_to_scan_bootstrap(self):
+        # Compare each bootstrapped experiment to the old estimator, keeping
+        # both scenes' gyro/wheel, held-out and graph paths unchanged.
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                before = pathlib.Path(root) / "without"
+                after = pathlib.Path(root) / "with"
+                for folder, flags in (
+                    (before, ()),
+                    (after, ("--lidar-only-bootstrap",)),
+                ):
+                    process = run(EXE, scene, str(folder), *flags)
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                old = json.loads((before / "fusion_report.json").read_text())
+                new = json.loads((after / "fusion_report.json").read_text())
+                self.assertFalse(old["lidar_only_bootstrap"])
+                self.assertTrue(new["lidar_only_bootstrap"])
+                self.assertEqual(old["lidar_only_accepted"], 0)
+                self.assertEqual(old["lidar_only_bootstrap_accepted"], 0)
+                self.assertGreater(new["lidar_only_bootstrap_attempted"], 0)
+                self.assertGreater(new["lidar_only_bootstrap_accepted"], 0)
+                self.assertEqual(new["lidar_only_bootstrap_attempted"],
+                                 new["lidar_only_bootstrap_accepted"] +
+                                 new["lidar_only_bootstrap_rejected"])
+                self.assertEqual(new["lidar_only_accepted"],
+                                 new["lidar_only_edt_accepted"] +
+                                 new["lidar_only_bootstrap_accepted"])
+                self.assertEqual(new["lidar_only_accepted"] +
+                                 new["lidar_only_rejected"] +
+                                 new["lidar_only_skipped"], new["frames"]-1)
+                self.assertGreater(
+                    new["results"]["lidar_only"]["map"]["counts"]["known"],
+                    old["results"]["lidar_only"]["map"]["counts"]["known"])
+                # Independent simulator reference is used only for scoring,
+                # not registration. The prior baseline is frozen at its first
+                # pose, so any bootstrapping that worsens that trajectory
+                # materially must fail regression rather than count as fixed.
+                self.assertLess(
+                    new["results"]["lidar_only"]["translation_rmse_m"],
+                    .9 * old["results"]["lidar_only"]["translation_rmse_m"])
+                for name in ("wheel_only", "gyro_wheel", "fused_scan_matched"):
+                    self.assertEqual(
+                        old["results"][name]["map"]["map_fingerprint"],
+                        new["results"][name]["map"]["map_fingerprint"])
+                old_paths = json.loads((before / "trajectories.json").read_text())
+                new_paths = json.loads((after / "trajectories.json").read_text())
+                for name, path in old_paths["paths"].items():
+                    if name != "lidar_only":
+                        self.assertEqual(path,new_paths["paths"][name])
+                audit = json.loads(
+                    (after / "lidar_only_match_audit.json").read_text())
+                self.assertTrue(audit["lidar_only_bootstrap"])
+                self.assertEqual(
+                    sum(row["registration_method"] in
+                        ("scan_to_scan","edt_refined") for row in audit["frames"]),
+                    new["lidar_only_bootstrap_accepted"])
+                self.assertTrue(all(
+                    row["registration_forward_overlap"]>=.65 and
+                    row["registration_reverse_overlap"]>=.65 and
+                    row["registration_error_m"]<=.20 and
+                    row["registration_translation_m"]<=.90 and
+                    row["registration_yaw_rad"]<=.32
+                    for row in audit["frames"]
+                    if row["registration_method"] in ("scan_to_scan","edt_refined")))
+                self.assertTrue(all(row["accepted"] ==
+                                    (row["status"] == "accepted")
+                                    for row in audit["frames"]))
+
+    def test_lidar_prediction_precedes_edt_and_is_isolated(self):
+        # These controlled scenes can be evaluated after localization; their
+        # synthetic truth is never given to a registration or motion predictor.
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                prior=pathlib.Path(root)/"prior"
+                predicted=pathlib.Path(root)/"predict"
+                common=("--lidar-only-bootstrap", "--match-stride", "1")
+                for folder, flags in (
+                    (prior,common),
+                    (predicted,common+("--lidar-only-predict-first",)),
+                ):
+                    process=run(EXE,scene,str(folder),*flags)
+                    self.assertEqual(process.returncode,0,process.stderr)
+                old=json.loads((prior/"fusion_report.json").read_text())
+                new=json.loads((predicted/"fusion_report.json").read_text())
+                self.assertFalse(old["lidar_only_predict_first"])
+                self.assertTrue(new["lidar_only_predict_first"])
+                self.assertTrue(new["lidar_only_bootstrap"])
+                self.assertGreater(new["lidar_only_accepted"],0)
+                self.assertEqual(
+                    new["lidar_only_accepted"],
+                    new["lidar_only_edt_accepted"]+
+                    new["lidar_only_bootstrap_accepted"])
+                self.assertEqual(
+                    new["lidar_only_bootstrap_attempted"],
+                    new["lidar_only_bootstrap_accepted"]+
+                    new["lidar_only_bootstrap_rejected"])
+                self.assertLessEqual(
+                    new["lidar_only_predicted_edt_accepted"],
+                    new["lidar_only_edt_accepted"])
+                for name in ("wheel_only","gyro_wheel","fused_scan_matched"):
+                    self.assertEqual(
+                        old["results"][name]["map"]["map_fingerprint"],
+                        new["results"][name]["map"]["map_fingerprint"])
+                paths_before=json.loads((prior/"trajectories.json").read_text())
+                paths_after=json.loads((predicted/"trajectories.json").read_text())
+                for name in paths_before["paths"]:
+                    if name!="lidar_only":
+                        self.assertEqual(
+                            paths_before["paths"][name],paths_after["paths"][name])
+                audit=json.loads(
+                    (predicted/"lidar_only_match_audit.json").read_text())
+                self.assertTrue(audit["lidar_only_predict_first"])
+                self.assertEqual(audit["attempts"],new["frames"]-1)
+                self.assertTrue(all(
+                    row["used_scan_prediction"] for row in audit["frames"]))
+                self.assertEqual(
+                    sum(row["registration_method"]=="edt_predicted"
+                        for row in audit["frames"]),
+                    new["lidar_only_predicted_edt_accepted"])
+                self.assertEqual(
+                    sum(row["edt_prediction_disagreed"] for row in audit["frames"]),
+                    new["lidar_only_edt_prediction_disagreements"])
+                self.assertTrue(all(
+                    row["predicted_edt_translation_delta_m"]<=.12+1e-9 and
+                    row["predicted_edt_yaw_delta_rad"]<=.075+1e-9
+                    for row in audit["frames"]
+                    if row["registration_method"]=="edt_predicted"))
+                # The first warehouse scan's independent synthetic motion
+                # is ~0.303 m. It is checked AFTER the run, never seeded.
+                if scene=="warehouse":
+                    t=paths_after["synthetic_truth_for_scoring"]
+                    e=paths_after["paths"]["lidar_only"]
+                    actual=math.hypot(t[1][0]-t[0][0],t[1][1]-t[0][1])
+                    recovered=math.hypot(e[1][0]-e[0][0],e[1][1]-e[0][1])
+                    self.assertAlmostEqual(actual,.303,delta=.02)
+                    self.assertAlmostEqual(recovered,actual,delta=.10)
+
+    def test_continuous_cost_for_both_scenes_or_fail_closed(self):
+        for scene in ("apartment", "warehouse"):
+            with self.subTest(scene=scene), tempfile.TemporaryDirectory() as root:
+                folder = pathlib.Path(root) / "continuous"
+                result = run(EXE, scene, str(folder),
+                             "--continuous-cost", "--match-every", "2",
+                             "--match-stride", "2")
+                if result.returncode != 0:
+                    self.assertIn("Ceres-enabled", result.stderr)
+                    self.assertFalse(folder.exists())
+                    continue
+                report = json.loads((folder / "fusion_report.json").read_text())
+                trace = json.loads((folder / "fusion_replay.json").read_text())
+                self.assertEqual(report["matcher"], "ceres_continuous_cost")
+                self.assertEqual(trace["matcher"], report["matcher"])
+                self.assertEqual(report["match_every"], 2)
+                self.assertEqual(report["match_stride"], 2)
+                self.assertEqual(report["heldout_attempted"] +
+                                 report["heldout_skipped"], report["frames"] // 2)
+
+    def test_tuning_rejects_invalid_options_before_writing(self):
+        bad = (("--lidar-only-predict-first",), ("--match-every", "0"), ("--match-every", "201"),
+               ("--match-stride", "0"), ("--match-stride", "65"),
+               ("--map-stride", "-1"), ("--field-every", "0"),
+               ("--match-offset", "-1"), ("--match-offset", "64"),
+               ("--match-offset", "00"),
+               ("--distance-truncation", "nan"),
+               ("--distance-truncation", "3.1"))
+        with tempfile.TemporaryDirectory() as root:
+            for i, flags in enumerate(bad):
+                with self.subTest(flags=flags):
+                    dest = pathlib.Path(root) / f"invalid-{i}"
+                    result = run(EXE, "apartment", str(dest), *flags)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(dest.exists())
+
     def test_explicit_independent_synthetic_loop_source(self):
         # No fake loop closures should be silently generated by default.
         with tempfile.TemporaryDirectory() as root:
@@ -211,6 +480,99 @@ class OfflineFusionExperiment(unittest.TestCase):
             self.assertLessEqual(report["graph_accepted_loops"],
                                  report["graph_loop_candidates"])
             self.assertIn("graph_optimized", report["results"])
+
+    def test_opt_in_lidar_scan_loop_closure(self):
+        # Geometric closures are not the independent simulated loop sensor.
+        # Without an enabled graph backend, the flag must fail before writing.
+        with tempfile.TemporaryDirectory() as root:
+            prior=pathlib.Path(root)/"baseline"
+            proposed=pathlib.Path(root)/"lidar-loops"
+            args=("--lidar-only-bootstrap",
+                  "--lidar-only-predict-first","--match-stride","1")
+            baseline=run(EXE,"office",str(prior),*args)
+            self.assertEqual(baseline.returncode,0,baseline.stderr)
+            baseline_report=json.loads((prior/"fusion_report.json").read_text())
+            trial=run(EXE,"office",str(proposed),*args,"--lidar-loop-closure")
+            if baseline_report["graph_status"]=="gtsam_not_built":
+                self.assertNotEqual(trial.returncode,0)
+                self.assertIn("GTSAM",trial.stderr)
+                self.assertFalse(proposed.exists())
+                return
+            self.assertEqual(trial.returncode,0,trial.stderr)
+            new=json.loads((proposed/"fusion_report.json").read_text())
+            before=json.loads((prior/"trajectories.json").read_text())
+            after=json.loads((proposed/"trajectories.json").read_text())
+            self.assertTrue(new["lidar_loop_closure"])
+            self.assertEqual(new["loop_measurements"],
+                             "lidar_scan_registration_correlated")
+            self.assertEqual(new["graph_status"],
+                             "gtsam_with_lidar_scan_loop_closure")
+            self.assertGreater(new["graph_lidar_loop_registration_attempted"],0)
+            self.assertGreaterEqual(new["graph_lidar_loop_nearby_pairs"],
+                                    new["graph_lidar_loop_registration_attempted"])
+            self.assertGreaterEqual(new["graph_lidar_loop_registration_attempted"],
+                                    new["graph_lidar_loop_geometry_verified"])
+            self.assertEqual(
+                new["graph_lidar_loop_geometry_verified"],
+                new["graph_lidar_loop_registration_verified"] +
+                new["graph_lidar_loop_redundant_suppressed"])
+            self.assertLessEqual(new["graph_lidar_loop_registration_verified"],8)
+            self.assertLessEqual(new["graph_lidar_loop_registration_verified"],
+                                 new["graph_lidar_loop_registration_attempted"])
+            self.assertEqual(new["graph_lidar_loop_registration_verified"],
+                             new["graph_loop_candidates"])
+            self.assertLessEqual(new["graph_accepted_loops"],
+                                 new["graph_loop_candidates"])
+            for name in ("wheel_only","gyro_wheel","fused_scan_matched","lidar_only"):
+                self.assertEqual(before["paths"][name],after["paths"][name])
+                self.assertEqual(baseline_report["results"][name]["map"]["map_fingerprint"],
+                                 new["results"][name]["map"]["map_fingerprint"])
+            replay=json.loads((proposed/"fusion_replay.json").read_text())
+            events=[e for frame in replay["frames"] for e in frame["loop_events"]]
+            self.assertTrue(all(e["source"]=="lidar_scan_registration" for e in events))
+            self.assertEqual(sum(e["decision"]=="accepted" for e in events),
+                             new["graph_accepted_loops"])
+            self.assertGreaterEqual(
+                new["graph_lidar_loop_registration_attempted"],len(events))
+            self.assertGreaterEqual(len(events),new["graph_loop_candidates"])
+            self.assertTrue(all(e["to"]>e["from"]+39 for e in events))
+            self.assertIn("graph_optimized",after["paths"])
+            # Neither the independent loop sensor nor its oracle
+            # simulator measurements may be used by this experiment.
+            self.assertNotEqual(new["loop_measurements"],
+                                "independently_simulated_relative_pose")
+            conflicting=pathlib.Path(root)/"conflicting"
+            rejected=run(EXE,"office",str(conflicting),
+                         "--synthetic-independent-loops","--lidar-loop-closure")
+            self.assertNotEqual(rejected.returncode,0)
+            self.assertFalse(conflicting.exists())
+
+    def test_asymmetric_warehouse_revisits_get_multiple_chances(self):
+        # An endpoint closure must not block the rest of the final scan
+        # sequence. We assert candidate *coverage* rather than claiming
+        # multiple independent correct loop constraints or lower RMSE.
+        with tempfile.TemporaryDirectory() as root:
+            run_dir=pathlib.Path(root)/"warehouse-loops"
+            result=run(EXE,"warehouse_asymmetric",str(run_dir),
+                       "--lidar-loop-closure","--match-stride","1")
+            if result.returncode!=0 and "GTSAM" in result.stderr:
+                self.skipTest("optional GTSAM backend not compiled")
+            self.assertEqual(result.returncode,0,result.stderr)
+            report=json.loads((run_dir/"fusion_report.json").read_text())
+            self.assertGreater(report["graph_lidar_loop_nearby_pairs"],1)
+            self.assertGreater(report["graph_lidar_loop_registration_attempted"],1)
+            self.assertLessEqual(report["graph_loop_candidates"],8)
+            replay=json.loads((run_dir/"fusion_replay.json").read_text())
+            events=[e for frame in replay["frames"] for e in frame["loop_events"]]
+            proposals=[e for e in events if e["decision"]=="accepted"]
+            self.assertEqual(len(proposals),report["graph_accepted_loops"])
+            self.assertTrue(all(e["to"]>e["from"]+40 for e in events))
+            # Multiple accepted factors must not reinforce a single
+            # almost-identical early and late scan pair.
+            for index,a in enumerate(proposals):
+                for b in proposals[index+1:]:
+                    self.assertGreaterEqual(abs(a["from"]-b["from"]),6)
+                    self.assertGreaterEqual(abs(a["to"]-b["to"]),6)
 
     def test_repeatability_refusal_and_provenance(self):
         with tempfile.TemporaryDirectory() as root:

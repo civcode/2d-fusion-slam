@@ -89,6 +89,9 @@ MatchResult match_reference(std::shared_ptr<const mapping::DistanceField> field,
   Pose2 current = initial;
   auto now = compute(*field, points, current, settings);
   result.diagnostics = now.diagnostics;
+  result.seed_supported_hits=now.diagnostics.supported_hits;
+  result.seed_overlap=now.diagnostics.overlap;
+  result.seed_full_rank=now.diagnostics.full_rank;
   if (now.diagnostics.supported_hits < settings.min_supported_hits ||
       now.diagnostics.overlap < settings.minimum_overlap) {
     result.status = MatchStatus::insufficient_support;

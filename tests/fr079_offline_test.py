@@ -16,10 +16,11 @@ import tempfile
 
 
 def carmen_fixture(*, corrupt_laser=False, perturb_odom=False,
-                   perturb_future_scan=False, reverse_time=False) -> str:
+                   perturb_future_scan=False, reverse_time=False,
+                   frames=55) -> str:
     lines = ["PARAM fixture=offline_slam"]
     walls = (0.0, 6.0, 0.0, 5.0)
-    for i in range(55):
+    for i in range(frames):
         a = 2 * math.pi * i / 55
         x, y = 3 + 1.25 * math.cos(a), 2.5 + 1.0 * math.sin(a)
         yaw = a + math.pi / 2
@@ -49,7 +50,7 @@ def carmen_fixture(*, corrupt_laser=False, perturb_odom=False,
             if perturb_future_scan and i >= 36:
                 dist *= 0.88
             ranges.append(f"{dist:.6f}")
-        t = 1710000000 + (54 - i if reverse_time else i) * 0.15
+        t = 1710000000 + (frames - 1 - i if reverse_time else i) * 0.15
         # Logged laser poses are deliberately not relied upon as truth.
         lx = x + (200.0 if corrupt_laser else 0.0)
         ly = y - (300.0 if corrupt_laser else 0.0)
@@ -88,6 +89,8 @@ def validate(prefix: Path, expected_scans: int):
     assert report["map_frame_verified"] is False
     assert report["per_beam_time_verified"] is False
     assert report["pose_graph_optimized"] is False
+    assert report["map_preview"] == {
+        "source": "frontend", "fingerprint": report["map"]["fingerprint"]}
     assert report["loop_closures"] == 0
     assert report["realtime_deadlines_verified"] is False
     assert report["map"]["revision"] == report["inserted_scans"]

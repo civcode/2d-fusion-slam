@@ -169,9 +169,10 @@ std::vector<std::uint8_t> rasterize_reference_walls(
   return wall_cells;
 }
 
-MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
+MapAccuracyReport evaluate_map_accuracy_impl(const mapping::MapBundle& generated,
                                        const fixtures::Scene& scene,
-                                       const MapAccuracyOptions& options) {
+                                       const MapAccuracyOptions& options,
+                                       const std::vector<std::uint8_t>* region) {
   if (!generated.snapshot ||
       (generated.provenance.truth_class != "synthetic_exact" &&
        generated.provenance.truth_class != "synthetic_estimated") ||
@@ -184,10 +185,20 @@ MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
       options.free_threshold_log_odds > options.occupied_threshold_log_odds)
     throw std::invalid_argument("invalid occupancy classification thresholds");
   const auto& g = generated.snapshot->config();
-  const auto truth = rasterize_reference_walls(scene, g, options.maximum_cells);
+  auto truth = rasterize_reference_walls(scene, g, options.maximum_cells);
   const auto& cells = generated.snapshot->cells();
   if (cells.size() != truth.size())
     throw std::invalid_argument("snapshot dimensions/cells mismatch");
+  std::size_t region_count = cells.size();
+  if (region) {
+    if(region->size()!=cells.size()||
+       std::any_of(region->begin(),region->end(),
+          [](std::uint8_t item){return item>1;}))
+      throw std::invalid_argument("invalid region mask shape or contents");
+    region_count = std::count(region->begin(),region->end(),std::uint8_t{1});
+    if(!region_count)
+      throw std::invalid_argument("empty evaluation region");
+  }
   std::vector<std::uint8_t> predicted(cells.size(), 0);
   MapAccuracyReport r;
   r.map_fingerprint = generated.snapshot->fingerprint();
@@ -196,6 +207,10 @@ MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
   r.occupied_threshold_log_odds = options.occupied_threshold_log_odds;
   r.free_threshold_log_odds = options.free_threshold_log_odds;
   for (std::size_t i = 0; i < cells.size(); ++i) {
+    if(region && !(*region)[i]) {
+      truth[i]=0; // do not let excluded reference cells influence wall distances
+      continue;
+    }
     if (truth[i]) ++r.reference_wall_cells;
     // Cells at a classification boundary, even if observed, are unknown
     // for this evaluation. Unknown is never silently counted as free.
@@ -233,7 +248,7 @@ MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
   else if (r.occupied_precision && r.occupied_recall)
     r.occupied_f1 = 0.0;
   r.known_coverage = static_cast<double>(r.known_cells) /
-                     static_cast<double>(cells.size());
+                     static_cast<double>(region_count);
   r.reference_wall_coverage = r.reference_wall_cells ?
       static_cast<double>(r.true_positive + r.false_negative) /
       static_cast<double>(r.reference_wall_cells) : 0.0;
@@ -257,6 +272,121 @@ MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
     r.symmetric_p95_wall_distance_m = 0.5 * (p95_a + p95_b);
   }
   return r;
+}
+
+std::vector<WallToleranceScore> evaluate_wall_tolerances_impl(
+    const mapping::MapBundle& generated,const fixtures::Scene& scene,
+    const std::vector<double>& tolerances_m,
+    const std::vector<std::uint8_t>* region) {
+  if(!generated.snapshot ||
+     (generated.provenance.truth_class!="synthetic_estimated" &&
+      generated.provenance.truth_class!="synthetic_exact") ||
+     !generated.provenance.metric_origin_verified ||
+     generated.provenance.frame_id!="map" ||
+     generated.provenance.source_id!=scene.id)
+    throw std::invalid_argument("wall tolerance score requires aligned synthetic map");
+  if(tolerances_m.empty()||tolerances_m.size()>8)
+    throw std::invalid_argument("wall tolerance list must have 1..8 entries");
+  for(double tolerance:tolerances_m)
+    if(!std::isfinite(tolerance)||tolerance<=0||tolerance>2.)
+      throw std::invalid_argument("invalid wall distance tolerance");
+  const auto& grid=generated.snapshot->config();
+  auto reference=rasterize_reference_walls(scene,grid);
+  const auto& cells=generated.snapshot->cells();
+  if(reference.size()!=cells.size())
+    throw std::invalid_argument("map and reference grid size differ");
+  if(region && (region->size()!=cells.size()||
+     std::any_of(region->begin(),region->end(),
+         [](std::uint8_t item){return item>1;})||
+     std::none_of(region->begin(),region->end(),
+         [](std::uint8_t item){return item==1;})))
+    throw std::invalid_argument("invalid wall tolerance region");
+  std::vector<std::uint8_t> predicted(cells.size());
+  std::size_t number_predicted=0,number_reference=0;
+  for(std::size_t i=0;i<cells.size();++i) {
+    if(region && !(*region)[i]) {
+      reference[i]=0;
+      continue;
+    }
+    predicted[i]=cells[i].observed&&cells[i].log_odds>0. ? 1 : 0;
+    number_predicted+=predicted[i];
+    number_reference+=reference[i];
+  }
+  if(!number_reference)
+    throw std::invalid_argument("empty wall reference");
+  const auto to_reference=squared_edt(reference,grid.width,grid.height);
+  const auto to_predicted=squared_edt(predicted,grid.width,grid.height);
+  std::vector<WallToleranceScore> scored;
+  scored.reserve(tolerances_m.size());
+  for(double tolerance:tolerances_m) {
+    const double max_cells2=(tolerance/grid.resolution_m)*
+                            (tolerance/grid.resolution_m)+1e-10;
+    std::size_t near_predicted=0,near_reference=0;
+    for(std::size_t i=0;i<cells.size();++i){
+      if(predicted[i]&&to_reference[i]<=max_cells2)++near_predicted;
+      if(reference[i]&&to_predicted[i]<=max_cells2)++near_reference;
+    }
+    const double precision=number_predicted?
+        double(near_predicted)/double(number_predicted):0.;
+    const double recall=double(near_reference)/double(number_reference);
+    const double f1=precision+recall>0?
+        2.*precision*recall/(precision+recall):0.;
+    scored.push_back({tolerance,precision,recall,f1});
+  }
+  return scored;
+}
+
+MapAccuracyReport evaluate_map_accuracy(const mapping::MapBundle& generated,
+                                       const fixtures::Scene& scene,
+                                       const MapAccuracyOptions& options) {
+  return evaluate_map_accuracy_impl(generated,scene,options,nullptr);
+}
+
+MapAccuracyReport evaluate_map_accuracy_region(
+    const mapping::MapBundle& generated, const fixtures::Scene& scene,
+    const std::vector<std::uint8_t>& region,
+    const MapAccuracyOptions& options) {
+  return evaluate_map_accuracy_impl(generated,scene,options,&region);
+}
+
+std::vector<WallToleranceScore> evaluate_wall_tolerances(
+    const mapping::MapBundle& generated,const fixtures::Scene& scene,
+    const std::vector<double>& tolerances_m) {
+  return evaluate_wall_tolerances_impl(generated,scene,tolerances_m,nullptr);
+}
+
+std::vector<WallToleranceScore> evaluate_wall_tolerances_region(
+    const mapping::MapBundle& generated,const fixtures::Scene& scene,
+    const std::vector<std::uint8_t>& region,
+    const std::vector<double>& tolerances_m) {
+  return evaluate_wall_tolerances_impl(generated,scene,tolerances_m,&region);
+}
+
+std::vector<std::uint8_t> observed_footprint_mask(
+    const mapping::MapBundle& baseline,double padding_m) {
+  if(!baseline.snapshot||!std::isfinite(padding_m)||
+     padding_m<0.||padding_m>1.)
+    throw std::invalid_argument("invalid observation footprint request");
+  const auto& config=baseline.snapshot->config();
+  const auto& cells=baseline.snapshot->cells();
+  if(!std::isfinite(config.resolution_m)||config.resolution_m<=0||
+     config.width==0||config.height==0||
+     config.width>4'000'000/config.height||
+     cells.size()!=config.width*config.height)
+    throw std::invalid_argument("invalid footprint grid geometry");
+  std::vector<std::uint8_t> observed(cells.size(),0);
+  for(std::size_t i=0;i<cells.size();++i)
+    observed[i]=cells[i].observed?1:0;
+  if(std::none_of(observed.begin(),observed.end(),
+       [](std::uint8_t b){return b!=0;}))
+    throw std::invalid_argument("no observation footprint evidence");
+  if(padding_m==0.)return observed;
+  const auto squared=squared_edt(observed,config.width,config.height);
+  const double radius_cells=padding_m/config.resolution_m;
+  const double limit=radius_cells*radius_cells+1e-10;
+  for(std::size_t i=0;i<observed.size();++i)
+    observed[i]=squared[i]<=limit?1:0;
+  return observed;
 }
 
 void write_map_accuracy_json(std::ostream& out, const MapAccuracyReport& r,

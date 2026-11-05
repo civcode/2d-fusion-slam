@@ -39,6 +39,9 @@ button{font:inherit;cursor:pointer}button:focus-visible,.map-stage:focus-visible
 .scene-run{font-size:10px;color:#7794ab;overflow-wrap:anywhere}
 .scene-method-count{font-size:9px;color:#91b2c4;white-space:nowrap}
 .scene-variants{border-top:1px solid #284052;display:grid;gap:2px;padding:7px 5px 10px}
+.scene-replay-links{display:flex;flex-wrap:wrap;gap:7px;margin:5px 5px 0;border-top:1px solid #294052;padding:10px 4px 2px}
+.scene-replay-links a{font-size:11px;color:#95e5d6;text-decoration:none;border:1px solid #30605d;border-radius:5px;padding:5px 8px}
+.scene-replay-links a:hover,.scene-replay-links a:focus-visible{background:#203c47;outline-color:#85ddcf}
 .map-variant{display:flex;align-items:flex-start;gap:8px;cursor:pointer;border:1px solid transparent;border-radius:7px;padding:9px 7px;color:#aec7d9;min-width:0}
 .map-variant:hover{background:#182e42}
 .map-variant.selected{background:#173a41;border-color:#30645f;color:#eefcf8}

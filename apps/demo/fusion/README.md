@@ -13,10 +13,47 @@ docker compose up --build demo
 ```
 
 Open http://127.0.0.1:8765/fusion. Output directories must not already
-exist; new runs are never overwritten. For non-Docker use, start
+exist; new runs are never overwritten.
+
+To explore already completed seven-scene benchmarks **without moving or
+regenerating their maps**, point the Docker demo's read-only fusion mount to a
+single completed sweep directory:
+
+```sh
+FUSION_DEMO_RUNS_DIR="$PWD/benchmarks/fusion-beams-diverse-001" \
+  docker compose up --build demo
+```
+
+The Map Explorer at http://127.0.0.1:8765/ automatically lists all
+run/method map variants from that directory. Expand Office, Loft, Atrium,
+Industrial, Asymmetric warehouse, Apartment or Warehouse and select
+**LiDAR replay** (raw, non-deskewed scan endpoints projected at the
+estimated LiDAR-only pose) or **SLAM replay** (deskewed, time-indexed
+scan-matched trajectories) from the run's links. Or open
+`/fusion?run=office-continuous-s01&view=lidar` directly.
+Choose `benchmarks/fusion-beams-diverse-phases-001` instead to inspect
+sampling-phase variations. A single sweep fits the existing bounded run
+discovery; do not concatenate multiple large sweeps into one root.
+Older fusion runs without `raw_points_laser` can still show a
+**legacy LiDAR view** using available *deskewed* hit samples on their
+scan-matched estimated poses (clearly labeled). Regenerate such runs
+only if raw, non-deskewed sensor hits are needed. For non-Docker use, start
 `fusion_slam_demo --data-dir apps/demo/maps --fusion-dir apps/demo/fusion`.
 The server reads artifacts only; all source files remain outside the
 container image and are mounted read-only.
+
+For the **fixed-graph occupancy mapping experiment**, generate a new
+warehouse-asymmetric run with `--lidar-loop-closure --mapping-ablation`.
+This produces 54 additional mapping-only FUSMAP2D files (the complete 3×3 evidence grid) under
+`mapping_ablation/` and a `mapping_ablation.json` scorecard, while
+preserving the regular replay and graph map. The native web UI does not
+list the experimental subdirectory as ordinary map methods; use
+`python tools/fusion_mapping_ablation.py --run <run-folder>` to inspect
+the exact IoU, 10/25/50 cm wall-distance agreement and early-versus-late
+scan contribution comparisons. A revised `diverse_v2` suite additionally includes a native Workshop scene
+and an exploratory Apartment route; the old Office scene is retained as a
+legacy benchmark. Full instructions:
+[fixed-graph mapping ablation](../../../docs/fusion-mapping-ablation.md).
 
 Only direct child directories named with ASCII letters, digits, hyphens or
 underscores are exposed, with `fusion_report.json`, `trajectories.json`

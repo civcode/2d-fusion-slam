@@ -2,6 +2,9 @@
 /build-*/
 /.cache/
 /Testing/
+/.venv/
+/reports/
+/benchmarks/
 *.mcap
 *.bag
 *.db3

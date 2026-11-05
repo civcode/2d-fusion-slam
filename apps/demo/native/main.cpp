@@ -151,7 +151,7 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
     constexpr std::string_view image="/image.png",cell="/cell";
     if(name.ends_with(image)){name.remove_suffix(image.size());mode="image";}
     else if(name.ends_with(cell)){name.remove_suffix(cell.size());mode="cell";}
-    if(name.empty()||name.size()>200||name.find('/')!=std::string_view::npos)
+    if(name.empty()||name.size()>280||name.find('/')!=std::string_view::npos)
       return error(404,"invalid map route");
     // encodeURIComponent() escapes the virtual-ID delimiter as %40.
     // Decode only this delimiter; arbitrary escapes must not become paths.
@@ -160,7 +160,7 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
       map_id.replace(at,3,"@");
     name=map_id;
     std::string run,method;
-    if(name.starts_with("fusion@")){
+    if(name.starts_with("fusion@")&&name.find('@',7)!=std::string_view::npos){
       const auto id=name.substr(7);
       const auto split=id.find('@');
       if(split==std::string_view::npos||id.find('@',split+1)!=std::string_view::npos)
@@ -191,7 +191,14 @@ Response route(slam::viewer::ViewerData& data,slam::viewer::FusionRuns& fusion,
     return json(data.map_metadata(std::string(name)));
   }
   if(path.starts_with(replays)){
-    auto name=path.substr(replays.size());
+    // Decode only the namespace delimiter used for one-level run folders.
+    // Never percent-decode slashes, dots or arbitrary URL escapes.
+    std::string replay_id(path.substr(replays.size()));
+    for(auto at=replay_id.find("%40");at!=std::string::npos;
+        at=replay_id.find("%40",at+1))
+      replay_id.replace(at,3,"@");
+    std::string_view name(replay_id);
+    if(name.size()>260)return error(404,"invalid replay path");
     // All scans in one bounded, validated response: the browser can seek and
     // animate without repeatedly parsing the recording on this single-threaded server.
     if(name.ends_with("/frames")){

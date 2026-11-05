@@ -14,10 +14,32 @@ cmake --build build --target slam_offline_fusion fusion_slam_demo
 # http://127.0.0.1:8765/fusion
 ~~~
 
-The output directory must not already exist. The Docker Compose demo also
-mounts apps/demo/fusion:/fusion:ro and apps/demo/maps:/maps:ro; generate runs
-on the host, then refresh the browser. The original logged-LiDAR viewer
-remains available at /replay.
+The output directory must not already exist. The Docker Compose demo mounts
+apps/demo/fusion:/fusion:ro and apps/demo/maps:/maps:ro by default. The
+original logged-LiDAR viewer remains available at /replay.
+
+### Seven scenes from an existing benchmark
+
+No rerun or file copy is necessary. From the project root:
+
+~~~sh
+FUSION_DEMO_RUNS_DIR="$PWD/benchmarks/fusion-beams-diverse-001" \
+  docker compose up --build demo
+~~~
+
+Open http://127.0.0.1:8765/ to explore each saved method's map, or use
+http://127.0.0.1:8765/fusion to browse and play its run.
+The scene list includes apartment, warehouse, office, loft, atrium,
+industrial and warehouse_asymmetric (the last uses the warehouse robot
+route but different obstacle geometry). Direct links to
+`/fusion?run=office-continuous-s01&view=lidar` (LiDAR) and
+`/fusion?run=office-continuous-s01&view=slam` (SLAM) are available
+inside each Map Explorer run group.
+
+`FUSION_DEMO_RUNS_DIR` may instead point to
+`benchmarks/fusion-beams-diverse-phases-001`. Use one completed sweep
+at a time; the native server intentionally bounds the number of
+discoverable child directories. Run artifacts remain read-only.
 
 ## FUSFUSREPLAY1
 
@@ -28,7 +50,9 @@ the named FUSMAP2D snapshots.
 The new file includes the declared synthetic scene, source and matcher,
 laser extrinsics, exact-decimal-string nanosecond timestamps and a bounded
 array of frame events. Each frame contains its index, hits/beam counts,
-sampled deskewed laser-frame endpoints, matcher attempted/accepted/status,
+sampled deskewed laser-frame endpoints and, in newer runs, optional
+`raw_points_laser` (pre-deskew LiDAR-frame return endpoints), matcher
+attempted/accepted/status,
 gate rejection reason, optional matcher geometry and frozen-map fingerprint,
 cumulative accept/reject counts, map insertion flags, and optional
 source-to-target GTSAM loop decisions for an independently simulated
@@ -61,7 +85,232 @@ nonmonotonic or mismatched timestamps, mismatched scene/truth/clock, invalid
 match/loop counts and nonmatching map fingerprints. There are no write
 endpoints. FUSMAP2D's checksum is corruption detection, not authentication.
 
+## Experimental LiDAR-derived loop closure (fused pose graph)
+
+The default synthetic fusion pipeline retains its **odometry-only GTSAM
+graph**, even when the independently estimated LiDAR trajectory drifts.
+The previous `--synthetic-independent-loops` option uses an extra
+**simulated relative-pose sensor**. It is not a deployed LiDAR closure.
+
+To evaluate actual *LiDAR scan-pair loop constraints* on the Office scene,
+build a GTSAM-enabled `slam_offline_fusion` executable (Docker's test
+image) and generate a **new** run folder:
+
+~~~sh
+docker compose build test
+mkdir -p apps/demo/fusion
+docker compose run --rm \
+  -v "$PWD/apps/demo/fusion:/output" \
+  --entrypoint ./build-docker/slam_offline_fusion \
+  test office /output/office-loops-001 \
+  --continuous-cost --match-stride 1 --match-every 1 \
+  --field-every 15 --map-stride 1 \
+  --lidar-only-bootstrap --lidar-only-predict-first \
+  --lidar-loop-closure
+
+FUSION_DEMO_RUNS_DIR="$PWD/apps/demo/fusion" docker compose up --build -d demo
+~~~
+
+Open `/fusion?run=office-loops-001&view=slam` and enable **Final graph**;
+select the `graph_optimized` occupancy overlay, or inspect the graph
+variant in the Map Explorer. Run the same options **without**
+`--lidar-loop-closure` into a separate folder for a controlled A/B.
+Existing paths and maps (`wheel_only`, `gyro_wheel`, `lidar_only`,
+`fused_scan_matched`) must remain unchanged by the graph-only option.
+After collecting the two runs with **identical non-loop flags**, check the
+outcome without letting simulator truth influence loop verification:
+
+~~~sh
+python tools/fusion_loop_compare.py \
+  --baseline apps/demo/fusion/office-001 \
+  --loops apps/demo/fusion/office-loops-001
+~~~
+
+The comparison checks the unchanged non-graph map fingerprints and
+trajectories, then reports accepted closures, graph trajectory RMSE,
+**final-position error** and map occupied IoU from post-hoc synthetic
+scoring. If you used different baseline flags, regenerate a matching
+no-loop run under a new prefix.
+The graph-optimized result is a fused-trajectory postprocessing output,
+**not** a correction to the independent LiDAR-only baseline.
+
+The proposed scan closures:
+
+1. Search estimated-pose-nearby historical keyframes every **two scans**,
+   retaining at least 40 scans of temporal separation. Consider relative
+   position <=2.8 m and heading <=0.50 rad, with at most **six** attempted
+   historical scan registrations per query. Unlike the original sparse
+   detector, an accepted closure does **not** suppress all subsequent
+   query frames for 18 scans.
+2. Register previous/current gyro/wheel-deskewed LiDAR hit clouds using
+   trimmed nearest-neighbor ICP, with a loop-specific 3.0 m / 0.6 rad
+   registration envelope. The ordinary LiDAR-only consecutive-scan ICP
+   retains its original 0.9 m / 0.32 rad bounds.
+3. Require >=80 inliers in both directions, >=82% reciprocal overlap,
+   selected-correspondence rank, <=0.11 m inlier RMS, and <=0.55 m /
+   0.17 rad innovation from the estimated-pose search seed. A second
+   reverse ICP registration must reproduce the inverse transform with
+   <=0.14 m / 0.07 rad composition error. No simulator truth or
+   post-run score influences candidate detection or verification.
+4. Propose only **one** verified pair per query and separate all
+   accepted proposal endpoints by at least **six scans at each end**;
+   cap the graph at eight LiDAR loop factors per run. Skipped
+   near-duplicate verified pairs are recorded as duplicate events, not
+   mistaken for independent support.
+5. Send nonredundant pairs to the fixed-gauge GTSAM graph with Huber
+   robust loss and more conservative configured weights of
+   0.30 m / 0.30 m / 0.20 rad (not estimated covariances), retaining
+   the 0.8 m / 0.3 rad graph-stage consistency gate.
+6. Export nearby candidate count, tried ICP pair count, geometry-pass
+   count, redundant factor suppression count, graph-stage acceptances,
+   and all accepted/rejected replay events. These counts distinguish
+   the search coverage from the number of trusted graph factors.
+
+This is still *pose-guided* retrieval: an otherwise valid revisit
+outside the 2.8 m / 0.50 rad search envelope will be missed. In a
+repetitive warehouse, many overlapping frames are strongly correlated
+and may also be aliased; they must not simply be inserted as dozens of
+independent graph constraints. Review per-window errors, final pose
+error, map IoU and accepted edge identities before judging the change
+as more accurate. Existing run artifacts are immutable: a new run
+is required to test the denser detector.
+
+For an asymmetric-warehouse version comparison, rebuild the GTSAM-enabled
+Docker test image and run the identical estimator flags used for the
+original single-closure result, under a new output directory:
+
+~~~sh
+docker compose build test
+docker compose run --rm \
+  -v "$PWD/apps/demo/fusion:/output" \
+  --entrypoint ./build-docker/slam_offline_fusion \
+  test warehouse_asymmetric /output/warehouse_asymmetric-loops-multi-001 \
+  --continuous-cost --match-every 1 --match-stride 1 \
+  --field-every 15 --map-stride 1 \
+  --lidar-only-bootstrap --lidar-only-predict-first --lidar-loop-closure
+~~~
+
+Then compare against the **unchanged no-loop GTSAM baseline** for
+causal loop-closure benefit:
+
+~~~sh
+python tools/fusion_loop_compare.py \
+  --baseline apps/demo/fusion/warehouse_asymmetric-no-loops-001 \
+  --loops apps/demo/fusion/warehouse_asymmetric-loops-multi-001
+~~~
+
+You can separately compare the **earlier one-loop implementation**
+against the new detector to isolate the algorithm revision (this is
+not a no-loop control):
+
+~~~sh
+python tools/fusion_loop_compare.py --allow-loop-baseline \
+  --baseline apps/demo/fusion/warehouse_asymmetric-loops-001 \
+  --loops apps/demo/fusion/warehouse_asymmetric-loops-multi-001
+~~~
+
+The comparator reports frame-window RMSE and pose displacement across
+the last 12%, graph endpoint error and map IoU, and the number,
+quality and location of accepted relative LiDAR factors. The
+web UI can browse both run folders side by side in separate tabs.
+
+The source is recorded as `lidar_scan_registration_correlated`.
+The scan pairs reuse observations that influenced the frontend and use
+the estimated trajectory only for candidate search/initialization.
+These are **correlated constraints**, not independently sourced truth
+or a new sensor. Do not interpret the solver's objective reduction as
+absolute accuracy. For synthetic experiments, compare
+`results.graph_optimized.translation_rmse_m` and occupied IoU against
+the no-loop baseline after the run; no ground truth is used to decide
+which graph edges are accepted.
+
+`--lidar-loop-closure` and `--synthetic-independent-loops` are mutually
+exclusive, and the former requires GTSAM. The feature is opt-in because
+repetitive geometry can still create false place associations. If no
+candidate passes, the report honestly shows zero accepted closures and
+the graph remains odometry-only. Recorded FR079 LiDAR/odometry SLAM
+does **not yet** use this synthetic fused-graph loop closure frontend.
+
+## Diagnosing the late-run map distortion
+
+The GTSAM batch optimizer computes a **new pose for every graph node**.
+The offline pipeline subsequently calls `make_map(sim,graph.poses,
+p.gyro_deskewed,...)`, so `graph_optimized.slammap` is built fresh
+using all optimized scan poses. The loop correction is **not**
+applied to the final node alone. However, the sequential graph edges
+are only gyro/wheel relative increments; the frozen-map matched scan
+poses are used as initialization, **not** as independent graph
+constraints. The earlier one-closure implementation (0 -> 186) can reduce endpoint drift
+without repairing local relative-pose errors on frames ~171–194, and
+frames 187–194 have no later loop connection.
+
+**Viewer correction:** earlier versions of `/fusion` always projected
+deskewed hit samples using the `fused_scan_matched` path even when a
+`graph_optimized` map overlay was chosen. The updated browser
+automatically changes **Scan-point trajectory** to **Graph optimized**
+when that occupancy overlay is selected. It also exposes an explicit
+trajectory projection selector for comparisons. The viewer switches to
+SLAM (deskewed) replay for the graph/gyro/fused map and to raw LiDAR
+replay for the LiDAR-only map, avoiding silent sensor-provenance mismatch.
+Current and cumulative hits are then drawn at the graph poses (not
+the fused poses).
+This changes **visualization only**; it does not modify a saved
+map artifact. `wheel_only` cannot project a fully consistent
+wheel-deskewed scan because only gyro/wheel-deskewed and raw hit samples
+are stored in the trace; choose the appropriate LiDAR view for the
+LiDAR-only map.
+
+The synthetic post-hoc comparison tool now shows RMSE and **maximum**
+pose error for the last 12% independently from the full-run RMSE,
+together with mean/maximum optimized pose displacement versus the
+odometry-only graph, the error immediately before the accepted loop
+node and the error on subsequent frames:
+
+~~~sh
+python tools/fusion_loop_compare.py \
+  --baseline apps/demo/fusion/warehouse_asymmetric-no-loops-001 \
+  --loops apps/demo/fusion/warehouse_asymmetric-loops-001
+~~~
+
+A nonzero pose displacement proves graph propagation; a reduced
+per-window synthetic pose error supports actual geometric improvement.
+Neither proves each occupied cell is correct. Longer-term fixes should
+supply **additional independently gated local scan constraints** and
+revisit detection along the misaligned segment, while refusing weak
+or ambiguous shelf matches. Simply increasing loop weight cannot
+replace missing measurements.
+
+## Fixed-graph occupancy and re-deskew diagnostics
+
+An additional **opt-in** `--mapping-ablation` experiment reconstructs 24
+alternative maps from the **same GTSAM graph poses**, varying hit/free
+log-odds, original versus graph-corrected high-rate beam deskew, and
+early/middle versus last-12% scan contributions. It preserves the original
+graph map and exposes 10/25/50 cm wall-distance precision, recall and F1
+**alongside unchanged exact-cell occupied IoU**. This requires a fresh run
+with timed scans (the web replay is downsampled), and extra maps are
+saved under `mapping_ablation/`; they are not automatically listed as
+normal Map Explorer methods. See the full reproducible workflow:
+[fixed-graph mapping ablation](fusion-mapping-ablation.md).
+
 ## Honest visualization
+
+The same native Fusion page offers two distinct read-only views:
+**LiDAR replay** draws pre-deskew scan hits at the *estimated LiDAR-only*
+midpoint pose, while **SLAM replay** draws gyro/wheel-deskewed hits at
+the *estimated fused scan-matched* pose with selectable trajectory and
+map overlays. Raw hits are still sensor-frame measurements; their
+world positioning during playback is a visualization using estimated
+poses, not a sensor-provided global coordinate or independent truth.
+For older native traces lacking raw scan samples, the LiDAR view
+still works but explicitly displays available **deskewed** samples on
+the fused estimated pose. It never labels those samples as raw; to
+obtain raw replay regenerate the native artifacts.
+
+The new optional `raw_points_laser` is subject to the same per-frame
+size, finite-coordinate, original-hit-count and source-consistency checks
+as deskewed samples. The server admits only the seven known scene
+identifiers and rejects unsupported synthetic data provenance.
 
 Use the timeline, play/pause, speed, previous/next, pan/zoom and layer
 toggles to inspect actual run events and compare trajectories. The optional
@@ -88,10 +337,11 @@ The fusion_replay_http CTest executes the actual native offline fusion CLI
 and native HTTP server, checks metadata and frame parity, validates PNG/map
 fingerprints, and tests corrupt/symlinked inputs and denied HTTP writes.
 
-**Status:** source and tests were committed directly to main, preserving
-the user's intervening build/test fixes. A full native CMake/CTest/Docker
-execution is not verified in this ChatGPT container because GitHub cannot
-be cloned to its local filesystem. No GitHub Actions were run.
+**Validation note:** the seven-scene UI extension is committed to
+`experiment/fr079-ceres-ablation-beam-sweep` for local Docker/CMake
+testing. Browser scripts pass syntax checks and in-memory interaction
+smoke tests; the native HTTP/C++ tests have not yet been run in this
+environment. No GitHub Actions were run.
 
 
 ## Fusion maps in the regular Map Explorer

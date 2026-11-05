@@ -238,6 +238,56 @@ class NativeViewerApi(unittest.TestCase):
         self.assertIsNone(self.api(
             "/api/replays/record.slamreplay.json/frame/0")["matching"])
 
+    def test_one_level_run_folders_are_indexed_and_symlinks_refused(self):
+        import shutil
+        folder = self.root / "fr079-demo-001"
+        folder.mkdir()
+        nested_map = folder / "fr079-demo-001.slammap"
+        nested_replay = folder / "fr079-demo-001.slamreplay.json"
+        shutil.copy2(self.map, nested_map)
+        shutil.copy2(self.replay, nested_replay)
+        map_id = "fr079-demo-001@fr079-demo-001.slammap"
+        replay_id = "fr079-demo-001@fr079-demo-001.slamreplay.json"
+        maps = self.api("/api/maps")["maps"]
+        self.assertIn(map_id, [item["id"] for item in maps])
+        self.assertIn("fr079-demo-001 / fr079-demo-001.slammap",
+                      [item["name"] for item in maps])
+        self.assertEqual(self.api("/api/maps/fr079-demo-001%40fr079-demo-001.slammap"),
+                         self.api("/api/maps/record.slammap"))
+        with self.get("/api/maps/fr079-demo-001%40fr079-demo-001.slammap/image.png") as image:
+            self.assertEqual(image.read(8), b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(
+            self.api("/api/maps/fr079-demo-001%40fr079-demo-001.slammap/cell?x=3&y=2"),
+            self.api("/api/maps/record.slammap/cell?x=3&y=2"))
+        self.assertIn(replay_id, self.api("/api/replays")["sessions"])
+        self.assertEqual(
+            self.api("/api/replays/fr079-demo-001%40fr079-demo-001.slamreplay.json")["frame_count"],
+            self.api("/api/replays/record.slamreplay.json")["frame_count"])
+        self.assertEqual(
+            self.api("/api/replays/fr079-demo-001%40fr079-demo-001.slamreplay.json/frame/0"),
+            self.api("/api/replays/record.slamreplay.json/frame/0"))
+        # Neither symlinked folders nor files inside allowed real folders
+        # are exposed or readable through the virtual-ID mechanism.
+        (self.root / "aliased-run").symlink_to(folder, target_is_directory=True)
+        (folder / "copy.slammap").symlink_to(self.map)
+        (folder / "copy.slamreplay.json").symlink_to(self.replay)
+        maps = self.api("/api/maps")["maps"]
+        replays = self.api("/api/replays")["sessions"]
+        self.assertNotIn("aliased-run@fr079-demo-001.slammap",
+                         [item["id"] for item in maps])
+        self.assertNotIn("fr079-demo-001@copy.slammap",
+                         [item["id"] for item in maps])
+        self.assertNotIn("fr079-demo-001@copy.slamreplay.json", replays)
+        for path in (
+            "/api/maps/aliased-run%40fr079-demo-001.slammap",
+            "/api/maps/fr079-demo-001%40copy.slammap",
+            "/api/replays/fr079-demo-001%40copy.slamreplay.json",
+            "/api/maps/fr079-demo-001%40..%2Frecord.slammap",
+            "/api/replays/fr079-demo-001%40..%2Frecord.slamreplay.json",
+        ):
+            with self.subTest(path=path), self.assertRaises(error.HTTPError):
+                self.get(path)
+
     def test_read_only_symlinks_and_bad_files(self):
         for path in ("/api/maps/record.slammap/cell?x=-1&y=0",
                      "/api/maps/record.slammap/cell?x=4&x=5",

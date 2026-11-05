@@ -10,12 +10,16 @@ namespace slam::graph {
 
 // No odometry or loop edge is accepted without evidence of its source.
 // 'synthetic_exact' is for deterministic test fixtures, never real hardware.
-enum class EvidenceClass { unverified, synthetic_exact, independently_measured };
+enum class EvidenceClass { unverified, synthetic_exact, independently_measured,
+                           lidar_scan_registration,
+                           lidar_scan_to_submap_registration,
+                           lidar_global_scan_to_submap_registration,
+                           frontend_scanmatched_correlated };
 struct FactorProvenance {
   EvidenceClass source{EvidenceClass::unverified};
   std::string source_id;        // identifiable log/sensor/fixture
   bool clock_and_frame_verified{false};
-  bool independent_of_initial_trajectory{false};
+  bool independent_of_initial_trajectory{false}; // false for scan registration using pose-seeded searches
 };
 struct PoseEdge {
   std::size_t from{}, to{};  // odometry must join consecutive nodes
@@ -28,10 +32,16 @@ struct LoopCandidate {
   std::size_t supported_hits{};
   double overlap{};
   bool full_rank{};
+  double registration_error_m{}; // diagnostic, not a covariance estimate
   // These are quality tests, NOT an independent covariance measurement.
+  // LiDAR scan registration is reused sensor evidence (not an independent
+  // source of calibrated relative motion); its factor is conservatively
+  // weighted and separately gated, never promoted to independent truth.
 };
 struct BatchGraphInput {
   std::vector<Pose2> initial_map_from_base;
+  // Consecutive factors: either independent recorded odometry or
+  // explicitly labeled correlated frontend-relative estimates.
   std::vector<PoseEdge> odometry;
   std::vector<LoopCandidate> loops;
 };

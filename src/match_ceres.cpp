@@ -12,6 +12,9 @@
 
 namespace slam::matching {
 namespace {
+double fixed_continuous_cost(const mapping::DistanceField& field,
+                             const std::vector<Eigen::Vector2d>& points,
+                             Pose2 pose,const MatchSettings& settings);
 // The input hit set is selected for valid EDT support at the seed pose.
 // If a trial step leaves known, informative EDT support, Ceres' evaluation
 // fails (not a fabricated zero-cost LiDAR sample) and the match is rejected.
@@ -67,6 +70,11 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
     return result;
   const auto initial = evaluate_geometry(*field, points, seed, settings);
   result.diagnostics = initial;
+  result.seed_supported_hits=initial.supported_hits;
+  result.seed_overlap=initial.overlap;
+  result.seed_full_rank=initial.full_rank;
+  result.seed_strict_cost=initial.robust_cost;
+  result.seed_finite_cost=fixed_continuous_cost(*field,points,seed,settings);
   if (initial.supported_hits < settings.min_supported_hits ||
       initial.overlap < settings.minimum_overlap) {
     result.status = MatchStatus::insufficient_support;
@@ -84,6 +92,7 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
     if (!field->sample_map(at_seed)) continue; // omitted, not zero weighted
     problem.AddResidualBlock(new EdfHitCost(*field,p,settings.sigma_metres,invalid_evaluations,unsupported_reasons),
                              new ceres::HuberLoss(settings.huber_delta),pose);
+    ++result.solver_residual_blocks;
   }
   for(int i=0;i<2;++i) {
     problem.SetParameterLowerBound(pose,i,pose[i]-settings.maximum_step_translation_m);
@@ -121,6 +130,12 @@ MatchResult match_ceres(std::shared_ptr<const mapping::DistanceField> field,
   }
   Pose2 candidate{{pose[0],pose[1]},wrap_yaw(pose[2])};
   const auto diagnostics = evaluate_geometry(*field,points,candidate,settings);
+  result.candidate_evaluated=true;
+  result.candidate_supported_hits=diagnostics.supported_hits;
+  result.candidate_strict_cost=diagnostics.robust_cost;
+  result.candidate_finite_cost=fixed_continuous_cost(*field,points,candidate,settings);
+  result.candidate_translation_m=(candidate.translation-seed.translation).norm();
+  result.candidate_rotation_rad=std::abs(wrap_yaw(candidate.yaw_rad-seed.yaw_rad));
   if (diagnostics.supported_hits < initial.supported_hits ||
       diagnostics.overlap < settings.minimum_overlap) {
     result.status = MatchStatus::insufficient_support;
@@ -383,10 +398,11 @@ double fixed_continuous_cost(const mapping::DistanceField& field,
 }
 } // namespace
 
-MatchResult match_ceres_continuous(
+MatchResult match_ceres_continuous_ablation(
     std::shared_ptr<const mapping::DistanceField> field,
     const std::vector<Eigen::Vector2d>& points,
-    Pose2 seed,const MatchSettings& settings) {
+    Pose2 seed,const MatchSettings& settings,
+    bool seed_only,bool legacy_gate) {
   MatchResult result;
   result.map_from_laser=seed;
   if(!field||points.empty()||!seed.translation.allFinite()||
@@ -395,6 +411,11 @@ MatchResult match_ceres_continuous(
   // genuine observed geometry before optimizing.
   const auto initial=evaluate_geometry(*field,points,seed,settings);
   result.diagnostics=initial;
+  result.seed_supported_hits=initial.supported_hits;
+  result.seed_overlap=initial.overlap;
+  result.seed_full_rank=initial.full_rank;
+  result.seed_strict_cost=initial.robust_cost;
+  result.seed_finite_cost=fixed_continuous_cost(*field,points,seed,settings);
   if(initial.supported_hits<settings.min_supported_hits||
      initial.overlap<settings.minimum_overlap) {
     result.status=MatchStatus::insufficient_support;
@@ -410,14 +431,21 @@ MatchResult match_ceres_continuous(
   std::atomic<std::size_t> unexpected_invalid{0};
   ceres::Problem problem;
   std::size_t inserted=0;
+  const double seed_c=std::cos(seed.yaw_rad), seed_s=std::sin(seed.yaw_rad);
   for(const auto& point:points){
     if(!point.allFinite())continue;
+    // Keep the original legacy seed-cohort arithmetic/order bit-for-bit.
+    const Eigen::Vector2d at_seed{
+      pose[0]+seed_c*point.x()-seed_s*point.y(),
+      pose[1]+seed_s*point.x()+seed_c*point.y()};
+    if(seed_only&&!field->sample_map(at_seed))continue;
     problem.AddResidualBlock(
         new ContinuousHitCost(*field,point,settings.sigma_metres,
                               finite_unsupported,unexpected_invalid),
         new ceres::HuberLoss(settings.huber_delta),pose);
     ++inserted;
   }
+  result.solver_residual_blocks=inserted;
   if(inserted<settings.min_supported_hits) {
     result.status=MatchStatus::insufficient_support;
     return result;
@@ -461,6 +489,12 @@ MatchResult match_ceres_continuous(
   // Independently reject poses that lack real geometric support, even
   // though the solver cost is evaluable throughout unknown space.
   const auto diagnostics=evaluate_geometry(*field,points,candidate,settings);
+  result.candidate_evaluated=true;
+  result.candidate_supported_hits=diagnostics.supported_hits;
+  result.candidate_strict_cost=diagnostics.robust_cost;
+  result.candidate_finite_cost=fixed_continuous_cost(*field,points,candidate,settings);
+  result.candidate_translation_m=(candidate.translation-seed.translation).norm();
+  result.candidate_rotation_rad=std::abs(wrap_yaw(candidate.yaw_rad-seed.yaw_rad));
   if(diagnostics.supported_hits<initial.supported_hits||
      diagnostics.overlap<settings.minimum_overlap) {
     result.status=MatchStatus::insufficient_support;
@@ -472,8 +506,9 @@ MatchResult match_ceres_continuous(
   }
   // Fixed cohort avoids an apparent improvement from dropping known hits,
   // and avoids an apparent regression when new real hits enter support.
-  if(fixed_continuous_cost(*field,points,candidate,settings)>=
-     fixed_continuous_cost(*field,points,seed,settings)-1e-10) {
+  if(legacy_gate?
+     diagnostics.robust_cost>=initial.robust_cost-1e-10:
+     result.candidate_finite_cost>=result.seed_finite_cost-1e-10) {
     result.status=MatchStatus::no_improvement;
     return result;
   }
@@ -481,6 +516,14 @@ MatchResult match_ceres_continuous(
   result.diagnostics=diagnostics;
   result.status=MatchStatus::accepted;
   return result;
+}
+
+MatchResult match_ceres_continuous(
+    std::shared_ptr<const mapping::DistanceField> field,
+    const std::vector<Eigen::Vector2d>& points,
+    Pose2 seed,const MatchSettings& settings) {
+  return match_ceres_continuous_ablation(std::move(field),points,seed,settings,
+                                          false,false);
 }
 
 } // namespace slam::matching
