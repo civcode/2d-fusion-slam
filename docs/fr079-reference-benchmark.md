@@ -561,15 +561,29 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install numpy scipy matplotlib
 mkdir -p reports
+# Align the common, unchanged Ceres frontend just once to the supplied map.
+# Do NOT fit a separate transform to each optimized graph.
+frontend=fr079-ceresgraph-poseprior-001
+python3 tools/fr079_map_compare.py \
+  --repo "$PWD" \
+  --slammap "apps/demo/maps/$frontend/$frontend.slammap" \
+  --reference-archive "$FR079_MAPS_ARCHIVE" --reference-cm 5 \
+  --out reports/fr079-common-frontend-map-alignment
+
 for arm in poseprior-001 distributed-002 global-002; do
   name="fr079-ceresgraph-$arm"
   python3 tools/fr079_map_compare.py \
     --repo "$PWD" \
     --slammap "apps/demo/maps/$name/$name.graph_optimized.slammap" \
     --reference-archive "$FR079_MAPS_ARCHIVE" --reference-cm 5 \
+    --fixed-alignment-json reports/fr079-common-frontend-map-alignment.json \
     --out "reports/$name-map-geometry"
 done
 ```
+
+The fixed transform from the *common Ceres frontend* (not any preferred
+optimized graph) is reused for all three output maps. This avoids separate
+candidate-specific map fitting that could hide global shape distortion.
 
 Compare `wall_metrics.wall_f1_within_0p15m` and
 `wall_f1_within_0p30m` (higher is better),
@@ -578,10 +592,10 @@ better), occupied IoU and known-region coverage. Examine all three
 overlay PNGs at **the same metric scale**, in particular around loops and
 parallel corridors.
 
-**Interpretation constraints:** This is wall/map overlap **after
-per-candidate best-fit registration to a map derived from the same log**,
-so it is in-sample *reference agreement*, not independent physical wall
-accuracy. The Freiburg map frame has no independently established
+**Interpretation constraints:** The shared alignment is fitted to the
+unchanged frontend using a map derived from the same log and then applied
+without refitting to the three graph maps. This remains *reference
+agreement*, not independent physical wall accuracy. The Freiburg map frame has no independently established
 transform into our map frame. Wall doubling, thickening, and multi-pass
 consistency need dedicated evaluations against independent geometry or
 reserved scan observations; they are not separately scored here. Neither

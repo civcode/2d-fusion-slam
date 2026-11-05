@@ -16,6 +16,7 @@ from review_artifacts import review_files
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -134,6 +135,28 @@ def rigid_registration(reference_pts, generated_pts, *, mirror=False):
     return params, error, [float(x[0]) for x in solutions]
 
 
+def fixed_alignment_from_report(filename: Path, archive_sha256: str,
+                                reference_resolution: float, bundle):
+    """Share a common frontend map's rigid fit without refitting candidates."""
+    previous=json.loads(Path(filename).read_text())
+    if (previous.get("reference_archive_sha256") != archive_sha256 or
+        abs(previous.get("reference_resolution_m",-1)-reference_resolution)>1e-9 or
+        previous.get("reflection_used") is not False or
+        previous.get("registration") != "in_sample_SE2_rigid_wall_alignment_not_trajectory_calibration"):
+        raise ValueError("fixed alignment must use the same reference archive and proper SE(2) fit")
+    provenance=previous.get("generated_provenance",{})
+    if (provenance.get("frame_id") != bundle.frame_id or
+        provenance.get("map_resolution_m") != bundle.resolution or
+        provenance.get("map_origin") != list(bundle.origin)):
+        raise ValueError("fixed alignment came from a different SLAM map coordinate frame")
+    params=previous.get("alignment",{})
+    fit=np.array([params.get("theta_rad"),params.get("tx_m"),params.get("ty_m")],
+                 dtype=float)
+    if fit.shape!=(3,) or not np.all(np.isfinite(fit)):
+        raise ValueError("invalid fixed SE(2) alignment")
+    return fit
+
+
 def near_wall_metrics(ref_pts, gen_pts, alignment, *, mirror=False):
     src=transform_points(gen_pts, alignment, mirror)
     # Operate on both full wall sets rather than the optimizer's subsets.
@@ -246,6 +269,8 @@ def main():
                         help="new output basename; .json/.png must not exist")
     parser.add_argument("--diagnostic-reflection",action="store_true",
                         help="try an improper mirrored mapping; do NOT treat it as robot pose")
+    parser.add_argument("--fixed-alignment-json",type=Path,
+                        help="reuse the same proper SE(2) transform, fitted once to a common frontend map")
     args=parser.parse_args()
     if args.out.with_suffix(".json").exists() or args.out.with_suffix(".png").exists():
         parser.error("refusing to overwrite existing comparison outputs")
@@ -255,8 +280,18 @@ def main():
     genpts=wall_points(genocc,bundle.resolution,bundle.origin)
     if min(len(refpts),len(genpts)) < 100:
         raise ValueError("too few occupied walls for a meaningful alignment")
-    fit, fitcost, alternatives = rigid_registration(refpts,genpts,
-                                                     mirror=args.diagnostic_reflection)
+    archive_sha256=hashlib.sha256(args.reference_archive.read_bytes()).hexdigest()
+    if args.fixed_alignment_json:
+        if args.diagnostic_reflection:
+            parser.error("fixed alignment and reflection cannot be combined")
+        fit=fixed_alignment_from_report(args.fixed_alignment_json,archive_sha256,res,bundle)
+        fitcost=None
+        alternatives=[]
+        registration="fixed_shared_SE2_from_common_frontend_no_candidate_fit"
+    else:
+        fit, fitcost, alternatives = rigid_registration(refpts,genpts,
+                                                          mirror=args.diagnostic_reflection)
+        registration="in_sample_SE2_rigid_wall_alignment_not_trajectory_calibration"
     detail=near_wall_metrics(refpts,genpts,fit,mirror=args.diagnostic_reflection)
     sampled_known,sampled_occ=reference_resample(genknown,genocc,bundle,
         refknown.shape,res,fit,mirror=args.diagnostic_reflection)
@@ -264,8 +299,10 @@ def main():
     report={
         "type":"fr079_map_to_map_agreement_proxy_not_ground_truth",
         "reference":"supplied FR079 scan-matched reference (same recording)",
+        "reference_archive_sha256":archive_sha256,
         "independent_ground_truth":False,
-        "registration":"in_sample_SE2_rigid_wall_alignment_not_trajectory_calibration",
+        "registration":registration,
+        "fixed_alignment_json":str(args.fixed_alignment_json) if args.fixed_alignment_json else None,
         "reflection_used":bool(args.diagnostic_reflection),
         "proper_robot_pose_transform":not args.diagnostic_reflection,
         "grid_origin_independently_verified":False,
@@ -274,12 +311,16 @@ def main():
         "generated_size_cells":[bundle.width,bundle.height],
         "generated_provenance":{"frame_id":bundle.frame_id,
                                 "truth_class":bundle.truth_class,
-                                "fingerprint":str(bundle.fingerprint)},
+                                "fingerprint":str(bundle.fingerprint),
+                                "map_resolution_m":bundle.resolution,
+                                "map_origin":list(bundle.origin)},
         "alignment": {"theta_rad":float(fit[0]),"tx_m":float(fit[1]),
                        "ty_m":float(fit[2]),"truncated_registration_cost":fitcost,
                        "multistart_costs":alternatives},
         "wall_metrics":detail,"occupancy_metrics":occupancy,
-        "interpretation":"Map similarity after fitting a transform to this same map; optimistic as an accuracy estimate. Does not measure loop closure correctness or independent ground truth."
+        "interpretation":("Shared frontend-derived rigid registration, with no candidate refitting. Still dependent on a correlated reference, not surveyed truth."
+                          if args.fixed_alignment_json else
+                          "Map similarity after fitting a transform to this same map; optimistic as an accuracy estimate. Does not measure loop closure correctness or independent ground truth.")
     }
     args.out.with_suffix(".json").write_text(json.dumps(report,indent=2)+"\n")
     save_plot(args.out.with_suffix(".png"),refknown,refocc,sampled_known,
