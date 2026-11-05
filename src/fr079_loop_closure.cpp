@@ -351,9 +351,12 @@ Fr079LoopResult run_fr079_loop_experiment(
         ++out.submap_registration_attempts;
         if(global)++out.appearance_registration_attempts;
         if(large_heading)++out.large_heading_registration_attempts;
+        // Raw scan overlap/error remain unevaluated until reciprocal
+        // verification. Keep one-way submap support and raster RMS separate.
         Fr079LoopEvent event{j,i,"submap_registration_rejected",
-            match.supported_hits,0,match.support_fraction,match.rms_m,
-            match.innovation_m,match.innovation_yaw_rad};
+            0,0,0.,0.,match.innovation_m,match.innovation_yaw_rad};
+        event.submap_supported_hits=match.supported_hits;
+        event.submap_raster_rms_m=match.rms_m;
         event.predicted_relative_yaw_rad=heading_difference;
         event.appearance_retrieved=global;
         event.retrieval_similarity=global?

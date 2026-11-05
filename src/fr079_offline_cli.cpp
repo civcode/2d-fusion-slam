@@ -299,6 +299,8 @@ void save_loop_diagnostics(const std::filesystem::path& path,
        <<",\"submap_contributing_scans\":"<<d.submap_contributing_scans
        <<",\"submap_score\":"<<d.submap_score
        <<",\"submap_support_fraction\":"<<d.submap_support_fraction
+       <<",\"submap_supported_hits\":"<<d.submap_supported_hits
+       <<",\"submap_raster_rms_m\":"<<d.submap_raster_rms_m
        <<",\"submap_translation_curvature_min\":"<<d.submap_translation_curvature_min
        <<",\"submap_translation_curvature_ratio\":"<<d.submap_translation_curvature_ratio
        <<",\"submap_minimum_shift_score_drop\":"<<d.submap_minimum_shift_score_drop

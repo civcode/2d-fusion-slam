@@ -41,6 +41,14 @@ def assert_strict_submap_diagnostics(graph):
     assert graph["submap_reciprocal_attempts"] <= graph["submap_geometry_verified"]
     assert graph["submap_reciprocal_verified"] >= graph["accepted_loops"]
     for decision in graph["loop_decisions"]:
+        if decision["submap_contributing_scans"] and not decision["reciprocal_checked"]:
+            # Before a raw-scan check these are deliberately not scan metrics.
+            assert decision["overlap"] == 0
+            assert decision["rms_m"] == 0
+            assert decision["forward_inliers"] == 0
+            assert decision["reverse_inliers"] == 0
+            assert decision["submap_supported_hits"] >= 0
+            assert decision["submap_raster_rms_m"] >= 0
         if decision["decision"] != "accepted":
             continue
         assert decision["reciprocal_checked"]

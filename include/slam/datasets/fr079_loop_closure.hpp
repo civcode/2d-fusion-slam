@@ -30,6 +30,8 @@ struct Fr079LoopEvent {
   // Only populated for correlative scan-to-submap registrations.
   std::size_t submap_contributing_scans{};
   double submap_score{}, submap_support_fraction{};
+  std::size_t submap_supported_hits{};
+  double submap_raster_rms_m{};
   double submap_translation_curvature_min{}, submap_translation_curvature_ratio{};
   double submap_minimum_shift_score_drop{};
   bool appearance_retrieved{};
