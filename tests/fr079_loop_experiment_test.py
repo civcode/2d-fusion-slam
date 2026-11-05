@@ -16,6 +16,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from fr079_offline_test import carmen_fixture, run
 from fr079_loop_compare import compare
+from slammap_to_pgm import render_pgm
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "demo"))
+from web.bundle import read_bundle
+
+
+def assert_preview(run: Path, bundle_suffix: str, source_name: str):
+    source = run / (run.name + bundle_suffix)
+    pgm = run / (run.name + ".pgm")
+    report = json.loads((run / (run.name + ".report.json")).read_text())
+    bundle = read_bundle(source)
+    assert pgm.read_bytes() == render_pgm(bundle)
+    assert report["map_preview"] == {
+        "source": source_name, "fingerprint": str(bundle.fingerprint)}
+    assert f"image: {pgm.name}" in (run / (run.name + ".yaml")).read_text()
 
 
 def main():
@@ -32,7 +46,9 @@ def main():
                  "--match-every", "3", "--field-every", "5",
                  "--map-stride", "3", "--match-stride", "4")
         run(binary,log,base,*flags)
+        assert_preview(base, ".slammap", "frontend")
         output = run(binary,log,loop,*flags,"--lidar-loop-closure")
+        assert_preview(loop, ".graph_optimized.slammap", "graph_optimized")
         assert "loop_decisions=" in output.stdout
         for suffix in (".slammap",".graph_control.slammap",
                        ".graph_optimized.slammap",".loops.json",
@@ -107,6 +123,7 @@ def main():
         assert len(pose_loops["graph_control_poses"]) == 184
         assert len(pose_loops["loop_graph_poses"]) == 184
         assert (pose_prior/(pose_prior.name+".graph_optimized.slammap")).is_file()
+        assert_preview(pose_prior, ".graph_optimized.slammap", "graph_optimized")
         # A loop matcher change must not affect frontend scan matching/maps.
         prior_timeline=json.loads(
             (pose_prior/(pose_prior.name+".trajectory.json")).read_text())

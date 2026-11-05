@@ -89,6 +89,8 @@ def validate(prefix: Path, expected_scans: int):
     assert report["map_frame_verified"] is False
     assert report["per_beam_time_verified"] is False
     assert report["pose_graph_optimized"] is False
+    assert report["map_preview"] == {
+        "source": "frontend", "fingerprint": report["map"]["fingerprint"]}
     assert report["loop_closures"] == 0
     assert report["realtime_deadlines_verified"] is False
     assert report["map"]["revision"] == report["inserted_scans"]

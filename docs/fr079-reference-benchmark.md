@@ -98,6 +98,9 @@ The generated maps are:
 - `*.slammap` — unchanged incremental Ceres map.
 - `*.graph_control.slammap` — frontend-preserving GTSAM no-loop control.
 - `*.graph_optimized.slammap` — frontend-relative factors plus LiDAR loops.
+- `*.pgm` and `*.yaml` — new loop runs visualize the optimized graph map;
+  no-loop runs retain the frontend preview. Previously completed previews
+  are immutable and are not silently rewritten.
 
 The historical `fr079-continuous-loop-001` remains a
 separate **logged-odometry graph** experiment, not this benchmark's arm B.
@@ -244,9 +247,9 @@ python3 tools/fr079_reference_benchmark.py \
 ```
 
 Compare its loop diagnostics and errors with the existing
-`fr079-reference-benchmark-001` results. Inspect the
-`*.graph_optimized.slammap` in Map Explorer: the plain `*.pgm` is always
-the unchanged Ceres frontend map.
+`fr079-reference-benchmark-001` results. Inspect `*.graph_optimized.slammap` in Map Explorer. New loop runs export
+the ordinary `*.pgm` from that optimized map; old runs keep their original
+frontend-derived `*.pgm`.
 
 ### Future submap matcher, deliberately not implemented in this step
 
@@ -352,7 +355,7 @@ python3 tools/fr079_reference_benchmark.py \
 
 Inspect
 `fr079-ceresgraph-submap-001.graph_optimized.slammap`
-rather than the frontend-only `*.pgm` image.
+when judging the optimized map (new `*.pgm` previews use this geometry).
 
 ### Diagnosis and reproducibility
 
@@ -542,3 +545,60 @@ surveyed ground truth. Local 10- and 50-scan RPE, large graph-shift
 warnings, actual loop locations and the visual map remain necessary
 checks for false or overly strong constraints.
 
+
+## Scoring real map geometry, not just trajectory endpoints
+
+`fr079_reference_benchmark.py` evaluates trajectory-derived **occupied
+endpoint sets**, not the exported FUSMAP2D cells. For reference-relative
+geometric map diagnostics, use `tools/fr079_map_compare.py` on the
+`*.graph_optimized.slammap` files. Its 5 cm Freiburg CARMEN map archive
+input is **fr079-maps.tgz**, not the pose log `fr079-sm.log.gz`.
+
+```bash
+export FR079_MAPS_ARCHIVE="$PWD/.build/datasets/fr079-maps.tgz"
+# This optional map-alignment tool needs numpy, scipy and matplotlib.
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install numpy scipy matplotlib
+mkdir -p reports
+for arm in poseprior-001 distributed-002 global-002; do
+  name="fr079-ceresgraph-$arm"
+  python3 tools/fr079_map_compare.py \
+    --repo "$PWD" \
+    --slammap "apps/demo/maps/$name/$name.graph_optimized.slammap" \
+    --reference-archive "$FR079_MAPS_ARCHIVE" --reference-cm 5 \
+    --out "reports/$name-map-geometry"
+done
+```
+
+Compare `wall_metrics.wall_f1_within_0p15m` and
+`wall_f1_within_0p30m` (higher is better),
+`wall_metrics.symmetric_mean_m` and `symmetric_p95_m` (lower is
+better), occupied IoU and known-region coverage. Examine all three
+overlay PNGs at **the same metric scale**, in particular around loops and
+parallel corridors.
+
+**Interpretation constraints:** This is wall/map overlap **after
+per-candidate best-fit registration to a map derived from the same log**,
+so it is in-sample *reference agreement*, not independent physical wall
+accuracy. The Freiburg map frame has no independently established
+transform into our map frame. Wall doubling, thickening, and multi-pass
+consistency need dedicated evaluations against independent geometry or
+reserved scan observations; they are not separately scored here. Neither
+new metrics nor existing metrics should be tuned to force a favored run
+to win.
+
+Historical `*.pgm` previews were generated from the Ceres frontend.
+To generate a **new** preview for an already completed optimized graph
+map without rerunning SLAM and without overwriting previous files:
+
+```bash
+name=fr079-ceresgraph-poseprior-001
+python3 tools/slammap_to_pgm.py \
+  --slammap "apps/demo/maps/$name/$name.graph_optimized.slammap" \
+  --out-prefix "apps/demo/maps/$name/$name.graph_optimized"
+```
+
+This emits `*.graph_optimized.pgm` and `*.graph_optimized.yaml` from
+the verified authoritative graph map. The export is a lossy visualization
+and does not modify `*.slammap`.

@@ -444,6 +444,12 @@ void save_report(const std::filesystem::path& file,
          "\",\"revision\":"+
          std::to_string(loop->loop_graph_map.snapshot->revision())+"}"):
          "null")
+      <<",\"map_preview\":{\"source\":\""
+      <<(loop?"graph_optimized":"frontend")
+      <<"\",\"fingerprint\":\""
+      <<(loop?loop->loop_graph_map.snapshot->fingerprint():
+               result.map.snapshot->fingerprint())
+      <<"\"}"
      <<",\"profiling\":{\"clock\":\"std::chrono::steady_clock\""
      <<",\"input_load_ms\":"<<loading_ms
      <<",\"slam_compute_ms\":"<<compute_ms
@@ -665,15 +671,18 @@ int run(int argc,char** argv){
     ensure(verified.snapshot->fingerprint()==result.map.snapshot->fingerprint(),
            "FUSMAP2D output integrity mismatch");
   }
+  // For loop runs the .pgm/.yaml depict the optimized graph's occupancy,
+  // while .slammap and causal replay still preserve the Ceres frontend.
+  const auto& preview_map=loop?loop->loop_graph_map:result.map;
   {
     std::ofstream out(pgm,std::ios::binary);
     if(!out)throw std::runtime_error("cannot open PGM output");
-    slam::mapping::write_map_pgm(out,*result.map.snapshot);
+    slam::mapping::write_map_pgm(out,*preview_map.snapshot);
   }
   {
     std::ofstream out(yaml);
     if(!out)throw std::runtime_error("cannot open YAML output");
-    slam::mapping::write_map_yaml(out,*result.map.snapshot,
+    slam::mapping::write_map_yaml(out,*preview_map.snapshot,
                                  std::filesystem::path(pgm).filename().string());
   }
   save_trajectory(trajectory,result,digest);

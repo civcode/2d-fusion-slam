@@ -145,10 +145,18 @@ def near_wall_metrics(ref_pts, gen_pts, alignment, *, mirror=False):
                 "within_0p15m_fraction":float(np.mean(d<=.15)),
                 "within_0p30m_fraction":float(np.mean(d<=.30))}
     p15=float(np.mean(d_pred <= .15));r15=float(np.mean(d_ref <= .15))
+    p30=float(np.mean(d_pred <= .30));r30=float(np.mean(d_ref <= .30))
     return {"generated_to_reference":metrics(d_pred),
             "reference_to_generated":metrics(d_ref),
             "symmetric_mean_m":float((np.mean(d_pred)+np.mean(d_ref))/2),
-            "wall_f1_within_0p15m":float(2*p15*r15/(p15+r15)) if p15+r15 else 0.}
+            "symmetric_p95_m":float(np.percentile(
+                np.concatenate((d_pred,d_ref)),95)),
+            "wall_precision_within_0p15m":p15,
+            "wall_recall_within_0p15m":r15,
+            "wall_f1_within_0p15m":float(2*p15*r15/(p15+r15)) if p15+r15 else 0.,
+            "wall_precision_within_0p30m":p30,
+            "wall_recall_within_0p30m":r30,
+            "wall_f1_within_0p30m":float(2*p30*r30/(p30+r30)) if p30+r30 else 0.}
 
 
 def reference_resample(known_pred, occ_pred, bundle, refshape, resolution, alignment,
