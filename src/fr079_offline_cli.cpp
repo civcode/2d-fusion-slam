@@ -249,6 +249,11 @@ void save_loop_diagnostics(const std::filesystem::path& path,
      <<",\"submap_registration_attempts\":"<<loop.submap_registration_attempts
      <<",\"submap_geometry_verified\":"<<loop.submap_geometry_verified
      <<",\"submap_ambiguous_rejected\":"<<loop.submap_ambiguous_rejected
+     <<",\"maximum_loop_budget\":"<<loop.maximum_loop_budget
+     <<",\"submap_reciprocal_attempts\":"<<loop.submap_reciprocal_attempts
+     <<",\"submap_reciprocal_verified\":"<<loop.submap_reciprocal_verified
+     <<",\"submap_reciprocal_forward_rejected\":"<<loop.submap_reciprocal_forward_rejected
+     <<",\"submap_reciprocal_cycle_rejected\":"<<loop.submap_reciprocal_cycle_rejected
      <<",\"last_keyframe_searched\":"<<loop.last_keyframe_searched
      <<",\"verified_candidate_pool\":"<<loop.verified_candidate_pool
      <<",\"late_verified_candidates\":"<<loop.late_verified_candidates
@@ -300,6 +305,12 @@ void save_loop_diagnostics(const std::filesystem::path& path,
        <<",\"appearance_retrieved\":"<<(d.appearance_retrieved?"true":"false")
        <<",\"retrieval_similarity\":"<<d.retrieval_similarity
        <<",\"multi_anchor_consistent\":"<<(d.multi_anchor_consistent?"true":"false")
+       <<",\"reciprocal_checked\":"<<(d.reciprocal_checked?"true":"false")
+       <<",\"reciprocal_reverse_checked\":"<<(d.reciprocal_reverse_checked?"true":"false")
+       <<",\"reciprocal_correction_m\":"<<d.reciprocal_correction_m
+       <<",\"reciprocal_correction_yaw_rad\":"<<d.reciprocal_correction_yaw_rad
+       <<",\"reciprocal_cycle_m\":"<<d.reciprocal_cycle_m
+       <<",\"reciprocal_cycle_yaw_rad\":"<<d.reciprocal_cycle_yaw_rad
        <<"}";
   }
   out<<"],\""<<(loop.sequential_factor_source==

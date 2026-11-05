@@ -35,6 +35,10 @@ struct Fr079LoopEvent {
   bool appearance_retrieved{};
   double retrieval_similarity{};
   bool multi_anchor_consistent{};
+  // Raw LiDAR scan-to-scan verification after submap registration.
+  bool reciprocal_checked{}, reciprocal_reverse_checked{};
+  double reciprocal_correction_m{}, reciprocal_correction_yaw_rad{};
+  double reciprocal_cycle_m{}, reciprocal_cycle_yaw_rad{};
 };
 // Fixed FR079 diagnostic pairs from the previous heading-aware run.
 // These probes NEVER become graph factors; they are not labeled truth.
@@ -61,6 +65,9 @@ struct Fr079LoopResult {
   std::string registration_mode{"legacy_scan_to_scan_v1"};
   std::size_t submaps_built{}, submap_registration_attempts{};
   std::size_t submap_geometry_verified{}, submap_ambiguous_rejected{};
+  std::size_t submap_reciprocal_attempts{}, submap_reciprocal_verified{};
+  std::size_t submap_reciprocal_forward_rejected{}, submap_reciprocal_cycle_rejected{};
+  std::size_t maximum_loop_budget{};
   std::size_t last_keyframe_searched{}, verified_candidate_pool{};
   std::size_t late_verified_candidates{}, late_selected_loops{};
   std::size_t appearance_retrieved_candidates{}, appearance_registration_attempts{};

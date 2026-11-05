@@ -32,6 +32,29 @@ def assert_preview(run: Path, bundle_suffix: str, source_name: str):
     assert f"image: {pgm.name}" in (run / (run.name + ".yaml")).read_text()
 
 
+def assert_strict_submap_diagnostics(graph):
+    assert graph["maximum_loop_budget"] == 1000
+    assert graph["submap_reciprocal_attempts"] == (
+        graph["submap_reciprocal_verified"]
+        + graph["submap_reciprocal_forward_rejected"]
+        + graph["submap_reciprocal_cycle_rejected"])
+    assert graph["submap_reciprocal_attempts"] <= graph["submap_geometry_verified"]
+    assert graph["submap_reciprocal_verified"] >= graph["accepted_loops"]
+    for decision in graph["loop_decisions"]:
+        if decision["decision"] != "accepted":
+            continue
+        assert decision["reciprocal_checked"]
+        assert decision["reciprocal_reverse_checked"]
+        assert decision["forward_inliers"] >= 80
+        assert decision["reverse_inliers"] >= 80
+        assert decision["overlap"] >= .82 - 1e-12
+        assert decision["rms_m"] <= .11 + 1e-12
+        assert decision["reciprocal_correction_m"] <= .55 + 1e-12
+        assert decision["reciprocal_correction_yaw_rad"] <= .17 + 1e-12
+        assert decision["reciprocal_cycle_m"] <= .14 + 1e-12
+        assert decision["reciprocal_cycle_yaw_rad"] <= .07 + 1e-12
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: fr079_loop_experiment_test.py FR079_BINARY")
@@ -110,6 +133,7 @@ def main():
             (pose_prior/(pose_prior.name+".loops.json")).read_text())
         assert pose_report["loop_registration_mode"] == "pose_prior_scan_to_scan_v1"
         assert pose_loops["registration_mode"] == "pose_prior_scan_to_scan_v1"
+        assert pose_loops["maximum_loop_budget"] == 1000
         assert pose_loops["sequential_factor_source"] == (
             "frontend_scanmatched_relative_correlated_v1")
         assert pose_loops["large_heading_nearby_pairs"] >= (
@@ -155,6 +179,7 @@ def main():
             submap_graph["registration_attempts"])
         assert submap_graph["submap_geometry_verified"] >= (
             submap_graph["accepted_loops"])
+        assert_strict_submap_diagnostics(submap_graph)
         assert submap_graph["large_heading_accepted_loops"] <= (
             submap_graph["accepted_loops"])
         assert submap_graph["first_pose_fixed"] is True
@@ -165,8 +190,8 @@ def main():
         assert submap_trajectory["poses"] == new_trajectory["poses"]
         assert submap_report["map"]["fingerprint"] == new_report["map"]["fingerprint"]
         assert (submaps/(submaps.name+".graph_optimized.slammap")).is_file()
-        # Full-log selection mode: independent of whether 24 loops happen
-        # to be discoverable on this small deterministic fixture.
+        # Full-log selection, with a nonbinding 1000-loop ceiling
+        # and mandatory strict original-scan reciprocal verification.
         distributed = root / "distributed"
         run(binary,log,distributed,*flags,
             "--lidar-loop-closure","--frontend-sequential-graph",
@@ -178,6 +203,7 @@ def main():
         assert distributed_graph["registration_mode"] == (
             "distributed_scan_to_submap_v2")
         assert distributed_graph["last_keyframe_searched"] == 176
+        assert_strict_submap_diagnostics(distributed_graph)
         assert distributed_graph["verified_candidate_pool"] >= (
             distributed_graph["accepted_loops"])
         assert distributed_graph["late_selected_loops"] <= (
@@ -197,6 +223,7 @@ def main():
             (global_run/(global_run.name+".trajectory.json")).read_text())
         assert global_graph["registration_mode"] == "global_scan_to_submap_v2"
         assert global_graph["last_keyframe_searched"] == 176
+        assert_strict_submap_diagnostics(global_graph)
         assert global_graph["appearance_registration_attempts"] <= (
             global_graph["appearance_retrieved_candidates"])
         assert global_graph["appearance_accepted_loops"] <= (

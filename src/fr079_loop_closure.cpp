@@ -20,7 +20,8 @@ using Cloud=std::vector<Eigen::Vector2d>;
 constexpr std::size_t kKeyframeStride=8;
 constexpr std::size_t kTemporalExclusion=120;
 constexpr std::size_t kMaxHypotheses=6;
-constexpr std::size_t kMaxLoops=24;
+// Nonbinding ceiling for FR079 (fewer than 400 sampled current keyframes).
+constexpr std::size_t kMaxLoops=1000;
 constexpr std::size_t kDistinctAnchorGap=24;
 constexpr double kNearbyM=2.8;
 constexpr double kNearbyYaw=.52;
@@ -138,14 +139,14 @@ Fr079LoopResult run_fr079_loop_experiment(
   const bool submap_mode=
       registration_mode==Fr079LoopRegistrationMode::correlative_scan_to_submap ||
       distributed_mode;
-  // A submap's current-scan support fraction is not symmetric two-scan
-  // overlap. The submap factor has its own stronger geometry/quality gates.
-  if(submap_mode)graph_settings.minimum_overlap=.58;
+  // Only raw-scan reciprocal overlap is eligible for submap graph factors.
+  if(submap_mode)graph_settings.minimum_overlap=.82;
   const auto control=slam::graph::optimize_pose_graph(input,graph_settings);
   need(control.fixed_first_pose&&control.optimized_map_from_base.size()==scans.size(),
        "odometry-only graph lost its fixed first pose");
 
   Fr079LoopResult out;
+  out.maximum_loop_budget=kMaxLoops;
   const bool pose_prior_scan =
       registration_mode==Fr079LoopRegistrationMode::pose_prior_scan_to_scan;
   out.registration_mode=appearance_mode?"global_scan_to_submap_v2":
@@ -371,23 +372,78 @@ Fr079LoopResult run_fr079_loop_experiment(
           out.decisions.push_back(std::move(event));
           continue;
         }
-        ++out.geometry_verified;
+        // Submap correlation produces a hypothesis, not a graph-ready loop.
         ++out.submap_geometry_verified;
         if(global)++out.appearance_geometry_verified;
+        ++out.submap_reciprocal_attempts;
+        event.reciprocal_checked=true;
+        // Recheck with original scan hits, seeded by the submap pose.
+        const auto registered=slam::matching::register_scans_from_pose_prior(
+            previous,current,match.anchor_from_current,false,{3.0,.55,.17});
+        const double overlap=std::min(
+            registered.forward_overlap,registered.reverse_overlap);
+        const Pose2 change=slam::compose(
+            slam::inverse(match.anchor_from_current),
+            registered.previous_from_current);
+        const Pose2 frontend_change=slam::compose(
+            slam::inverse(prior),registered.previous_from_current);
+        event.forward_inliers=registered.forward_inliers;
+        event.reverse_inliers=registered.reverse_inliers;
+        event.overlap=overlap;
+        event.rms_m=registered.mean_error_m;
+        event.reciprocal_correction_m=change.translation.norm();
+        event.reciprocal_correction_yaw_rad=
+            std::abs(slam::wrap_yaw(change.yaw_rad));
+        // Only global retrieval may use the separate large-drift graph gate.
+        const bool frontend_innovation_ok=global ||
+            (frontend_change.translation.norm()<=.55 &&
+             std::abs(slam::wrap_yaw(frontend_change.yaw_rad))<=.17);
+        if(!registered.accepted||!registered.correspondence_rank||
+           registered.forward_inliers<80||registered.reverse_inliers<80||
+           overlap<.82||registered.mean_error_m>.11||
+           event.reciprocal_correction_m>.55||
+           event.reciprocal_correction_yaw_rad>.17||
+           !frontend_innovation_ok) {
+          ++out.submap_reciprocal_forward_rejected;
+          event.decision="submap_reciprocal_forward_rejected";
+          out.decisions.push_back(std::move(event));
+          continue;
+        }
+        const auto reverse=slam::matching::register_scans_from_pose_prior(
+            current,previous,slam::inverse(registered.previous_from_current),
+            false,{3.0,.55,.17});
+        event.reciprocal_reverse_checked=true;
+        const Pose2 cycle=slam::compose(registered.previous_from_current,
+                                        reverse.previous_from_current);
+        event.reciprocal_cycle_m=cycle.translation.norm();
+        event.reciprocal_cycle_yaw_rad=
+            std::abs(slam::wrap_yaw(cycle.yaw_rad));
+        if(!reverse.accepted||!reverse.correspondence_rank||
+           reverse.forward_inliers<80||reverse.reverse_inliers<80||
+           std::min(reverse.forward_overlap,reverse.reverse_overlap)<.82||
+           event.reciprocal_cycle_m>.14||event.reciprocal_cycle_yaw_rad>.07) {
+          ++out.submap_reciprocal_cycle_rejected;
+          event.decision="submap_reciprocal_cycle_rejected";
+          out.decisions.push_back(std::move(event));
+          continue;
+        }
+        ++out.submap_reciprocal_verified;
+        ++out.geometry_verified;
         if(large_heading)++out.large_heading_geometry_verified;
         const slam::graph::FactorProvenance lidar{
             global?
               slam::graph::EvidenceClass::lidar_global_scan_to_submap_registration:
               slam::graph::EvidenceClass::lidar_scan_to_submap_registration,
-            global?"fr079_raw_scans_global_submap_shape_correlative_v2":
-                   "fr079_raw_scans_frozen_submap_correlative_v1",
+            global?"fr079_global_submap_raw_scan_reciprocal_v3":
+                   "fr079_submap_raw_scan_reciprocal_v3",
             true,false};
         event.decision="geometry_verified";
-        valid.push_back({{{j,i,match.anchor_from_current,
+        valid.push_back({{{j,i,registered.previous_from_current,
                             global?.60:.40,global?.60:.40,global?.30:.24,lidar},
-                           match.supported_hits,
-                           match.support_fraction,match.observable,
-                           match.rms_m},event});
+                           std::min(registered.forward_inliers,
+                                    registered.reverse_inliers),
+                           overlap,registered.correspondence_rank,
+                           registered.mean_error_m},event});
         continue;
       }
       auto registered=pose_prior_scan?
@@ -500,9 +556,8 @@ Fr079LoopResult run_fr079_loop_experiment(
   }
   if(distributed_mode) {
     out.verified_candidate_pool=pool.size();
-    // Allocate across the whole recording, then use leftover budget for
-    // highest-quality remaining matches. This prevents the first revisit
-    // from exhausting all 24 slots and preserves spatial anchor diversity.
+    // Select across the full recording. FR079 has fewer current keyframes
+    // than the 1000-factor ceiling, so the budget is not binding.
     constexpr std::size_t bins=8;
     std::array<std::vector<std::size_t>,bins> per_bin;
     for(std::size_t k=0;k<pool.size();++k) {
@@ -537,8 +592,7 @@ Fr079LoopResult run_fr079_loop_experiment(
       used[k]=true;
       return true;
     };
-    // Each temporal bin gets three narrower slots, so the earliest strong
-    // observations inside a bin cannot crowd out its final traversal.
+    // Keep temporal slots for larger recordings; FR079 cannot fill 1000.
     for(std::size_t round=0;round<kMaxLoops/bins;++round)
       for(std::size_t b=0;b<bins;++b) {
         if(selected.size()>=kMaxLoops)break;
