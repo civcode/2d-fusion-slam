@@ -14,6 +14,7 @@ The `global-strict-003` occupancy map is currently the visually preferred FR079 
 - **Free-space evidence:** a valid beam traversed a cell *before* its endpoint (0.20 m safety buffer).
 - **Unknown:** neither interval has adequate evidence for a cell; unknown is not free.
 - **Within-interval ambiguous:** both occupied and free evidence are repeatedly reported in the same interval. These cells are excluded from unambiguous comparisons.
+- **Frontend-vs-optimized control:** when `graph_control_poses` is present (as in the gold-standard FR079 run), the *same* ray evidence is evaluated both at the unchanged Ceres frontend poses and at the GTSAM loop-optimized poses. This can reveal whether a consistency problem existed before loop closure or was introduced or reduced by graph optimization. Neither pose set is independent truth.
 
 An observation of a wall face from the opposite side need not coincide with the first face. A *contradiction* means **one interval repeatedly reports a hit in a cell another interval repeatedly observes as free**. This is a flag for inspection, not a claim of physical impossibility: moving objects, imperfect pose estimates, beam-angle/calibration errors, transparent obstacles, grid discretization and sensor noise can also cause disagreements.
 
@@ -42,15 +43,15 @@ The intervals above **illustrate syntax**, not a verified selection correspondin
 
 `--region` is in **world metres in the existing optimized SLAM coordinate frame**, not screenshot pixels. The screenshot alone cannot identify these exact metric bounds without the map viewer's transform. Check the diagnostic's `suggested_pose_proximity_pairs` for exploratory *scan-index suggestions* across different headings; those suggestions are **not** validated loop closures and are not necessarily first-traversal transitions. Adjacent, non-overlapping intervals may be examined explicitly to diagnose first traversals.
 
-Other options include `--scan-stride 3`, `--beam-stride 4`, `--resolution 0.10`, `--min-observations 2`, and `--suggest-pairs 16`. For small transitions, use a narrower scan stride (for example `--scan-stride 1`) and keep parameters identical when comparing regions/runs. The tool writes a non-overwriting JSON report and a PNG classification overlay. The PNG colors represent occupied cells from window A and B, common occupied cells, repeated contradictions (red), ambiguity (grey), and observed free/unknown cells. The PNG is **diagnostic ray evidence**, not a replacement for `graph_optimized.slammap`.
+Other options include `--scan-stride 3`, `--beam-stride 4`, `--resolution 0.10`, `--min-observations 2`, and `--suggest-pairs 16`. For small transitions, use a narrower scan stride (for example `--scan-stride 1`) and keep parameters identical when comparing regions/runs. The tool writes a non-overwriting JSON report and the optimized-pose PNG classification overlay; if the graph-control poses exist, it also writes `*.control.png` and `frontend_control_metrics` in JSON. The PNG colors represent occupied cells from window A and B, common occupied cells, repeated contradictions (red), ambiguity (grey), and observed free/unknown cells. The PNG is **diagnostic ray evidence**, not a replacement for `graph_optimized.slammap`.
 
 ## Reading the report
 
-The relevant fields are `metrics.a_occupied_b_free_cells`, `metrics.b_occupied_a_free_cells`, the conditional contradiction fractions, `metrics.joint_known_cells`, `metrics.joint_occupied_cells`, and within-window ambiguous counts. If `a_to_b_contradiction_fraction` is `null`, no occupied A cell was decisively observed by B: **there was insufficient common visibility**, not a perfect match. Compare paired windows and a small region before/after a suspect transition, and look for clusters in the overlay rather than relying on a single aggregate scalar.
+The relevant fields are `metrics.a_occupied_b_free_cells`, `metrics.b_occupied_a_free_cells`, the conditional contradiction fractions, `metrics.joint_known_cells`, `metrics.joint_occupied_cells`, and within-window ambiguous counts. Compare these with the same keys under `frontend_control_metrics` (if available). The two outputs use the same world coordinate frame and scan groups but differ in pose estimates; the comparison is still not causal proof of a particular graph factor's effect. If `a_to_b_contradiction_fraction` is `null`, no occupied A cell was decisively observed by B: **there was insufficient common visibility**, not a perfect match. Compare paired windows and a small region before/after a suspect transition, and look for clusters in the overlay rather than relying on a single aggregate scalar.
 
 ## Validation and follow-up decision
 
-The regression fixture deliberately covers (a) same-surface observations, (b) valid opposite wall faces, (c) a contradictory ray crossing an observed wall, (d) no common visibility, (e) invalid window/provenance and (f) PNG encoding. Run it locally:
+The regression fixture deliberately covers (a) same-surface observations, (b) valid opposite wall faces, (c) a contradictory ray crossing an observed wall, (d) no common visibility, (e) invalid window/provenance, (f) PNG encoding and (g) an end-to-end synthetic CARMEN log with both frontend and optimized pose tracks. Run it locally:
 
 ```bash
 python3 tests/fr079_visibility_consistency_tools_test.py

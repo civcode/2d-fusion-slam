@@ -107,6 +107,7 @@ def main_test():
             'independent_ground_truth': False,
             'registration_mode': 'global_scan_to_submap_v2',
             'loop_graph_poses': [[0, 0, 0]] * 6 + [[3.6, 0, math.pi]] * 6,
+            'graph_control_poses': [[0, 0, 0]] * 6 + [[4, 0, math.pi]] * 6,
         }
         graphfile.write_text(json.dumps(graph))
         out = root / 'visibility'
@@ -119,6 +120,8 @@ def main_test():
         assert report['source_sha256'] == hashlib.sha256(data).hexdigest()
         assert report['metrics']['a_occupied_b_free_cells'] > 0
         assert png_is_valid(root / 'visibility.png')
+        assert png_is_valid(root / 'visibility.control.png')
+        assert report['frontend_control_metrics']['a_occupied_b_free_cells'] == 0
         assert_raises(SystemExit, lambda: main([
             '--raw-log', str(rawfile), '--loops', str(graphfile),
             '--window-a', '0:6', '--window-b', '5:12',

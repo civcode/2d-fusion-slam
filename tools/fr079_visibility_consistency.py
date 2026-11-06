@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -255,7 +254,9 @@ def main(argv=None):
         parser.error('invalid resolution/stride/range/min-observations')
     report_file = Path(str(args.out)+'.json')
     png_file = Path(str(args.out)+'.png')
-    if any(f.exists() or f.is_symlink() for f in (report_file, png_file)):
+    control_png_file = Path(str(args.out)+'.control.png')
+    if any(f.exists() or f.is_symlink() for f in
+           (report_file, png_file, control_png_file)):
         parser.error('output exists: specify a new --out prefix')
     if not args.out.parent.is_dir():
         parser.error('output directory does not exist')
@@ -277,7 +278,29 @@ def main(argv=None):
                           scan_stride=args.scan_stride,beam_stride=args.beam_stride,
                           max_range=args.max_range)
     metrics, classes=compare(left,right,minimum_observations=args.min_observations)
+    # The graph-only changes preserve the Ceres frontend pose history in
+    # graph_control_poses. Run the SAME evidence protocol on those poses to
+    # determine whether a local contradiction predates loop optimization.
+    control_metric = control_image = control_classes = None
+    control_values = graph.get('graph_control_poses')
+    if control_values is not None:
+        if not isinstance(control_values,list) or len(control_values)!=len(scans):
+            raise ValueError('graph control poses must match raw scan count')
+        control_poses=[pose(v,f'control scan {i}') for i,v in enumerate(control_values)]
+        ctrl_a = raster_window(scans,control_poses,bounds,a,
+                              resolution=args.resolution,
+                              scan_stride=args.scan_stride,
+                              beam_stride=args.beam_stride,max_range=args.max_range)
+        ctrl_b = raster_window(scans,control_poses,bounds,b,
+                              resolution=args.resolution,
+                              scan_stride=args.scan_stride,
+                              beam_stride=args.beam_stride,max_range=args.max_range)
+        control_metric, control_classes = compare(
+            ctrl_a,ctrl_b,minimum_observations=args.min_observations)
+    # Validate all evidence/provenance before writing the two image outputs.
     image = rgba_png(classes,png_file,args.resolution,bounds)
+    if control_classes is not None:
+        control_image = rgba_png(control_classes,control_png_file,args.resolution,bounds)
     output = {
         'format':'FR079_MULTIVIEW_VISIBILITY_DIAGNOSTIC1',
         'kind':'observation_consistency_diagnostic_not_loop_verification',
@@ -289,6 +312,8 @@ def main(argv=None):
         'settings':settings,'a_scan_count':left['scans'],'b_scan_count':right['scans'],
         'a_hit_beams':left['beams'],'b_hit_beams':right['beams'],
         'metrics':metrics,'plot':image,
+        'frontend_control_metrics':control_metric,'frontend_control_plot':control_image,
+        'comparison_protocol':'same raw ray evidence in two frozen pose frames; no refitting',
         'suggested_pose_proximity_pairs':suggest_pairs(poses,max_results=args.suggest_pairs),
         'interpretation':('Only strong occupied-vs-free evidence is called a contradiction; '
                           'unknown or non-overlapping fields of view do not count as failures. '
@@ -299,7 +324,8 @@ def main(argv=None):
     }
     report_file.write_text(json.dumps(output,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({'json':str(report_file),'png':str(png_file) if image else None,
-                      'metrics':metrics},indent=2))
+                      'frontend_control_png':str(control_png_file) if control_image else None,
+                      'metrics':metrics,'frontend_control_metrics':control_metric},indent=2))
     return 0
 
 
