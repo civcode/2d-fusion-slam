@@ -323,6 +323,10 @@ if(ZLIB_FOUND AND OpenSSL_FOUND)
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_reference_benchmark_tools_test.py")
     set_tests_properties(fr079_reference_benchmark_tools PROPERTIES TIMEOUT 60)
+    add_test(NAME fr079_visibility_consistency_tools
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fr079_visibility_consistency_tools_test.py")
+    set_tests_properties(fr079_visibility_consistency_tools PROPERTIES TIMEOUT 90)
     add_test(NAME slammap_to_pgm_tools
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/slammap_to_pgm_tools_test.py")
